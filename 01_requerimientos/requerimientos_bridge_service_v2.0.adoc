@@ -1,0 +1,741 @@
+= Requerimientos: Bridge Service
+:author: Equipo de Desarrollo
+:revnumber: 2.0
+:revdate: 2026-09-16
+:revremark: El Bridge es el backend del portal y el dato entra por empuje. Da de baja 6 RF, 5 REST, 1 RNF y 3 DOM.
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:sectnumlevels: 3
+:icons: font
+:lang: es
+:root: ..
+:section-id: requerimientos
+:section-title: 01 — Requerimientos
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+---
+
+[.lead]
+Requerimientos del *Bridge Service* — el servicio .NET 8 que recibe el catálogo de
+SinsaTools y sirve el Portal de Videos. Es el puente entre el microservicio de integraciones
+de SinsaTools y el frontend Angular, y el único componente de servidor del sistema.
+
+[IMPORTANT]
+====
+*Qué cambia respecto de la v1.1*
+
+Dos decisiones del 2026-09-16 invalidan la premisa sobre la que estaba escrita toda la v1.1:
+
+. *El Bridge es el backend del portal.* No hay un tercer servicio. El frontend Angular
+  llama a `/api` y quien responde es este servicio.
+  Ver xref:{root}/11_gestion_producto/adr/adr-bs-005_servicio_unico.adoc[ADR-BS-005].
+. *Nunca consultamos la base de datos de SinsaTools.* Su microservicio de integraciones
+  empuja los cambios contra una API que publicamos nosotros.
+  Ver xref:{root}/11_gestion_producto/adr/adr-bs-006_ingesta_por_empuje.adoc[ADR-BS-006].
+
+La v1.1 describía un servicio que leía un SQL Server ajeno a través de la red corporativa y
+exponía cuatro endpoints `/v1/` a un backend de portal separado. Ninguna de esas tres cosas
+existe ya.
+
+.Bajas
+[cols="1,4",options="header"]
+|===
+| Elemento | Motivo
+
+| RF-BS-03, RF-BS-04
+| `GET /v1/softwares` y `GET /v1/media/updates` servían a un backend de portal que no existe.
+  El frontend consume `/api/catalog/*`.
+
+| RF-BS-07
+| No escribimos en SinsaTools.
+
+| RF-BS-09, RF-BS-10, RF-BS-11
+| `POST /v1/sync`, `GET /v1/sync/{syncId}` y el `SyncWorker`. No se puede disparar la
+  sincronización de una base que no se lee.
+
+| RNF-BS-05
+| Resiliencia ante la caída de on-premise. No hay conexión a on-premise.
+
+| REST-BS-02, REST-BS-05, REST-BS-08, REST-BS-09, REST-BS-10
+| Conectividad, esquema de solo lectura, `mediaPath` crudo, `CommandTimeout` y esquema
+  desconocido. Todas gobernaban una conexión que no existe.
+
+| DOM-BS-01, DOM-BS-02, DOM-BS-03
+| Gobernaban `OnPremiseDbContext`.
+
+| SEC-BS-05, SEC-BS-07
+| TLS hacia SQL Server y usuario de BD on-premise.
+
+| DT-BS-01, DT-BS-03, DT-BS-05
+| Scaffolding manual, catálogo sin paginar y validación de `Files.FilePath`.
+
+| DEC-BS-01, DEC-BS-02, DEC-BS-04
+| Frecuencia del sync interno, conectividad y marcado en on-premise.
+|===
+
+.Altas
+[cols="1,4",options="header"]
+|===
+| Elemento | Qué incorpora
+
+| RF-BS-12 … RF-BS-17
+| La API de ingesta: recepción, idempotencia, reconciliación por foto, consulta de
+  resultado, marca de agua y normalización.
+
+| RF-BS-18, RF-BS-19, RF-BS-20
+| La cara del portal: servir el contrato que el frontend ya consume, el pre-flight de acceso
+  a medio, y el remapeo del dominio de sincronización.
+
+| RNF-BS-10, RNF-BS-11
+| Capacidad de ingesta y calidad del streaming.
+
+| REST-BS-11, REST-BS-12, REST-BS-13
+| El contrato del frontend es fijo, no hay borrado físico, y la ingesta nunca reemplaza filas.
+
+| DOM-BS-08 … DOM-BS-10
+| Clave natural del medio, exclusión mutua de lotes y derivación del almacenamiento.
+
+| SEC-BS-09, SEC-BS-10
+| Separación de credenciales y confinamiento de la ruta de almacenamiento.
+|===
+
+Los números dados de baja *quedan quemados*: no se reutilizan (`Glosario_IDs`, regla 1).
+
+La v1.1 se conserva en `_historico/requerimientos_bridge_service_v1.1.adoc`.
+====
+
+---
+
+== Contexto y propósito
+
+El Bridge Service es el único componente de servidor del Portal de Videos. Recibe el
+catálogo de software de SinsaTools, lo persiste, y lo sirve al frontend junto con la
+identidad, los permisos y el streaming de los recursos.
+
+[source,mermaid]
+----
+flowchart LR
+    ST[("SinsaTools<br/>SQL Server<br/>fuente de verdad")]
+    MS["Microservicio de<br/>integraciones<br/>(equipo SinsaTools)"]
+    BS["Bridge Service<br/>(este sistema)"]
+    PG[("PostgreSQL 16<br/>Azure Flexible Server")]
+    BLOB[("Almacenamiento<br/>de recursos")]
+    FE["Frontend Angular 21<br/>SPA + PWA"]
+
+    ST --> MS
+    MS -->|"POST /v1/ingest/catalog<br/>Service JWT · catalog:ingest"| BS
+    BS <--> PG
+    BS -->|"proxy de streaming"| BLOB
+    FE -->|"/api · User JWT"| BS
+----
+
+La frontera de responsabilidad está en el microservicio de integraciones: **todo lo que
+queda a su izquierda es del equipo de SinsaTools y nosotros no lo tocamos.**
+
+=== Principios fundamentales
+
+* El Bridge Service *nunca accede a la base de datos de SinsaTools*. No tiene credenciales
+  suyas, ni conectividad con su red, ni conocimiento de su esquema.
+* El dato de catálogo entra *exclusivamente* por `POST /v1/ingest/catalog`. No hay ninguna
+  otra vía de alta, modificación o baja de productos, versiones o recursos.
+* SinsaTools sigue siendo *la fuente de verdad del catálogo*. Lo que persistimos es una
+  proyección suya, y ante una discrepancia manda el origen.
+* La base de datos del Bridge *sí es fuente de verdad* para todo lo demás: usuarios,
+  sesiones, grupos, permisos, excepciones y auditoría. Eso nace y muere aquí.
+* El Bridge es *stateless respecto de la sesión de usuario en el servidor*: el estado de
+  autorización viaja en el claim `perms{}` del JWT y no se consulta en cada request. Las
+  sesiones se registran para poder revocarlas, no para resolver permisos.
+* El contrato con el frontend *ya está implementado y probado*. El servidor se adapta al
+  contrato, no al revés (REST-BS-11).
+
+[NOTE]
+====
+El nombre «Bridge Service» se conserva pese al cambio de alcance. Sigue describiendo lo que
+el servicio hace —es el puente entre SinsaTools y el frontend— y renombrarlo obligaría a
+tocar el repositorio, el pipeline y todas las referencias cruzadas de ambas documentaciones
+sin ganar claridad.
+====
+
+---
+
+== Actores
+
+[cols="2,1,4", options="header"]
+|===
+| Actor | Tipo | Descripción
+
+| *Microservicio de integraciones de SinsaTools*
+| Emisor (sistema externo)
+| Extrae el catálogo de SinsaTools y lo empuja contra la API de ingesta. Se autentica con un
+  Service JWT de scope `catalog:ingest`. Es el único cliente de esa API.
+
+| *Frontend Angular*
+| Consumidor (sistema propio)
+| SPA + PWA. Consume `/api` con un User JWT. Ya construido: 9 commits, cobertura 94 %, mock
+  completo.
+
+| *Usuario del portal*
+| Externo
+| Cliente de confianza. Cuatro roles: `administrator`, `content_editor`, `auditor`,
+  `viewer`. No accede al Bridge directamente, solo a través del frontend.
+
+| *Desarrollador del Bridge Service*
+| Interno
+| Único responsable del diseño, implementación, despliegue y mantenimiento.
+
+| *Equipo de SinsaTools*
+| Externo
+| Contraparte del contrato de ingesta. Cualquier cambio incompatible en
+  `ingest_catalog_v1.0.yaml` requiere su acuerdo (REST-BS-06).
+|===
+
+---
+
+== Requerimientos funcionales
+
+=== Autenticación, trazabilidad y operación
+
+==== RF-BS-01 — Validación del Service JWT de ingesta
+
+El Bridge Service debe validar en cada request a la API de ingesta que el emisor presenta un
+Service JWT RS256 válido emitido por el propio Bridge Service.
+
+*Criterios de aceptación:*
+
+* Todo endpoint `/v1/ingest/*` retorna `401` si el header `Authorization: Bearer {jwt}` está
+  ausente o el token es inválido.
+* El JWT debe contener los claims `aud: portal-ingest-api`, `scope: catalog:ingest`,
+  y `sub` igual al `clientId` que lo pidió.
+* Un token expirado retorna `401` con `code: UNAUTHORIZED`.
+* Un token sin el scope `catalog:ingest` retorna `403 FORBIDDEN`.
+* La validación exige algoritmo RS256; se rechazan `none` y HS256.
+* `ClockSkew` de 30 segundos como máximo.
+
+[NOTE]
+====
+*Cambia la dirección, no el mecanismo.* En la v1.1 este requerimiento protegía nuestras
+lecturas frente al backend del portal. Ahora protege nuestras *escrituras* frente al
+microservicio de SinsaTools, que es un riesgo mayor: un token comprometido ya no permite leer
+el catálogo, permite *modificarlo*.
+
+Por eso el claim `aud` cambia de `bridge-service-api` a `portal-ingest-api`: el token de
+ingesta no debe servir para nada más.
+====
+
+==== RF-BS-02 — Emisión del Service JWT de ingesta
+
+El Bridge Service debe exponer un endpoint para que el microservicio de integraciones obtenga
+su token.
+
+*Endpoint:* `POST /v1/auth/token`
+
+*Criterios de aceptación:*
+
+* Acepta `clientId` y `clientSecret` en el body (JSON).
+* Valida las credenciales contra Azure Key Vault (o variable de entorno en desarrollo).
+* La comparación del `clientSecret` es en tiempo constante (SEC-BS-02).
+* Emite un JWT RS256 con TTL de 1 hora y los claims definidos en RF-BS-01.
+* Credenciales inválidas retornan `401 INVALID_CREDENTIALS`.
+* *Rate limiting doble:* más de 10 intentos fallidos por minuto para el mismo `clientId`, o
+  más de 50 por minuto desde la misma IP, retornan `429 RATE_LIMITED`. Los contadores son
+  independientes y se evalúan en ese orden.
+
+[IMPORTANT]
+====
+Este endpoint es *distinto* de `POST /auth/login`, que autentica personas y vive en el
+contrato del frontend. No comparten credenciales, ni emisor de token, ni `aud`, ni ciclo de
+vida (SEC-BS-09).
+====
+
+==== RF-BS-05 — Health check
+
+El Bridge Service debe exponer un endpoint de estado operacional para diagnóstico.
+
+*Endpoint:* `GET /health`
+
+*Criterios de aceptación:*
+
+* No requiere autenticación.
+* Retorna `200` con `status` (`Healthy` / `Degraded` / `Unhealthy`), `timestamp`, `version` y
+  un array `checks`.
+* Los checks obligatorios son *dos*:
+** `postgresql` — la base responde en menos de 2 s.
+** `catalog-freshness` — la antigüedad del último lote aplicado con éxito está por debajo del
+   umbral configurado (RNF-BS-09).
+* Composición del estado global:
+** `Healthy` — ambos checks pasan.
+** `Degraded` — PostgreSQL sano, el catálogo obsoleto. *El servicio sigue operativo*: sirve
+   el catálogo que tiene, y el frontend muestra el aviso a los roles internos.
+** `Unhealthy` — PostgreSQL caído. El servicio no puede responder.
+
+[IMPORTANT]
+====
+La distinción entre `Degraded` y `Unhealthy` no es cosmética: Azure App Service retira de
+balanceo las instancias marcadas como `Unhealthy`. Marcar así un catálogo obsoleto tumbaría
+un servicio que todavía puede atender a todos sus usuarios.
+
+*Cambia el segundo check.* Donde antes se comprobaba la conectividad con on-premise, ahora se
+comprueba la frescura del dato — que es el mismo riesgo visto desde el otro lado: con la
+ingesta por empuje, un emisor que deja de empujar no produce ningún error, solo silencio.
+====
+
+==== RF-BS-06 — Propagación del Correlation ID
+
+El Bridge Service debe propagar el header `X-Correlation-ID` en todas sus respuestas y logs.
+
+*Criterios de aceptación:*
+
+* Si el request incluye `X-Correlation-ID`, el mismo valor aparece en la respuesta y en los logs.
+* Si no lo incluye, el Bridge Service genera un UUID v4 y lo devuelve.
+* Cada lote de ingesta registra su `X-Correlation-ID` en `ingest_batches`, de modo que un
+  problema reportado por SinsaTools se pueda rastrear hasta la fila concreta que falló.
+* Cada acceso a un recurso multimedia lo registra en `video_access_log`.
+
+==== RF-BS-08 — Logging de requests
+
+El Bridge Service debe registrar cada request recibido con su resultado.
+
+*Criterios de aceptación:*
+
+* Cada request loguea timestamp, endpoint, método, status, latencia en ms,
+  `X-Correlation-ID` e IP.
+* Los stack traces van *al log*, nunca al cuerpo de la respuesta (SEC-BS-06).
+* El nivel es configurable por variable de entorno (`LOG_LEVEL`).
+* Logs en JSON estructurado hacia stdout/stderr, para que Azure Monitor los capture.
+* Los logs *nunca* registran `clientSecret`, `accessToken`, `password_hash`, el
+  `storage_uri` ni el `token` de un recurso (SEC-BS-04, SEC-BS-10).
+
+=== Ingesta del catálogo
+
+Los seis requerimientos de esta sección están especificados en detalle en
+`05_contratos_api/ingesta/ingest_catalog_v1.0.yaml`, que es el contrato bilateral con
+SinsaTools.
+
+==== RF-BS-12 — Recepción de lotes de catálogo 🆕
+
+El Bridge Service debe aceptar lotes de catálogo empujados por el microservicio de
+integraciones y persistirlos.
+
+*Endpoint:* `POST /v1/ingest/catalog`
+
+*Criterios de aceptación:*
+
+* Requiere el scope `catalog:ingest`.
+* Acepta el árbol completo `producto → versión → recurso` en un único cuerpo. No hay
+  endpoints por entidad suelta.
+* Es *asíncrono*: retorna `202` con un `ingestId` en cuanto ha validado y encolado el lote.
+* Distingue dos clases de error:
+** *De forma* — incumple el esquema. Se rechaza el lote entero con `400` y el detalle por
+   campo, con la ruta JSON completa incluyendo índices. *No se aplica nada.*
+** *De negocio* — el lote es válido pero un ítem falla (por ejemplo, un recurso cuya versión
+   no existe ni viene en el lote). Se acepta con `202`, se aplican los correctos, y los
+   fallidos se listan en el resultado.
+* Un lote que supera los límites de RNF-BS-10 retorna `413 BATCH_TOO_LARGE`.
+* El lote se aplica en una única transacción por producto: nunca queda una versión sin su
+  producto ni un recurso sin su versión.
+
+==== RF-BS-13 — Idempotencia de la ingesta 🆕
+
+Reenviar un lote ya procesado no debe modificar nada.
+
+*Criterios de aceptación:*
+
+* Todo lote lleva un `batchId` (UUID) generado por el emisor.
+* Un `batchId` ya procesado devuelve `202` con el resultado original y `duplicate: true`,
+  *sin volver a aplicar nada*.
+* La unicidad está garantizada por la base de datos, no por una comprobación previa en
+  código: dos lotes idénticos en vuelo no pueden aplicarse ambos.
+* Un reintento del emisor tras un timeout de red es seguro por construcción.
+
+[NOTE]
+====
+Sin esta garantía, un timeout en el lado del emisor le obliga a elegir entre reintentar
+—arriesgando duplicar— o no reintentar —arriesgando perder el lote—. La idempotencia es lo
+que convierte el reintento en la opción obviamente correcta.
+====
+
+==== RF-BS-14 — Reconciliación por foto completa 🆕
+
+El Bridge Service debe poder corregir la deriva entre su catálogo y el de SinsaTools sin
+intervención manual.
+
+*Criterios de aceptación:*
+
+* El modo `snapshot` admite una foto completa paginada en varios lotes que comparten
+  `snapshotId` y se numeran con `sequence` desde 1.
+* Los lotes de una foto se aplican *en orden*. Un `sequence` repetido o fuera de secuencia
+  retorna `409 SNAPSHOT_SEQUENCE_GAP`.
+* Al recibir el lote con `isLast: true`, el Bridge desactiva todo producto, versión y recurso
+  que no haya aparecido en la foto.
+* Una foto no se puede cerrar dos veces: el segundo `isLast` para el mismo `snapshotId`
+  retorna `409 SNAPSHOT_CLOSED`.
+* La reconciliación *nunca borra físicamente* (REST-BS-12): marca `active = false`.
+
+[IMPORTANT]
+====
+Este requerimiento es la mitigación de *DT-BS-04*. Con ingesta puramente incremental, una
+baja perdida en origen queda visible en el portal para siempre y nada lo delata. La foto
+completa periódica es lo que cierra esa puerta.
+====
+
+==== RF-BS-15 — Consulta del resultado de un lote 🆕
+
+*Endpoint:* `GET /v1/ingest/{ingestId}`
+
+*Criterios de aceptación:*
+
+* Requiere el scope `catalog:ingest`.
+* Retorna `status` (`queued` / `running` / `completed` / `partial` / `failed`), los
+  contadores desglosados por entidad y operación, `generatedAt`, `receivedAt`, `finishedAt`
+  y `durationMs`.
+* Lista en `items[]` *solo los ítems con error*, cada uno con su clave natural y el motivo.
+  Un lote correcto devuelve `items: []`.
+* Un `ingestId` inexistente retorna `404`.
+* El resultado se conserva 90 días (DEC-BS-03).
+* Debe seguir siendo consultable tras un reinicio del App Service.
+
+==== RF-BS-16 — Marca de agua de la ingesta 🆕
+
+*Endpoint:* `GET /v1/ingest/watermark`
+
+*Criterios de aceptación:*
+
+* Retorna el `generatedAt` del último lote aplicado con éxito, su `batchId`, la fecha de
+  aplicación, el `snapshotId` de una foto abierta sin cerrar (o `null`) y el recuento actual
+  del catálogo.
+* Permite al emisor reanudar sin llevar su propio registro de hasta dónde envió.
+
+[NOTE]
+====
+Es la defensa contra el desacuerdo silencioso. Si el emisor cree haber enviado hasta las
+14:30 y nosotros aplicamos hasta las 13:55 —porque un lote intermedio falló—, sin este
+endpoint nadie lo descubre hasta que un usuario echa en falta un vídeo.
+====
+
+==== RF-BS-17 — Normalización y derivación en la ingesta 🆕
+
+El Bridge Service debe normalizar y completar los datos recibidos antes de persistirlos.
+
+*Criterios de aceptación:*
+
+* `extension` se normaliza a minúsculas y sin punto inicial.
+* `mediaKind` se deriva de `extension` cuando el emisor no lo envía. Si lo envía, prevalece
+  el valor del emisor.
+* `mimeType` se deriva de `extension` cuando no viene.
+* `sizeBytes`, cuando no viene, se obtiene con un `HEAD` contra el almacenamiento la primera
+  vez que se sirve el recurso, y se cachea (DEC-BS-10).
+* `storageUri` se descompone en `storage_provider`, `storage_container` y `storage_path`. Un
+  URI relativo o de esquema no soportado se rechaza como error de forma.
+* El `storageUri` original se conserva íntegro, de modo que la descomposición se pueda
+  rehacer si la regla cambia, sin pedir una reingesta.
+
+=== La cara del portal
+
+==== RF-BS-18 — Servir el contrato del frontend 🆕
+
+El Bridge Service debe implementar los seis contratos OpenAPI que el frontend Angular ya
+consume.
+
+*Criterios de aceptación:*
+
+* `api_auth` — `POST /auth/login`, `/register`, `/refresh`, `/logout`.
+* `api_catalog` — `GET /catalog/products`, `/catalog/products/{productId}`,
+  `/catalog/versions/{versionId}/media`.
+* `api_media` — `GET /media/{mediaId}/stream` con soporte de `Range` (200 y 206).
+* `api_admin` — las 20 operaciones de usuarios, grupos, excepciones y logs.
+* `api_sync` — las cuatro operaciones del panel de sincronización, con la semántica de
+  RF-BS-20.
+* El detalle funcional de cada operación vive en
+  `portal-docs/01_requerimientos/` (RF-01 … RF-24). Este requerimiento fija *que el Bridge es
+  quien las implementa*, no las redefine.
+
+[WARNING]
+====
+El contrato está implementado y probado del lado del cliente, con 94 % de cobertura y una
+API simulada completa. *Cualquier divergencia entre el servidor y estos seis archivos es un
+fallo del servidor*, no una diferencia de criterio (REST-BS-11).
+====
+
+==== RF-BS-19 — Pre-flight de acceso a un recurso 🆕
+
+El Bridge Service debe exponer una comprobación de acceso previa a la reproducción.
+
+*Endpoint:* `GET /media/{mediaId}/access`
+
+*Criterios de aceptación:*
+
+* Aplica exactamente la misma evaluación de acceso que `GET /media/{mediaId}/stream`, en el
+  mismo orden: excepción `revoke` → acceso por grupo → excepción `grant` → denegar.
+* Retorna `204` si el acceso está permitido, `403` si está denegado, `404` si el recurso no
+  existe o está inactivo, `503` si el almacenamiento no responde.
+* No devuelve cuerpo ni consume el recurso.
+* Se registra en `video_access_log` igual que el stream.
+
+[CAUTION]
+====
+*Este endpoint no está en ningún contrato y el frontend ya lo llama* antes de cada
+reproducción (`MediaSourceStrategy`, GAP-01). El motivo es que un `<video>` que recibe un
+`403` solo produce un `MediaError` opaco: sin el pre-flight, el visor no puede distinguir
+«no tienes acceso» de «el recurso no existe» de «el almacenamiento está caído», y muestra un
+error genérico en los tres casos.
+
+*Sin implementarlo, falla la reproducción de todos los recursos.* Hay que añadirlo a
+`api_media.yaml` — es DEC-BS-11.
+====
+
+==== RF-BS-20 — Dominio de sincronización del portal sobre la ingesta 🆕
+
+Las cuatro operaciones de `/admin/sync` deben reinterpretarse sobre el historial de ingesta,
+sin cambiar la forma de sus DTO.
+
+*Criterios de aceptación:*
+
+[cols="2,3",options="header"]
+!===
+! Operación ! Semántica
+
+! `GET /admin/sync/status`
+! `lastSync` es el último lote aplicado. `catalogSummary` son cuatro recuentos.
+  `isDataStale` se calcula como `now() − max(generated_at de lotes aplicados) > umbral`.
+  `nextScheduledSync` se estima a partir del intervalo esperado de ingesta (DEC-BS-09).
+
+! `GET /admin/sync/logs`
+! Un «sync log» es un lote de ingesta. `scope: full` ⇄ `mode: snapshot`;
+  `scope: delta` ⇄ `mode: upsert`; `triggerType` distingue el empuje programado del puntual.
+
+! `GET /admin/sync/logs/{syncId}`
+! El `syncId` es el `ingestId`.
+
+! `POST /admin/sync`
+! *Sin equivalente.* No se puede disparar la sincronización de una base que no se lee.
+  Ver DEC-BS-07.
+!===
+
+* Mientras DEC-BS-07 no se cierre, la acción se apaga desde `public/config.json` con
+  `features.triggerSync: false`, sin tocar código — es el mismo mecanismo con el que ya están
+  apagadas `myVideos`, `notifications` y `help` (DEC-FE-08).
+* `isDataStale` se calcula sobre `generatedAt`, *nunca* sobre la hora de recepción: un lote
+  viejo reenviado no debe parecer dato fresco.
+
+---
+
+== Requerimientos no funcionales
+
+[cols="1,3,2", options="header"]
+|===
+| ID | Requerimiento | Métrica objetivo
+
+| RNF-BS-01 | *Disponibilidad* — durante el horario de operación del portal. | ≥ 99.5 % mensual
+
+| RNF-BS-02 | *Latencia de catálogo* — `GET /catalog/products` paginado y filtrado. | p95 < 500 ms
+
+| RNF-BS-03 | *Latencia de ingesta* — aceptación de un lote (hasta responder `202`). | p95 < 1.000 ms
+
+| RNF-BS-04 | *Seguridad* — toda comunicación HTTPS; JWT validado en cada request. | 100 % HTTPS · 0 endpoints sin auth salvo `/health`
+
+| RNF-BS-06 | *Trazabilidad* — cada request rastreable extremo a extremo por `X-Correlation-ID`. | 100 % de requests con Correlation ID en logs
+
+| RNF-BS-07 | *Mantenibilidad* — comprensible por un solo desarrollador .NET. | Clean Architecture simplificada · 3 capas (Api, Application, Infrastructure)
+
+| RNF-BS-08 | *Observabilidad* — logs estructurados JSON para Azure Monitor. | 100 % de eventos
+
+| RNF-BS-09 | *Frescura del dato* — la antigüedad del catálogo debe ser observable y acotada. | `generatedAt` del último lote expuesto en `/health` y en `/admin/sync/status` · umbral configurable
+
+| RNF-BS-10 | *Capacidad de ingesta* 🆕 | 200 productos y 10 MB por lote · `gzip` admitido · 60 lotes/min
+
+| RNF-BS-11 | *Streaming* 🆕 — reproducción con búsqueda sin descargar el archivo completo. | `Range` soportado · primer byte p95 < 800 ms · `Accept-Ranges` en la 200
+|===
+
+[NOTE]
+====
+*RNF-BS-03 cambia de objeto.* Medía la latencia de `GET /v1/media/updates`, que ya no existe.
+Se reasigna a la aceptación de un lote de ingesta, que es la operación equivalente en el
+nuevo flujo: la que el sistema externo espera.
+
+*RNF-BS-07 pasa de 2 a 3 capas.* Con la v1.1 el servicio era una fachada de lectura y dos
+capas bastaban. Ahora contiene identidad, autorización, ingesta con reglas de negocio y un
+proxy de streaming; mezclar eso con el acceso a datos produce controladores de varios cientos
+de líneas. La capa `Application` es lo que mantiene el servicio comprensible para una sola
+persona, que es precisamente lo que este RNF persigue.
+
+*RNF-BS-09 gana un campo explícito.* En la v1.1 la antigüedad se infería de la hora de la
+última sincronización. Ahora el contrato de ingesta obliga al emisor a declarar `generatedAt`
+—cuándo extrajo el dato—, que es la medida correcta.
+====
+
+---
+
+== Restricciones técnicas
+
+[cols="1,3", options="header"]
+|===
+| ID | Restricción
+
+| REST-BS-01 | El stack tecnológico es *.NET 8 (C#)*. No se permite cambiar el runtime.
+
+| REST-BS-03 | El repositorio del Bridge Service (`Sin-PortalBridge`) es *independiente* del frontend (`Sin-PortalVideos`), con su propio workflow de GitHub Actions.
+
+| REST-BS-04 | La base de datos es *Azure Database for PostgreSQL Flexible Server*, versión 16. Es fuente de verdad de la identidad, los permisos y la auditoría; y proyección de SinsaTools en lo que respecta al catálogo.
+
+| REST-BS-06 | Hay *dos contratos bilaterales*. `ingest_catalog_v1.0.yaml` con el equipo de SinsaTools, y los seis `api_*.yaml` con el frontend. Ninguno cambia de forma incompatible sin acuerdo de la contraparte; un cambio incompatible exige versionar la ruta.
+
+| REST-BS-07 | La autenticación entre servicios usa *Service JWT RS256*. No se permite otro mecanismo.
+
+| REST-BS-11 | 🆕 El contrato del frontend *ya está implementado y probado del lado del cliente*. El servidor se adapta a él. Una divergencia es un fallo del servidor, no una decisión de diseño pendiente.
+
+| REST-BS-12 | 🆕 *No hay borrado físico de catálogo.* Una baja en SinsaTools se refleja como `active = false`, tanto si llega explícita como si se deduce del cierre de una foto.
+
+| REST-BS-13 | 🆕 *La ingesta nunca hace `DELETE` + `INSERT`.* Actualiza la fila existente localizada por su clave natural. El identificador interno de un producto, versión o recurso es estable de por vida.
+|===
+
+[IMPORTANT]
+====
+*REST-BS-13 no es una preferencia de estilo: es una garantía de seguridad.*
+
+Los permisos por grupo (`group_version_access`) y las excepciones individuales
+(`user_media_exceptions`) apuntan al identificador interno. Un `DELETE` + `INSERT` durante la
+ingesta propagaría el borrado en cascada y **vaciaría silenciosamente los permisos de todos
+los usuarios** en el siguiente lote, sin error, sin log y sin que nadie lo notara hasta que
+alguien perdiera el acceso a un vídeo que antes veía.
+====
+
+---
+
+== Casos de uso de alto nivel
+
+[cols="1,3,2,2", options="header"]
+|===
+| ID | Caso de uso | Actor | RF
+
+| CU-BS-001 | Obtener el Service JWT de ingesta | Microservicio de SinsaTools | RF-BS-02
+| CU-BS-002 🆕 | Empujar un lote incremental de catálogo | Microservicio de SinsaTools | RF-BS-12, RF-BS-13
+| CU-BS-003 🆕 | Empujar y cerrar una foto completa | Microservicio de SinsaTools | RF-BS-14
+| CU-BS-004 | Verificar el estado del Bridge Service | DevOps | RF-BS-05
+| CU-BS-005 | Rastrear un lote por Correlation ID | Desarrollador / DevOps | RF-BS-06, RF-BS-08
+| CU-BS-006 🆕 | Consultar el resultado de un lote y corregir los ítems fallidos | Microservicio de SinsaTools | RF-BS-15
+| CU-BS-007 🆕 | Reanudar la ingesta tras una interrupción | Microservicio de SinsaTools | RF-BS-16
+| CU-BS-008 🆕 | Consultar el estado del catálogo desde el panel | Administrador / Editor | RF-BS-20
+| CU-BS-009 🆕 | Reproducir un recurso con control de acceso | Usuario del portal | RF-BS-18, RF-BS-19
+| CU-BS-010 | Detectar que el catálogo ha dejado de actualizarse | DevOps / Administrador | RNF-BS-09, RF-BS-05
+|===
+
+NOTE: El desarrollo detallado corresponde a `02_casos_de_uso/`, todavía pendiente.
+
+---
+
+== Alcance — Qué NO hace el Bridge Service
+
+* No accede a la base de datos de SinsaTools, ni a su red, ni conoce su esquema.
+* No decide *cuándo* se actualiza el catálogo: esa cadencia la fija el emisor.
+* No almacena archivos multimedia — los sirve como proxy desde donde estén.
+* No es fuente de verdad del catálogo. Lo es de la identidad, los permisos y la auditoría.
+* No expone la ruta de almacenamiento de un recurso a ningún cliente (SEC-BS-10).
+* No renderiza interfaz: el frontend es una SPA independiente.
+
+---
+
+== Dependencias e integraciones
+
+[cols="2,1,3,2", options="header"]
+|===
+| Dependencia | Dirección | Descripción | Estado
+
+| Microservicio de integraciones de SinsaTools
+| SinsaTools → Bridge
+| Origen de todo el catálogo.
+| 🔴 Contrato emitido, *pendiente de acuerdo y credenciales*
+
+| PostgreSQL en Azure
+| Bridge ↔ PostgreSQL
+| Toda la persistencia del sistema.
+| Por aprovisionar
+
+| Almacenamiento de recursos
+| Bridge → almacenamiento
+| Origen de los bytes que sirve el proxy. El proveedor se deduce del `storageUri`.
+| 🟠 Depende de qué `storageUri` envíe SinsaTools
+
+| Frontend Angular
+| Frontend → Bridge
+| Único consumidor de `/api`.
+| ✅ Construido y probado contra su mock
+
+| Azure Key Vault
+| Bridge → Key Vault
+| `clientSecret` de ingesta y claves de firma JWT.
+| Por aprovisionar
+
+| Azure App Service
+| —
+| Plataforma de despliegue. *Sin conectividad con ninguna red corporativa.*
+| Por aprovisionar
+|===
+
+---
+
+== Trazabilidad
+
+[cols="1,2,2,2", options="header"]
+|===
+| RF | Endpoint | Caso de uso | Gobernado por
+
+| RF-BS-01 | `/v1/ingest/*` | CU-BS-001 | ADR-BS-006
+| RF-BS-02 | `POST /v1/auth/token` | CU-BS-001 | ADR-BS-006
+| RF-BS-05 | `GET /health` | CU-BS-004, CU-BS-010 | —
+| RF-BS-06 | todos | CU-BS-005 | —
+| RF-BS-08 | todos | CU-BS-005 | —
+| RF-BS-12 | `POST /v1/ingest/catalog` | CU-BS-002 | ADR-BS-006
+| RF-BS-13 | `POST /v1/ingest/catalog` | CU-BS-002 | ADR-BS-006
+| RF-BS-14 | `POST /v1/ingest/catalog` | CU-BS-003 | ADR-BS-006
+| RF-BS-15 | `GET /v1/ingest/{ingestId}` | CU-BS-006 | ADR-BS-001
+| RF-BS-16 | `GET /v1/ingest/watermark` | CU-BS-007 | ADR-BS-006
+| RF-BS-17 | `POST /v1/ingest/catalog` | CU-BS-002 | ADR-BS-006
+| RF-BS-18 | `/api/*` | CU-BS-009 | ADR-BS-005
+| RF-BS-19 | `GET /media/{id}/access` | CU-BS-009 | ADR-BS-005, DEC-BS-11
+| RF-BS-20 | `/admin/sync/*` | CU-BS-008 | ADR-BS-005, DEC-BS-07
+|===
+
+Números quemados, no reutilizables: RF-BS-03, RF-BS-04, RF-BS-07, RF-BS-09, RF-BS-10,
+RF-BS-11, RNF-BS-05, REST-BS-02, REST-BS-05, REST-BS-08, REST-BS-09, REST-BS-10.
+
+---
+
+== Glosario
+
+[cols="1,3", options="header"]
+|===
+| Término | Definición
+
+| *Bridge Service* | Este sistema. El backend del Portal de Videos: recibe el catálogo de SinsaTools y lo sirve al frontend.
+| *SinsaTools* | La aplicación on-premise de la organización. Fuente de verdad del catálogo de software.
+| *Microservicio de integraciones* | El componente del equipo de SinsaTools que extrae su catálogo y lo empuja contra nuestra API de ingesta. Nuestra única contraparte de ese lado.
+| *Ingesta* 🆕 | La entrada de catálogo por empuje. Sustituye a lo que la v1.1 llamaba «sync interno».
+| *Lote* (`batch`) 🆕 | Una entrega de catálogo. Lleva `batchId`, modo, `generatedAt` y un árbol de productos.
+| *Foto* (`snapshot`) 🆕 | Un conjunto de lotes que representa el catálogo completo en un instante. Al cerrarse, lo ausente se desactiva.
+| *`generatedAt`* 🆕 | Cuándo SinsaTools *extrajo* el dato. Distinto de cuándo nos llegó. Es la medida de frescura.
+| *Marca de agua* 🆕 | El `generatedAt` del último lote aplicado con éxito. Corte para el siguiente incremental.
+| *Clave natural* 🆕 | La identidad de una entidad en origen: `sourceId` para producto y versión, `(source, sourceId)` para un recurso.
+| *Service JWT* | Token RS256 entre sistemas. Distinto del User JWT que autentica a las personas del portal.
+| *`storageUri`* 🆕 | URI absoluto del recurso. Se descompone en proveedor, contenedor y ruta, y nunca sale al cliente.
+| *Correlation ID* | UUID que identifica un request a través de todos los sistemas.
+|===
+
+---
+
+[colophon]
+[cols="1,3"]
+|===
+| Versión | 2.0
+| Fecha | 2026-09-16
+| Estado | Vigente
+| Supera a | v1.1 (2026-08-22) — `_historico/requerimientos_bridge_service_v1.1.adoc`
+| Clasificación | Confidencial — Solo uso interno
+| Documentos relacionados | ADR-BS-005, ADR-BS-006, arquitectura_tecnica_bridge_service_v2.0.adoc, ingest_catalog_v1.0.yaml, los seis `api_*.yaml` del frontend
+|===
+
+include::{root}/_nav.adoc[]

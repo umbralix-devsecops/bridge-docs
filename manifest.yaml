@@ -1,0 +1,471 @@
+# ============================================================================
+# manifest.yaml — Catálogo legible por máquina de bridge-docs/
+# ============================================================================
+# Fuente de verdad para agentes y scripts sobre qué documentos existen,
+# cuáles están vigentes y cómo se relacionan entre sí.
+#
+# REGLA: al mover, renombrar o superar un documento, actualizar este archivo
+# EN EL MISMO COMMIT que el cambio. Un manifest desactualizado es peor que
+# no tener manifest.
+#
+# 2026-09-16 — ADR-BS-005 y ADR-BS-006 cambian la arquitectura: el Bridge
+# Service es el backend del portal y el catálogo entra por empuje. Desaparecen
+# el SyncWorker, el OnPremiseDbContext, la conectividad corporativa y los
+# endpoints /v1/softwares, /v1/media/updates, POST /v1/sync y GET /v1/sync/{id}.
+# ============================================================================
+
+project:
+  name: Bridge Service
+  repo_docs: bridge-docs
+  repo_code: Sin-PortalBridge
+  counterpart:
+    name: Portal de Videos
+    repo_docs: portal-docs
+    repo_code: [Sin-PortalVideos]
+  updated_at: "2026-09-16"
+  adr_prefix_rationale: >
+    Se usa ADR-BS-NNN en vez del ADR-NNN del Glosario del portal porque bridge-docs tiene su
+    propio 11_gestion_producto/adr/ y ambos conjuntos se leen juntos. Confirmado 2026-08-22.
+    Desde ADR-BS-005 ambas documentaciones describen un único sistema —el frontend Angular y
+    este servicio—, pero mientras sigan siendo dos repositorios el sufijo es necesario.
+    Fundirlas está registrado como DEC-BS-12.
+  documentation_progress: "~30%"
+  team_size: 1
+
+conventions:
+  narrative_format: asciidoc
+  api_contracts: openapi-3.1-yaml
+  standalone_diagrams: mermaid
+  embedded_diagrams: "[source,mermaid] dentro del .adoc"
+  file_naming: lowercase_snake_con_version
+  folder_naming: NN_lowercase
+  adr_prefix: ADR-BS-          # prefijo propio para no colisionar con portal-docs
+  language_policy:             # adoptada 2026-08-23, revisada 2026-09-16
+    code: en                   # BD, clases, componentes, endpoints, campos de contrato, tests
+    docs: es                   # prosa, nombres de archivo, carpetas NN_, IDs de trazabilidad
+    code_comments: es
+    diagram_actor_labels: es
+    diagram_component_names: en
+    exception: >
+      Los nombres de campo de los dos contratos bilaterales son intocables: el de ingesta
+      (ingest_catalog_v1.0.yaml) y los seis api_*.yaml del frontend, ya implementados del lado
+      del cliente (REST-BS-11). Se usan tal cual, en camelCase inglés, aunque no sigan la
+      convención interna. Decae la excepción anterior sobre el esquema on-premise de terceros
+      (Products, Stock_Keeping_Units, Images, Entity_Files, Files): ya no se accede a él.
+
+root_documents:
+  - path: index.adoc
+    title: Índice general
+    status: vigente
+  - path: 00_Estado_Actual.adoc
+    title: Estado Actual
+    status: vigente
+    living_document: true
+    read_first: true
+  - path: Analisis_Arranque_Bridge_v1.0.adoc
+    title: Análisis de arranque
+    status: vigente
+    version: "1.0"
+  - path: Guia_Agentes.adoc
+    title: Guía para agentes
+    status: vigente
+  - path: Glosario_IDs.adoc
+    title: Glosario de IDs
+    status: vigente
+    version: "2.0"
+  - path: Mapa_Subproyectos.adoc
+    title: Mapa de subproyectos
+    status: vigente
+  - path: README.md
+    title: Puerta de entrada al repositorio
+    status: vigente
+  - path: _nav.adoc
+    title: Fragmento de navegación
+    status: vigente
+    include_only: true
+
+sections:
+
+  - id: "01"
+    slug: requerimientos
+    anchor: _requerimientos
+    title: Requerimientos
+    status: completa
+    documents:
+      - path: 01_requerimientos/requerimientos_bridge_service_v2.0.adoc
+        status: vigente
+        version: "2.0"
+        provides: [RF-BS-01..02, RF-BS-05..06, RF-BS-08, RF-BS-12..20, RNF-BS-01..04, RNF-BS-06..11, REST-BS-01, REST-BS-03..04, REST-BS-06..07, REST-BS-11..13, CU-BS-001..010]
+        governed_by: [ADR-BS-005, ADR-BS-006]
+        supersedes: 01_requerimientos/_historico/requerimientos_bridge_service_v1.1.adoc
+      - path: 01_requerimientos/_historico/requerimientos_bridge_service_v1.1.adoc
+        status: historico
+        version: "1.1"
+      - path: 01_requerimientos/_historico/requerimientos_bridge_service_v1.0.adoc
+        status: historico
+        version: "1.0"
+
+  - id: "02"
+    slug: casos_de_uso
+    anchor: _casos-de-uso
+    title: Casos de uso
+    status: pendiente
+    note: >
+      El dominio SYNC desaparece y sus casos de uso pasan a INGEST. Los diez CU-BS de alto
+      nivel ya están enunciados en requerimientos v2.0; esta sección los desarrolla.
+    planned:
+      - cu_master.adoc
+      - cu_auth.adoc      # dominio AUTH
+      - cu_ingest.adoc    # dominio INGEST
+      - cu_catalog.adoc   # dominio CAT
+      - cu_media.adoc     # dominio MEDIA
+      - cu_admin.adoc     # dominio ADMIN
+      - cu_ops.adoc       # dominio OPS
+
+  - id: "03"
+    slug: diseno
+    anchor: _diseno
+    title: Diseño
+    status: pendiente
+    note: "Sin frontend propio (vive en Sin-PortalVideos). wireframes/ permanece vacía por consistencia estructural."
+    planned:
+      - c4/c4_context_v1.0.adoc
+      - c4/c4_container_v1.0.adoc
+      - c4/c4_component_v1.0.adoc
+      - diagramas_estado/diagramas_estados_v1.0.adoc   # máquina de estados de ingest_batches
+
+  - id: "04"
+    slug: arquitectura_tecnica
+    anchor: _arquitectura-tecnica
+    title: Arquitectura técnica
+    status: completa
+    documents:
+      - path: 04_arquitectura_tecnica/arquitectura_tecnica_bridge_service_v2.0.adoc
+        status: vigente
+        version: "2.0"
+        governed_by: [ADR-BS-001, ADR-BS-002, ADR-BS-004, ADR-BS-005, ADR-BS-006]
+        implements: [RF-BS-01..02, RF-BS-05..06, RF-BS-08, RF-BS-12..20, RNF-BS-11]
+        defines: [SEC-BS-01..04, SEC-BS-06, SEC-BS-08..10, DOM-BS-04..10, DT-BS-02, DT-BS-04, DT-BS-06..08, DEC-BS-03, DEC-BS-05, DEC-BS-07..13]
+        supersedes: 04_arquitectura_tecnica/_historico/arquitectura_tecnica_bridge_service_v1.1.adoc
+      - path: 04_arquitectura_tecnica/_historico/arquitectura_tecnica_bridge_service_v1.1.adoc
+        status: historico
+        version: "1.1"
+      - path: 04_arquitectura_tecnica/_historico/arquitectura_tecnica_bridge_service_v1.0.adoc
+        status: historico
+        version: "1.0"
+      - path: 04_arquitectura_tecnica/modelo_datos/modelo_datos_bridge_v2.mermaid
+        status: vigente
+        version: "2"
+        type: mermaid-er
+        note: "Base única PostgreSQL 16: 14 tablas, 13 tipos enumerados, 33 índices."
+        supersedes: 04_arquitectura_tecnica/modelo_datos/_historico/modelo_datos_bridge_v1.mermaid
+      - path: 04_arquitectura_tecnica/modelo_datos/_historico/modelo_datos_bridge_v1.mermaid
+        status: historico
+        version: "1"
+        type: mermaid-er
+      - path: 04_arquitectura_tecnica/modelo_datos/changelog_modelo_datos.adoc
+        status: vigente
+        living_document: true
+        derived_from: migraciones EF Core sobre AppDbContext
+        governed_by: [ADR-BS-004]
+
+  - id: "05"
+    slug: contratos_api
+    anchor: _contratos-api
+    title: Contratos de API
+    status: parcial
+    note: >
+      Dos contratos bilaterales (REST-BS-06). El de ingesta, con el equipo de SinsaTools, ya
+      está aquí. Los seis api_*.yaml del frontend siguen en portal-docs, implementados y
+      probados del lado del cliente (REST-BS-11), pendientes de copia. Los cuatro
+      bridge_*.yaml de la v1.1 (bridge_master, bridge_auth, bridge_catalog, bridge_sync)
+      quedan sin objeto por ADR-BS-005, nunca se copiaron aquí y pasan al _historico/ de
+      portal-docs; la carpeta bridge_service/ queda vacía.
+    documents:
+      - path: 05_contratos_api/ingesta/ingest_catalog_v1.0.yaml
+        status: vigente
+        version: "1.0"
+        counterpart: equipo de SinsaTools
+        governed_by: [ADR-BS-006]
+        implements: [RF-BS-12..17]
+        provides: ["POST /v1/ingest/catalog", "GET /v1/ingest/{ingestId}", "GET /v1/ingest/watermark"]
+    planned:
+      - bridge_service/especificacion_api_bridge_v1.0.adoc   # narrativa de las dos caras del servicio
+
+  - id: "06"
+    slug: seguridad_autorizacion
+    anchor: _seguridad-autorizacion
+    title: Seguridad y autorización
+    status: pendiente
+    note: >
+      guia_acceso_sqlserver_v1.0.adoc queda sin objeto: no hay usuario de BD on-premise que
+      gobernar. Con ella caen SEC-BS-05 y SEC-BS-07, números quemados.
+    planned:
+      - contrato_service_jwt_v1.0.adoc      # aud: portal-ingest-api
+      - contrato_user_jwt_v1.0.adoc         # aud: portal-api, claim perms{}
+      - guia_evaluacion_acceso_v1.0.adoc    # revoke -> grupo -> grant -> denegar
+
+  - id: "07"
+    slug: guias_implementacion
+    anchor: _guias-implementacion
+    title: Guías de implementación
+    status: pendiente
+    note: >
+      guia_sync_worker_v1.0.adoc y guia_scaffolding_onpremise_v1.0.adoc quedan sin objeto:
+      no hay SyncWorker ni modelo DB-First que regenerar.
+    planned:
+      - guia_ingesta_v1.0.adoc
+      - guia_proxy_streaming_v1.0.adoc
+      - guia_migraciones_efcore_v1.0.adoc
+
+  - id: "08"
+    slug: testing
+    anchor: _testing
+    title: Testing
+    status: pendiente
+    planned:
+      - testing_master.adoc
+      - testing_unit.adoc
+      - testing_integration.adoc   # Testcontainers: solo PostgreSQL
+      - testing_contract.adoc      # proveedor del frontend y consumidor del contrato de ingesta
+
+  - id: "09"
+    slug: infraestructura_despliegue
+    anchor: _infraestructura-despliegue
+    title: Infraestructura y despliegue
+    status: pendiente
+    note: "Desbloqueada: al descartarse ADR-BS-003 no hay conectividad corporativa que resolver."
+    planned:
+      - guia_infraestructura_azure_v1.0.adoc
+      - guia_contenedores_docker_v1.0.adoc
+      - guia_cicd_v1.0.adoc
+      - runbook_operaciones_v1.0.adoc
+      - plan_backup_rto_rpo_v1.0.adoc
+      - plan_capacidad_alertas_v1.0.adoc
+
+  - id: "10"
+    slug: estandares_procesos
+    anchor: _estandares-procesos
+    title: Estándares y procesos
+    status: pendiente
+    planned:
+      - guia_onboarding_v1.0.adoc     # prioridad elevada: equipo de 1 persona
+      - estandares_codigo_v1.0.adoc
+      - estandares_dod_v1.0.adoc
+      - estandares_dor_v1.0.adoc
+
+  - id: "11"
+    slug: gestion_producto
+    anchor: _gestion-producto
+    title: Gestión de producto
+    status: parcial
+    documents:
+      - path: 11_gestion_producto/adr/adr-000_indice.adoc
+        status: vigente
+        version: "2.0"
+      - path: 11_gestion_producto/adr/adr-bs-001_cache_postgresql_propio.adoc
+        status: aceptada
+        version: "1.1"
+        supersedes: "decisión informal: sin BD propia"
+      - path: 11_gestion_producto/adr/adr-bs-002_efcore_dos_proveedores.adoc
+        status: aceptada
+        version: "1.1"
+        depends_on: [ADR-BS-001]
+        note: "Revisada: queda un solo proveedor (Npgsql). Desaparece SqlServer."
+      - path: 11_gestion_producto/adr/adr-bs-003_conectividad_onpremise.adoc
+        status: descartada
+        version: "1.1"
+        blocking: false
+        note: >
+          Sin objeto desde ADR-BS-006: no hay tramo de red que resolver. Descartada, no
+          superada. El archivo se conserva fuera de _historico/ porque su análisis de
+          exposición de red sigue siendo válido. No se reabre.
+      - path: 11_gestion_producto/adr/adr-bs-004_ef_core_fuente_unica_esquema.adoc
+        status: aceptada
+        version: "1.1"
+        depends_on: [ADR-BS-001, ADR-BS-002]
+      - path: 11_gestion_producto/adr/adr-bs-005_servicio_unico.adoc
+        status: aceptada
+        depends_on: [ADR-BS-001]
+        defines: [SEC-BS-09, REST-BS-11]
+        note: "El Bridge Service es el backend del portal. No hay un tercer servicio."
+      - path: 11_gestion_producto/adr/adr-bs-006_ingesta_por_empuje.adoc
+        status: aceptada
+        depends_on: [ADR-BS-004, ADR-BS-005]
+        defines: [DOM-BS-08, DOM-BS-09, DOM-BS-10, REST-BS-12, REST-BS-13, SEC-BS-10]
+        note: "El catálogo entra por POST /v1/ingest/catalog. Descarta ADR-BS-003."
+    planned:
+      - backlog_inicial_v1.0.adoc
+      - roadmap_tecnico_v1.0.adoc
+
+  - id: "12"
+    slug: integraciones_externas
+    anchor: _integraciones-externas
+    title: Integraciones externas
+    status: pendiente
+    note: >
+      El Portal de Videos deja de ser integración externa (ADR-BS-005): el frontend y este
+      servicio son el mismo sistema. La única contraparte externa es el microservicio de
+      integraciones de SinsaTools.
+    planned:
+      - sinsatools/integracion_ingesta_sinsatools_v1.0.adoc
+
+templates:
+  - _plantillas/Plantilla_ADR.adoc
+  - _plantillas/Plantilla_Requerimiento.adoc
+  - _plantillas/Plantilla_Integracion_Externa.adoc
+
+deliverables:
+  - path: _entregables/arquitectura_bridge_service.html
+    type: html
+    audience: stakeholders
+    status: desactualizado
+    contains: [diagrama_contexto, interior_del_servicio, comparacion_conectividad]
+    note: >
+      Refleja la v1.1: tres servicios, lectura de on-premise y la comparación de las tres
+      opciones de conectividad (ADR-BS-003, descartada). Debe rehacerse contra la v2.0.
+
+# ── Superficie de API publicada ───────────────────────────────────────────
+# Dos caras, dos credenciales independientes y no intercambiables (SEC-BS-09).
+api_surface:
+  ingest:                       # Service JWT · aud: portal-ingest-api · scope catalog:ingest
+    consumer: microservicio de integraciones de SinsaTools
+    contract: 05_contratos_api/ingesta/ingest_catalog_v1.0.yaml
+    endpoints:
+      - POST /v1/auth/token
+      - POST /v1/ingest/catalog
+      - GET /v1/ingest/{ingestId}
+      - GET /v1/ingest/watermark
+  portal:                       # User JWT · aud: portal-api · claim perms{}
+    consumer: frontend Angular (Sin-PortalVideos)
+    contract: los seis api_*.yaml, en portal-docs
+    endpoint_count: 27
+    endpoint_groups:
+      - /auth/**                # login, register, refresh, logout
+      - /catalog/**             # products, products/{id}, versions/{id}/media
+      - /media/{id}/access
+      - /media/{id}/stream
+      - /admin/**              # users, groups, logs, sync
+  ops:
+    endpoints:
+      - GET /health
+  retired:                      # sin objeto desde ADR-BS-005 y ADR-BS-006
+    - GET /v1/softwares
+    - GET /v1/media/updates
+    - POST /v1/sync
+    - GET /v1/sync/{syncId}
+
+# ── Estado de decisiones ──────────────────────────────────────────────────
+open_decisions:
+  - id: DEC-BS-03
+    priority: medium
+    summary: Ratificar la política de purga — 90 días, los fallos un año
+    blocks: [DT-BS-02]
+    target: v1.1
+  - id: DEC-BS-05
+    priority: low
+    summary: Rotación del client_secret de ingesta sin ventana de indisponibilidad
+    target: v1.2
+  - id: DEC-BS-07
+    priority: critical
+    summary: Qué hace POST /admin/sync sin una base que consultar
+    blocks: [RF-BS-20, panel de sincronización del portal]
+    note: "Mientras tanto se apaga con features.triggerSync: false en config.json."
+  - id: DEC-BS-08
+    priority: high
+    summary: "webPlatformId y deviceType: ¿filtran contenido o son informativos?"
+    blocks: [ingest_catalog_v1.0.yaml, semántica del catálogo]
+  - id: DEC-BS-09
+    priority: high
+    summary: Intervalo esperado de ingesta, del que salen el umbral de frescura y la alerta
+    blocks: [RNF-BS-09, alertas de la sección 09]
+    requires: acuerdo con el equipo de SinsaTools
+  - id: DEC-BS-10
+    priority: medium
+    summary: "sizeBytes: ¿lo entrega el emisor o lo obtenemos por HEAD?"
+    blocks: [DT-BS-07]
+  - id: DEC-BS-11
+    priority: critical
+    summary: Añadir GET /media/{id}/access al contrato del portal (api_media.yaml)
+    blocks: [RF-BS-19]
+    requires: acuerdo con el contrato del frontend
+  - id: DEC-BS-12
+    priority: medium
+    summary: ¿Se funden bridge-docs y portal-docs en una sola documentación?
+    note: "Mientras no se decida, el sufijo -BS sigue siendo necesario."
+  - id: DEC-BS-13
+    priority: high
+    summary: "sessions: ¿se añaden replaced_by_session_id y revoked_reason?"
+    note: >
+      Sin replaced_by_session_id no hay cadena que recorrer al detectar un refresh token ya
+      rotado, y el sistema expulsa a la víctima en vez de al ladrón.
+
+closed_decisions:
+  - id: DEC-BS-06
+    closed_at: "2026-09-16"
+    resolution: >
+      industry viene de SinsaTools como atributo del software. Campo obligatorio del contrato
+      de ingesta.
+  - id: DEC-BS-01
+    status: sin_objeto
+    resolution: "Frecuencia del sync interno. No hay sync: el dato entra por empuje."
+  - id: DEC-BS-02
+    status: sin_objeto
+    resolution: "Conectividad Azure ↔ on-premise. No hay tramo de red que resolver."
+  - id: DEC-BS-04
+    status: sin_objeto
+    resolution: "Marcar registros como sincronizados en on-premise. No escribimos allí."
+
+technical_debt:
+  - id: DT-BS-02
+    impact: medium
+    summary: Política de purga propuesta pero sin barrido implementado
+  - id: DT-BS-04
+    impact: medium
+    summary: >
+      Sin métrica de deriva frente a SinsaTools. Mitigada en parte por la foto completa
+      (RF-BS-14); era impacto alto
+  - id: DT-BS-06
+    impact: medium
+    summary: El changelog del modelo depende de un gate humano; falta el chequeo en CI
+  - id: DT-BS-07
+    impact: low
+    summary: El sizeBytes obtenido por HEAD no se revalida; el Content-Length puede desfasarse
+  - id: DT-BS-08
+    impact: medium
+    summary: El proxy de streaming ocupa un hilo por transferencia, sin límite de tamaño
+  # Dados de baja, números quemados: DT-BS-01 (scaffolding manual),
+  # DT-BS-03 (catálogo sin paginar), DT-BS-05 (validación de Files.FilePath).
+
+pending_corrections:
+  - target: _entregables/arquitectura_bridge_service.html
+    priority: critical
+    issue: >
+      Refleja la v1.1: tres servicios, lectura de on-premise y comparación de las tres
+      opciones de conectividad. Se presenta a stakeholders y contradice la v2.0.
+  - target: api_media.yaml
+    priority: critical
+    issue: "Falta GET /media/{id}/access, que RF-BS-19 necesita (DEC-BS-11)"
+    requires: acuerdo con el contrato del frontend
+  - target: ingest_catalog_v1.0.yaml
+    priority: medium
+    issue: "Semántica de webPlatformId y deviceType sin cerrar (DEC-BS-08); sizeBytes sin decidir emisor (DEC-BS-10)"
+    requires: acuerdo con el equipo de SinsaTools
+  - target: ficha de contexto del proyecto
+    priority: critical
+    issue: >
+      Sigue afirmando 'sin BD propia' y describiendo un backend de portal separado; superado
+      por ADR-BS-001, ADR-BS-005 y requerimientos v2.0
+  - target: portal-docs/00_Estado_Actual.adoc
+    priority: critical
+    issue: >
+      Declara vigentes ADR-001..008, backlog, roadmap, C4, wireframes, runbook, backup,
+      capacidad y estandares_codigo, y marca 'todos los documentos generados'.
+      Esos 20 archivos estan a 0 bytes.
+  - target: portal-docs/05_contratos_api/
+    priority: medium
+    issue: >
+      Los cuatro bridge_*.yaml describen endpoints /v1/ que ya no existen. Mover a _historico/
+      en el mismo commit que este cambio de arquitectura.
+  # Sin objeto tras 2026-09-16: la corrección del campo iss de bridge_auth.yaml y el
+  # endurecimiento del p95 de bridge_master/bridge_sync. Los cuatro YAML se retiran.

@@ -1,0 +1,438 @@
+= Mapeo SinsaTools → contrato de ingesta
+:author: Equipo de Desarrollo
+:revnumber: 1.0
+:revdate: 2026-09-17
+:revremark: Primera emisión, a partir del ER de SinsaTools y su consulta de extracción
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:sectnumlevels: 3
+:icons: font
+:lang: es
+:root: ..
+:section-id: integraciones-externas
+:section-title: 12 — Integraciones Externas
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+---
+
+[.lead]
+Correspondencia entre el esquema de SinsaTools y los campos de
+`05_contratos_api/ingesta/ingest_catalog_v1.0.yaml`. Es el documento que el equipo de
+integraciones necesita para construir su lado, y el que nosotros usamos para validar que lo
+que llega es lo que esperamos.
+
+[IMPORTANT]
+====
+*Esto no es nuestro modelo de datos.* El esquema de SinsaTools es suyo y no lo replicamos: la
+frontera es el contrato (`ADR-BS-006`). Este documento existe para traducir una vez, no para
+acoplarnos.
+
+Fuentes: el diagrama ER entregado el 2026-09-17 y la consulta de extracción que ellos
+ejecutarán. Ambos son *informativos*: lo vinculante es el contrato.
+====
+
+== Lo que el diagrama cierra
+
+Cuatro cosas que llevaban semanas abiertas quedan resueltas por observación directa.
+
+[cols="1,4",options="header"]
+|===
+| Cuestión | Resolución
+
+| *Campos de auditoría*
+| `CreatedAt` y `UpdatedAt` existen en `Products`, `Stock_Keeping_Units`, `Entity_Files` y
+  prácticamente todas las tablas. El riesgo bloqueante que tres documentos arrastraban desde
+  el principio —«si `UpdatedAt` no existe, el delta será silenciosamente incompleto»— está
+  definitivamente muerto. Ya lo estaba por `ADR-BS-006`; ahora además se confirma que el
+  emisor puede calcular incrementales.
+
+| *`DEC-BS-10` — tamaño del fichero*
+| ✅ *Cerrada.* `Files.Size` existe y la consulta ya lo selecciona como `FileSizeBytes`. No
+  hace falta el `HEAD` contra el almacenamiento: `sizeBytes` llega en el lote.
+
+| *`visibility`*
+| ✅ Confirmado. `File_Sync.IsPublic` es exactamente el campo que añadimos al contrato, y la
+  consulta lo expone como `BlobIsPublic`.
+
+| *`DEC-BS-08` — `webPlatformId`*
+| 🟠 *Medio cerrada.* `Web_Platforms` es el catálogo de destinos de publicación —cada
+  plataforma externa es una fila— y `Entity_Files.WebPlatformId` acota el alcance de un
+  recurso. **El Portal de Videos será una fila de esa tabla.** Falta saber qué `Id` nos
+  corresponde y si filtramos por él. Ver §6.
+|===
+
+== El hallazgo que toca el diseño
+
+[WARNING]
+====
+*El enlace privado es una SAS con caducidad. Si nos lo mandan en el lote, llegará muerto.*
+
+El enlace privado de la captura es:
+
+[source]
+----
+http://10.1.1.223:8060/devstoreaccount1/media-local-private/e61da91d-…-20260917173725.mp4
+  ?sv=2024-11-04
+  &se=2026-09-17T19:29:57Z   ← caducidad
+  &sr=b                      ← alcance: un blob
+  &sp=r                      ← permiso: solo lectura
+  &sig=I0PKEJdpd%2BbYHTcEDb5SMZzhAlCVaY4sxEMuTuyqjqk%3D
+----
+
+Generado a las 12:37 y con caducidad a las 19:29 UTC: unas dos horas. Y la interfaz tiene un
+botón *«Regenerar enlace»*, lo que confirma que se emite bajo demanda y no es estable.
+
+*Un lote de ingesta puede tardar minutos en aplicarse y el catálogo se sirve durante semanas.*
+Guardar una SAS en `catalog_media.storage_uri` significa guardar un enlace que deja de
+funcionar esa misma tarde, y el fallo aparecería como vídeos que un día se reproducen y al
+siguiente no, sin error de ingesta que lo delate.
+====
+
+.Las tres salidas
+[cols="1,3,1",options="header"]
+|===
+| Opción | Cómo funciona | Veredicto
+
+| *A — Nos mandan la ruta, nosotros firmamos*
+| El lote trae `BlobStoragePath` / `PathPrivate` *sin firma*. El Portal tiene credencial sobre
+  la cuenta de almacenamiento y lee los bytes en el momento de servir.
+| ✅ *Recomendada*
+
+| *B — Nos mandan una SAS y la renovamos*
+| Cada reproducción pide una SAS fresca a un endpoint de SinsaTools.
+| ❌ Añade una dependencia en caliente: si su servicio no responde, no hay vídeo. Y suma
+  latencia a cada reproducción.
+
+| *C — SAS de larga duración*
+| Una firma que dure meses, guardada en el catálogo.
+| ❌ Una firma filtrada funciona para cualquiera hasta que caduque. Es el problema del blob
+  público, con más pasos.
+|===
+
+La opción A es además la que ya presupone la arquitectura: `SEC-BS-11` dice que la credencial
+no sale del servidor, y el proxy de streaming existe precisamente para leer los bytes con ella
+y reenviarlos. Lo que falta es la credencial — es `DEC-BS-15`.
+
+[NOTE]
+====
+*`Storage_Providers.StringConnection` demuestra que la credencial existe y es suya.* La
+decisión no es técnica sino de acuerdo: o nos conceden un rol de lectura sobre la cuenta
+(Managed Identity, si está en el mismo tenant), o nos entregan una cadena de conexión que
+guardamos en Key Vault y que habrá que rotar.
+====
+
+== El entorno de la captura no es producción
+
+[CAUTION]
+====
+`http://10.1.1.223:8060/devstoreaccount1/...` es **Azurite**, el emulador de Azure Storage.
+`devstoreaccount1` es su cuenta por convención, y el puerto 8060 es local.
+
+En producción el mismo recurso será algo como
+`https://<cuenta>.blob.core.windows.net/<contenedor>/<ruta>`, y los contenedores no se
+llamarán `media-local` / `media-local-private`.
+
+*Consecuencia para `StorageUriResolver`:* descompone el URI de forma genérica —esquema, host,
+primer segmento como contenedor, resto como ruta— y **nunca** reconoce por patrón ni el host
+ni el nombre del contenedor. Una regla que dependa de que el contenedor se llame
+`…-private` funcionaría en desarrollo y fallaría el día del despliegue.
+
+La visibilidad la dice `File_Sync.IsPublic`, no el nombre del contenedor.
+====
+
+NOTE: El nombre del blob es `<guid>-<timestamp>.mp4`. Reemplazar un fichero produce un nombre
+nuevo, así que `storage_uri` cambia y la clave de caché del navegador con él. Es invalidación
+de caché gratis, y conviene no perderla: si algún día se normalizara el nombre, habría que
+añadir un parámetro de versión.
+
+<<<
+
+== Mapeo — Producto
+
+Origen: `Products` + `Brands`.
+
+[cols="2,2,3",options="header"]
+|===
+| SinsaTools | Contrato | Nota
+
+| `Products.Id` | `sourceId` | Clave de upsert.
+| `Products.InternalId` | `internalId` | Código de negocio.
+| `Products.Name` | `name` |
+| `Products.TradeName` | `tradeName` |
+| `Products.Description` | `description` |
+| `Brands.Id` | `brand.sourceId` | `Brands` tiene `ParentId`: es jerárquica. Nosotros aplanamos.
+| `Brands.Name` | `brand.name` |
+| `Products.Active` | `active` | Ver el aviso de abajo.
+| `Products.CreatedAt` | `createdAt` |
+| `Products.UpdatedAt` | `updatedAt` | Comparador del incremental.
+| — | `industry` | 🔴 *Sin resolver.* Ver §6.
+| — | `metatags` | No aparece en el ER. Se queda nulo hasta que se identifique.
+|===
+
+[CAUTION]
+====
+*`Products` tiene tres banderas y solo mapeamos una.* `Active`, `IsVisible` e
+`IsSynchronizable`, y `Stock_Keeping_Units` repite `Active` e `IsVisible` más `IsFeatured`.
+
+Nuestro contrato tiene un único `active`. Hay que saber cuál corresponde, y sobre todo qué
+hace `IsSynchronizable`: si marca qué productos deben salir a plataformas externas, **es un
+filtro que la consulta de extracción debería aplicar y hoy no aplica**. Sin él podríamos
+recibir catálogo que no debía salir de su sistema.
+====
+
+== Mapeo — Versión
+
+Origen: `Stock_Keeping_Units`.
+
+[cols="2,2,3",options="header"]
+|===
+| SinsaTools | Contrato | Nota
+
+| `Stock_Keeping_Units.Id` | `sourceId` |
+| `.InternalId` | `internalId` |
+| `.Name` | `name` |
+| `.TradeName` | `tradeName` |
+| `.Description` | `description` |
+| `.Active` | `active` | Mismo aviso que en producto.
+| `.CreatedAt` / `.UpdatedAt` | `createdAt` / `updatedAt` |
+| `.Position` | — | ⚠️ *No lo recogemos.* Ver abajo.
+| `.IsFeatured` | — | ⚠️ El frontend tiene cinta «Featured». Ver abajo.
+| `.UpdatedDate`, `.DisplayUpdate`, `.IsAutomaticDate` | — | Sin equivalente. Parecen gestión de la fecha que se muestra al usuario.
+|===
+
+.Dos campos que el frontend sabría usar y el contrato tira
+****
+*`Position`* — las versiones tienen orden en SinsaTools, y la consulta de extracción ya ordena
+por él (`ORDER BY … SKU.Position`). Nuestro `IngestVersion` no lo lleva, así que el portal las
+mostrará alfabéticamente o por identificador. Añadirlo cuesta un campo.
+
+*`IsFeatured`* — el frontend ya dibuja una cinta «Featured» sobre el vídeo destacado, y hoy la
+calcula a ojo (el más visto del mock). Si SinsaTools marca qué versiones destacar, esa
+decisión editorial ya existe y la estamos ignorando.
+
+Ninguno de los dos es bloqueante. Los dejo señalados porque son baratos ahora y caros cuando
+el contrato esté firmado.
+****
+
+== Mapeo — Recurso
+
+Origen: `Entity_Files` + `Files` + `File_Extensions` + `File_Sync` (+ `Folders`).
+
+La consulta filtra `ENF.EntityType = 'StockKeepingUnit'`, así que los recursos cuelgan de la
+versión. Coincide con nuestro modelo.
+
+[cols="2,2,3",options="header"]
+|===
+| SinsaTools | Contrato | Nota
+
+| — | `source` | ⚠️ Ver abajo: la consulta *solo* trae `Entity_Files`.
+| `Entity_Files.Id` | `sourceId` | Junto a `source`, la clave natural.
+| `Files.FileName` | `name` |
+| `File_Extensions.Extension` | `extension` | Normalizar: minúsculas, sin punto.
+| `File_Extensions.FileType` | `mediaKind` | Mapeo pendiente de confirmar los valores.
+| `File_Extensions.FileGroup` | `mediaGroup` | Sus valores son `Image` / `Video`; los nuestros `cover` / `manual` / `video_demo` / `other`. Ver §6.
+| `Files.Size` | `sizeBytes` | ✅ Cierra `DEC-BS-10`.
+| `File_Sync.IsPublic` | `visibility` | `true` → `public`, `false` → `private`.
+| `File_Sync.StoragePathPublic` | `storageUri` *si es público* |
+| `File_Sync.StoragePath` o `.PathPrivate` | `storageUri` *si es privado* | 🔴 **Sin la firma.** Ver §3.
+| `Files.Token` / `File_Sync.TokenPrivate` | `token` | Confirmar cuál de los dos.
+| `Entity_Files.TemplatePath` | `templatePath` |
+| `Entity_Files.DeviceType` | `deviceType` |
+| `Entity_Files.WebPlatformId` | `webPlatformId` |
+| `Entity_Files.Position` | `position` |
+| `Entity_Files.CreatedAt` / `.UpdatedAt` | `createdAt` / `updatedAt` |
+| `Entity_Files.ThumbnailFileId` → `Files.FilePath` | 🆕 `thumbnailUri` | Ver abajo.
+| `File_Sync.Status` | — | Estado de la subida al blob. Ver abajo.
+| `Folders.FolderPath` | — | Organización interna suya. No lo necesitamos.
+|===
+
+=== Las miniaturas existen, y las estábamos dando por perdidas
+
+`Entity_Files.ThumbnailFileId` apunta a otra fila de `Files`, y la consulta ya la trae como
+`ThumbnailFilePath`.
+
+El frontend documenta lo contrario en su código: _«No hay imagen porque el contrato no da
+miniatura (GAP-39): `MediaDto` no trae ni una portada ni…»_, y dibuja un marcador por tipo en
+su lugar. **Existe y nadie lo sabía.** Propongo añadir `thumbnailUri` al contrato de ingesta y
+`thumbnail_uri` a `catalog_media`: cierra media GAP-39 y mejora visiblemente el catálogo.
+
+=== `File_Sync.Status` decide si el recurso está listo
+
+La captura muestra `Estado: COMPLETED` y `File_Sync` lleva `Status`, `SyncAttempt`,
+`LastAttempt` y `SyncedAt`. Es el estado de la subida al blob.
+
+**Un recurso cuya subida no ha terminado no tiene bytes que servir.** Si nos llega igual, el
+portal lo mostrará y el reproductor fallará. Dos formas de evitarlo, y prefiero la primera:
+
+. *La consulta de extracción filtra por `Status = COMPLETED`.* Lo que no está subido no sale.
+. Nos lo mandan igual y lo ingerimos como `active = false`.
+
+La consulta actual **no filtra por `Status`**.
+
+<<<
+
+== Lo que falta por resolver
+
+=== 🔴 De dónde sale `industry`
+
+Es obligatorio en el contrato del portal, el catálogo se filtra por él y la interfaz asigna un
+color por sector. Dos candidatos en el ER:
+
+[cols="1,3",options="header"]
+|===
+| Candidato | A favor y en contra
+
+| *`Categories`* (vía `Category_Sku`)
+| Es jerárquica (`ParentId`) y la consulta ya trae `CategoryName` y `CategoryParentName`, lo
+  que sugiere dos niveles. *Pero cuelga del SKU, no del producto*, y nuestro `industry` es de
+  producto: un producto con dos versiones en categorías distintas no tendría respuesta única.
+
+| *`Attributes`* (EAV)
+| `Attributes.EntityType = 'Product'` sí cuelga del producto, y la consulta ya agrega los
+  atributos en `ProductAttributes`. Si existe un grupo/campo tipo «Sector» o «Industria»,
+  encaja perfecto.
+|===
+
+*Lo que necesito:* los valores reales. Un `SELECT DISTINCT` de nombres de categoría, o la
+lista de `Attribute_Groups` y `Attribute_Fields`. Con eso se decide en cinco minutos y se
+escribe la tabla de equivalencia contra nuestro enum de nueve valores.
+
+=== 🔴 La consulta excluye los documentos
+
+[source,sql]
+----
+WHERE (FEX.FileGroup IS NULL OR FEX.FileGroup IN ('Image', 'Video'))
+----
+
+El portal muestra **manuales**: su modelo tiene `media_type = document` y
+`file_group = manual`, el mock sirve un `sample-manual.pdf`, y el contrato del frontend
+declara `application/pdf` entre los tipos que el proxy entrega.
+
+Con este filtro, ningún manual llega nunca. O se amplía el `IN` para incluir el grupo de los
+documentos, o el portal se queda sin una de sus tres clases de contenido.
+
+=== 🟠 `source`: solo hay un origen, no dos
+
+Todo el diseño asume dos orígenes de multimedia, `Images` y `EntityFiles`, con clave natural
+compuesta `(source, sourceId)` porque sus identificadores podrían colisionar (`DOM-BS-08`).
+
+**En el ER no hay tabla `Images`**, y la consulta trae exclusivamente `Entity_Files`. Si ese
+segundo origen no existe, el enum `media_origin` sobra y la clave natural puede ser
+`ext_media_id` a secas.
+
+*No propongo tocarlo todavía.* Mantener la clave compuesta con un solo valor no cuesta nada y
+protege si aparece un segundo origen; quitarla y tener que reponerla sí cuesta. Pero conviene
+confirmar si `Images` existe en alguna parte del sistema que el diagrama no recoge.
+
+=== 🟠 `WebPlatformId` — el portal será una plataforma más
+
+`Web_Platforms` es el catálogo de destinos de publicación: tiene `Url`, `ApiKey`, `ApiSecret`,
+`Platform` y `CommercialBrandId`. Y `File_Web_Platform_Sync` registra la publicación de cada
+recurso en cada plataforma, con `PlatformMediaId`, `PublishedUrl` y `PublishStatus`.
+
+**Eso es el mecanismo con el que hoy publican en YouTube** — exactamente lo que este proyecto
+viene a sustituir.
+
+Lo más probable es que el Portal de Videos se dé de alta como una fila de `Web_Platforms`, y
+que entonces `Entity_Files.WebPlatformId` sea el filtro que determina qué recursos nos
+corresponden. Eso cerraría `DEC-BS-08` de forma limpia: no es un campo informativo, es el
+filtro de alcance.
+
+Hace falta confirmarlo y saber qué `Id` nos toca.
+
+=== 🟠 Tres banderas de estado, un solo `active`
+
+`Active`, `IsVisible`, `IsSynchronizable` en producto; `Active`, `IsVisible`, `IsFeatured` en
+versión. Necesitamos la semántica de cada una para saber cuál gobierna `active` y si alguna
+debe filtrar la extracción.
+
+== Preguntas para el equipo de SinsaTools
+
+[cols="1,4,1",options="header"]
+|===
+| # | Pregunta | Prioridad
+
+| 1
+| ¿Qué contiene `File_Sync.PathPrivate`: la ruta del blob o una URL ya firmada? Si es lo
+  segundo, necesitamos la ruta sin firmar — la firma caduca antes de que el catálogo se sirva.
+| 🔴
+
+| 2
+| ¿Nos conceden acceso de lectura a la cuenta de almacenamiento? Managed Identity si está en
+  el mismo tenant, o cadena de conexión si no. Sin esto el portal no puede servir ningún
+  recurso privado.
+| 🔴
+
+| 3
+| ¿De dónde sale el sector industrial de un producto: de `Categories` o de un atributo? Nos
+  vale un `SELECT DISTINCT` de los valores posibles.
+| 🔴
+
+| 4
+| La consulta excluye `FileGroup` distinto de `Image` y `Video`. ¿Se amplía para incluir los
+  documentos? El portal muestra manuales en PDF.
+| 🔴
+
+| 5
+| ¿Existe una tabla `Images` como segundo origen de multimedia, o todo pasa por
+  `Entity_Files`?
+| 🟠
+
+| 6
+| ¿El Portal de Videos se dará de alta en `Web_Platforms`? ¿Con qué `Id`, y filtramos por
+  `Entity_Files.WebPlatformId`?
+| 🟠
+
+| 7
+| Semántica de `Active`, `IsVisible` e `IsSynchronizable` en `Products`, y de `Active`,
+  `IsVisible` e `IsFeatured` en `Stock_Keeping_Units`. ¿Cuál debe gobernar `active` y cuál
+  debería filtrar la extracción?
+| 🟠
+
+| 8
+| ¿La extracción filtrará por `File_Sync.Status = COMPLETED`? Un recurso sin subir no tiene
+  bytes que servir.
+| 🟠
+
+| 9
+| Valores posibles de `File_Extensions.FileType` y `FileGroup`, para escribir la tabla de
+  equivalencia con `mediaKind` y `mediaGroup`.
+| 🟠
+
+| 10
+| ¿`token` sale de `Files.Token` o de `File_Sync.TokenPrivate`? ¿Para qué se usa cada uno?
+| 🟡
+|===
+
+== Cambios propuestos al contrato
+
+Derivados de este análisis, pendientes de las respuestas de arriba:
+
+[cols="1,3",options="header"]
+|===
+| Campo | Motivo
+
+| 🆕 `thumbnailUri` en `IngestMedia`
+| `Entity_Files.ThumbnailFileId` existe. Cierra media `GAP-39` y mejora el catálogo.
+
+| 🆕 `position` en `IngestVersion`
+| `Stock_Keeping_Units.Position` existe y la extracción ya ordena por él.
+
+| 🆕 `featured` en `IngestVersion`
+| `IsFeatured` existe y el frontend ya dibuja la cinta.
+
+| `sizeBytes` deja de ser opcional en la práctica
+| `Files.Size` está siempre. Se mantiene opcional en el esquema, pero el emisor debería
+  enviarlo siempre y así se retira `DT-BS-07`.
+|===
+
+include::{root}/_nav.adoc[]
+
+'''
+
+**Clasificación:** Confidencial — Solo uso interno

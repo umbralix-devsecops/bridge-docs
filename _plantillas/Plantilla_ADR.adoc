@@ -1,0 +1,120 @@
+= ADR-BS-NNN — {Título corto de la decisión}
+:author: Equipo de Desarrollo
+:revnumber: 1.0
+:revdate: AAAA-MM-DD
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:icons: font
+:lang: es
+:root: ..            # ajustar a la profundidad del destino al copiar
+:section-id: gestion-producto
+:section-title: Gestión de Producto
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+// ═══════════════════════════════════════════════════════════════════
+// INSTRUCCIONES DE USO (borrar al rellenar)
+//
+// 1. Copiar este archivo a 11_gestion_producto/adr/
+// 2. Renombrar a adr-bs-NNN_slug_descriptivo.adoc con el siguiente
+//    número libre según adr-000_indice.adoc
+// 3. Las cinco secciones son OBLIGATORIAS. Ninguna se omite.
+// 4. Mínimo 2 opciones evaluadas, con tabla comparativa.
+// 5. Registrar en adr-000_indice.adoc, manifest.yaml y 00_Estado_Actual.adoc
+// ═══════════════════════════════════════════════════════════════════
+
+[cols="1,3"]
+|===
+| *Estado* | {Propuesta ⏳ | Aceptada ✅ | En evaluación 🔍 | Rechazada ❌ | Supersedida por ADR-BS-NNN}
+| *Fecha* | AAAA-MM-DD
+| *Supera a* | {ADR-BS-NNN, o "—"}
+| *Depende de* | {ADR-BS-NNN, o "—"}
+| *Bloquea* | {qué no puede avanzar hasta cerrarla, o "—"}
+|===
+
+== Contexto
+
+// ¿Por qué se necesitaba esta decisión AHORA? Qué fuerzas la provocan:
+// una restricción técnica, un contrato ya acordado, una limitación de
+// equipo o presupuesto, una contradicción detectada.
+// Hechos, no opiniones. Quien lea esto en un año debe entender la
+// situación sin haber estado en la conversación.
+
+== Opciones evaluadas
+
+// MÍNIMO DOS. Describir cada una por lo que HACE, no por su nombre.
+
+=== Opción A — {nombre}
+
+{descripción de una o dos frases + diagrama si el mecanismo no es obvio}
+
+=== Opción B — {nombre}
+
+{descripción}
+
+=== Tabla comparativa
+
+// Los criterios salen del contexto. No usar criterios genéricos:
+// si el problema es exposición de red, "seguridad" no es un criterio,
+// "puertos entrantes a abrir" sí lo es.
+
+[cols="2,1,1",options="header"]
+|===
+| Criterio | A · {nombre} | B · {nombre}
+
+| {criterio 1} | |
+| {criterio 2} | |
+| {criterio 3} | |
+| Costo mensual añadido | |
+| Reversibilidad | |
+|===
+
+== Decisión
+
+*Se elige la opción {X} — {nombre}.*
+
+// Una frase. Sin condicionales ni matices: eso va en Justificación.
+// Si la decisión aún no está tomada, escribir "⏳ Pendiente" y
+// añadir una sección final "Información necesaria para cerrar este ADR".
+
+== Justificación
+
+// Por qué ÉSTA y no las otras. Lista numerada.
+// Cada punto debe descartar activamente una alternativa, no solo
+// elogiar a la elegida.
+
+. {razón que descarta A}
+. {razón que descarta B}
+. {razón positiva de la elegida}
+
+== Consecuencias
+
+=== Positivas
+
+* {qué mejora concretamente}
+
+=== Negativas y compromisos
+
+// La sección más importante y la que más se omite.
+// Lo que aceptamos a cambio. Si no hay ninguna, la decisión no se
+// evaluó en serio.
+
+* {qué empeora, qué coste se asume, qué riesgo aparece}
+* {registrar aquí toda DT-BS-NN o DEC-BS-NN que esta decisión genere}
+
+=== Reglas derivadas
+
+// Opcional. Reglas SEC-BS / DOM-BS que esta decisión hace obligatorias.
+
+[cols="1,4",options="header"]
+|===
+| ID | Regla
+
+| {SEC-BS-NN} | {regla}
+|===
+
+include::{root}/_nav.adoc[]

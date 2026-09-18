@@ -1,0 +1,392 @@
+= Bridge Service — Índice general de documentación
+:author: Equipo de Desarrollo
+:revnumber: 2.0
+:revdate: 2026-09-16
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:icons: font
+:lang: es
+:root: .
+:section-id: indice
+:section-title: Índice general
+:classification: Confidencial — Solo uso interno
+
+[NOTE]
+====
+*Este índice solo enlaza documentos vigentes.* Las versiones superadas viven en el
+`_historico/` de su sección y nunca se enlazan desde aquí.
+
+Antes de leer nada más, pasa por xref:00_Estado_Actual.adoc[00_Estado_Actual] — es el
+documento vivo que dice en qué punto está realmente el proyecto.
+====
+
+[IMPORTANT]
+====
+*Cambio de arquitectura del 2026-09-16.* Dos decisiones reescriben la premisa de toda la
+documentación anterior:
+
+* xref:11_gestion_producto/adr/adr-bs-005_servicio_unico.adoc[ADR-BS-005] — el Bridge Service
+  *es* el backend del Portal de Videos. No hay un tercer servicio: el frontend Angular
+  (`Sin-PortalVideos`, ya construido) llama a `/api` y quien responde es este servicio.
+* xref:11_gestion_producto/adr/adr-bs-006_ingesta_por_empuje.adoc[ADR-BS-006] — nunca
+  consultamos la base de datos de SinsaTools. Su microservicio de integraciones *empuja* el
+  catálogo contra `POST /v1/ingest/catalog`, una API que publicamos nosotros.
+
+Con ello desaparecen el `SyncWorker`, el `OnPremiseDbContext`, la conectividad con la red
+corporativa y los endpoints `/v1/softwares`, `/v1/media/updates`, `POST /v1/sync` y
+`GET /v1/sync/{syncId}`. Todo documento anterior a esa fecha que los mencione está superado.
+====
+
+== Documentos raíz
+
+[cols="2,3,1",options="header"]
+|===
+| Documento | Contenido | Estado
+
+| xref:00_Estado_Actual.adoc[00_Estado_Actual]
+| Documento vivo: semáforo por sección, decisiones abiertas, deuda técnica, riesgos
+| ✅ Vigente
+
+| xref:Analisis_Arranque_Bridge_v1.0.adoc[Analisis_Arranque_Bridge_v1.0]
+| Análisis de arranque: qué se construye primero y en qué orden 🆕
+| ✅ Vigente
+
+| xref:Guia_Agentes.adoc[Guia_Agentes]
+| Cómo leer y modificar esta documentación sin romper la trazabilidad
+| ✅ Vigente
+
+| xref:Glosario_IDs.adoc[Glosario_IDs]
+| Prefijos de identificadores, cadena de trazabilidad y numeración quemada
+| ✅ Vigente
+
+| xref:Mapa_Subproyectos.adoc[Mapa_Subproyectos]
+| Repositorios propios y contrapartes externas
+| ✅ Vigente
+
+| `manifest.yaml`
+| Catálogo legible por máquina de todos los documentos
+| ✅ Vigente
+
+| `README.md`
+| Puerta de entrada al repositorio de documentación
+| ✅ Vigente
+|===
+
+[#_requerimientos]
+== 01 · Requerimientos
+
+[cols="2,3,1",options="header"]
+|===
+| Documento | Contenido | Estado
+
+| xref:01_requerimientos/requerimientos_bridge_service_v2.0.adoc[requerimientos_bridge_service_v2.0]
+| RF-BS-01, 02, 05, 06, 08 y 12 al 20; RNF-BS-01 al 11; REST-BS-01, 03, 04, 06, 07 y 11 al 13;
+  actores, alcance y trazabilidad
+| ✅ Vigente 🆕
+|===
+
+NOTE: Las versiones v1.0 y v1.1 están en `01_requerimientos/_historico/`. Describían la
+lectura directa del SQL Server de SinsaTools y un backend de portal separado; ninguna de las
+dos premisas sigue en pie. Los números que quedaron libres —`RF-BS-03`, `04`, `07`, `09`,
+`10`, `11`, `RNF-BS-05`, `REST-BS-02`, `05`, `08`, `09`, `10`— están quemados y no se
+reutilizan.
+
+[#_casos-de-uso]
+== 02 · Casos de uso
+
+[cols="2,3,1",options="header"]
+|===
+| Documento | Contenido | Estado
+
+| `cu_master.adoc`
+| Índice de casos de uso por dominio
+| ⬜ PENDIENTE
+
+| `cu_auth.adoc`
+| Dominio AUTH: Service JWT de ingesta y autenticación de personas
+| ⬜ PENDIENTE
+
+| `cu_ingest.adoc`
+| Dominio INGEST: recepción de lotes, foto completa y marca de agua
+| ⬜ PENDIENTE
+
+| `cu_catalog.adoc`
+| Dominio CAT: lectura del catálogo por el frontend
+| ⬜ PENDIENTE
+
+| `cu_media.adoc`
+| Dominio MEDIA: pre-flight de acceso y streaming de recursos
+| ⬜ PENDIENTE
+
+| `cu_admin.adoc`
+| Dominio ADMIN: usuarios, grupos, excepciones, logs y panel de sincronización
+| ⬜ PENDIENTE
+
+| `cu_ops.adoc`
+| Dominio OPS: health check y diagnóstico
+| ⬜ PENDIENTE
+|===
+
+NOTE: El dominio `SYNC` de la v1.0 desaparece —no hay sincronización que disparar— y sus
+casos de uso pasan a `INGEST`. Los diez casos de uso de alto nivel (`CU-BS-001` a
+`CU-BS-010`) ya están enunciados en
+xref:01_requerimientos/requerimientos_bridge_service_v2.0.adoc[requerimientos v2.0]; esta
+sección los desarrolla.
+
+[#_diseno]
+== 03 · Diseño
+
+[cols="2,3,1",options="header"]
+|===
+| Documento | Contenido | Estado
+
+| `c4/c4_context_v1.0.adoc`
+| C4 nivel 1 — contexto del sistema
+| ⬜ PENDIENTE
+
+| `c4/c4_container_v1.0.adoc`
+| C4 nivel 2 — contenedores
+| ⬜ PENDIENTE
+
+| `c4/c4_component_v1.0.adoc`
+| C4 nivel 3 — componentes internos
+| ⬜ PENDIENTE
+
+| `diagramas_estado/diagramas_estados_v1.0.adoc`
+| Máquina de estados de un lote de ingesta (`ingest_batches`)
+| ⬜ PENDIENTE
+|===
+
+NOTE: El Bridge Service no tiene frontend propio: la SPA vive en el repositorio
+`Sin-PortalVideos` y se documenta allí. La subcarpeta `wireframes/` existe por consistencia
+estructural, pero permanecerá vacía.
+
+[#_arquitectura-tecnica]
+== 04 · Arquitectura técnica
+
+[cols="2,3,1",options="header"]
+|===
+| Documento | Contenido | Estado
+
+| xref:04_arquitectura_tecnica/arquitectura_tecnica_bridge_service_v2.0.adoc[arquitectura_tecnica_bridge_service_v2.0]
+| Stack, estructura de la solución en tres capas, módulo de ingesta, modelo de datos, flujos,
+  seguridad, observabilidad, RNF y deuda técnica
+| ✅ Vigente 🆕
+
+| xref:04_arquitectura_tecnica/modelo_datos/changelog_modelo_datos.adoc[changelog_modelo_datos]
+| Historial de cambios del esquema — documento vivo, derivado de las migraciones
+| ✅ Vigente
+
+| `04_arquitectura_tecnica/modelo_datos/modelo_datos_bridge_v2.mermaid`
+| Modelo ER de la base única: 17 tablas, 13 tipos enumerados, 40 índices
+| ✅ Vigente 🆕
+|===
+
+NOTE: Las versiones v1.0 y v1.1 de la arquitectura, y el `modelo_datos_bridge_v1.mermaid`,
+están en el `_historico/` de sus carpetas. Describían dos contextos de datos —el caché propio
+y el esquema on-premise de solo lectura—; ahora hay una sola base PostgreSQL 16 para todo el
+sistema.
+
+[#_contratos-api]
+== 05 · Contratos de API
+
+[cols="2,3,1",options="header"]
+|===
+| Documento | Contenido | Estado
+
+| `ingesta/ingest_catalog_v1.0.yaml`
+| Contrato bilateral con el equipo de SinsaTools: `POST /v1/ingest/catalog`,
+  `GET /v1/ingest/{ingestId}`, `GET /v1/ingest/watermark`
+| ✅ Vigente 🆕
+
+| `bridge_service/especificacion_api_bridge_v1.0.adoc`
+| Especificación narrativa de las dos caras del servicio: la de ingesta y la del portal
+| ⬜ PENDIENTE
+|===
+
+[NOTE]
+====
+*Los seis `api_*.yaml` del frontend* —el otro contrato bilateral de REST-BS-06— siguen
+viviendo en `portal-docs`. Están implementados y probados del lado del cliente
+(REST-BS-11) y falta copiarlos aquí.
+
+*Los cuatro `bridge_*.yaml` de la v1.1* (`bridge_master`, `bridge_auth`, `bridge_catalog`,
+`bridge_sync`) quedan *sin objeto*: describían endpoints `/v1/` para un backend de portal que
+no existe. Nunca llegaron a copiarse a este repositorio y pasan al `_historico/` de
+`portal-docs`. La carpeta `bridge_service/` queda vacía a la espera de la especificación
+narrativa.
+====
+
+[#_seguridad-autorizacion]
+== 06 · Seguridad y autorización
+
+[cols="2,3,1",options="header"]
+|===
+| Documento | Contenido | Estado
+
+| `contrato_service_jwt_v1.0.adoc`
+| Emisión, firma y validación del Service JWT RS256 de ingesta (`aud: portal-ingest-api`)
+| ⬜ PENDIENTE
+
+| `contrato_user_jwt_v1.0.adoc`
+| User JWT RS256 (`aud: portal-api`), claim `perms{}`, rotación de refresh y sesiones
+| ⬜ PENDIENTE
+
+| `guia_evaluacion_acceso_v1.0.adoc`
+| Precedencia de la evaluación de acceso a un recurso: revoke → grupo → grant → denegar
+| ⬜ PENDIENTE
+|===
+
+[NOTE]
+====
+Las reglas SEC-BS-01 a SEC-BS-04, SEC-BS-06 y SEC-BS-08 a SEC-BS-10 ya están definidas dentro
+de
+xref:04_arquitectura_tecnica/arquitectura_tecnica_bridge_service_v2.0.adoc[arquitectura técnica].
+Los documentos de esta sección las desarrollarán.
+
+`guia_acceso_sqlserver_v1.0.adoc`, planificada en la v1.1, queda *sin objeto*: no hay usuario
+de base de datos on-premise que gobernar. Con ella caen `SEC-BS-05` y `SEC-BS-07`, números ya
+quemados.
+====
+
+[#_guias-implementacion]
+== 07 · Guías de implementación
+
+[cols="2,3,1",options="header"]
+|===
+| Documento | Contenido | Estado
+
+| `guia_ingesta_v1.0.adoc` | Implementación del módulo de ingesta: validación, normalización, idempotencia y cierre de foto | ⬜ PENDIENTE
+| `guia_proxy_streaming_v1.0.adoc` | Proxy de streaming con soporte de `Range` y cookie `pv_media` | ⬜ PENDIENTE
+| `guia_migraciones_efcore_v1.0.adoc` | Procedimiento de migración Code-First sobre `AppDbContext` (ADR-BS-004) | ⬜ PENDIENTE
+|===
+
+NOTE: `guia_sync_worker_v1.0.adoc` y `guia_scaffolding_onpremise_v1.0.adoc` quedan *sin
+objeto*: no hay `SyncWorker` ni modelo DB-First que regenerar. `DEC-BS-01`, que bloqueaba la
+primera, queda sin objeto también.
+
+[#_testing]
+== 08 · Testing
+
+[cols="2,3,1",options="header"]
+|===
+| Documento | Contenido | Estado
+
+| `testing_master.adoc` | Pirámide, umbrales de cobertura, nomenclatura | ⬜ PENDIENTE
+| `testing_unit.adoc` | xUnit + NSubstitute + FluentAssertions | ⬜ PENDIENTE
+| `testing_integration.adoc` | Testcontainers: solo PostgreSQL | ⬜ PENDIENTE
+| `testing_contract.adoc` | Pact en las dos caras: proveedor del frontend y consumidor del contrato de ingesta | ⬜ PENDIENTE
+|===
+
+[#_infraestructura-despliegue]
+== 09 · Infraestructura y despliegue
+
+[cols="2,3,1",options="header"]
+|===
+| Documento | Contenido | Estado
+
+| `guia_infraestructura_azure_v1.0.adoc` | Recursos Azure y su configuración | ⬜ PENDIENTE
+| `guia_contenedores_docker_v1.0.adoc` | Compose dev / staging / prod | ⬜ PENDIENTE
+| `guia_cicd_v1.0.adoc` | Workflow de GitHub Actions | ⬜ PENDIENTE
+| `runbook_operaciones_v1.0.adoc` | Procedimientos operativos | ⬜ PENDIENTE
+| `plan_backup_rto_rpo_v1.0.adoc` | Backup y recuperación del PostgreSQL | ⬜ PENDIENTE
+| `plan_capacidad_alertas_v1.0.adoc` | Umbrales y alertas | ⬜ PENDIENTE
+|===
+
+NOTE: Esta sección *ya no está bloqueada*. La descarte de `ADR-BS-003` elimina la
+dependencia de la conectividad corporativa: el App Service no habla con ninguna red privada.
+
+[#_estandares-procesos]
+== 10 · Estándares y procesos
+
+[cols="2,3,1",options="header"]
+|===
+| Documento | Contenido | Estado
+
+| `guia_onboarding_v1.0.adoc` | Puesta en marcha del entorno de desarrollo | ⬜ PENDIENTE (prioridad elevada: equipo de 1 persona)
+| `estandares_codigo_v1.0.adoc` | Convenciones de C# y estructura | ⬜ PENDIENTE
+| `estandares_dod_v1.0.adoc` | Definition of Done | ⬜ PENDIENTE
+| `estandares_dor_v1.0.adoc` | Definition of Ready | ⬜ PENDIENTE
+|===
+
+[#_gestion-producto]
+== 11 · Gestión de producto
+
+[cols="2,3,1",options="header"]
+|===
+| Documento | Contenido | Estado
+
+| xref:11_gestion_producto/adr/adr-000_indice.adoc[adr-000_indice]
+| Índice de decisiones de arquitectura: vigentes, descartadas y superadas
+| ✅ Vigente
+
+| xref:11_gestion_producto/adr/adr-bs-001_cache_postgresql_propio.adoc[ADR-BS-001]
+| Persistencia propia en PostgreSQL Azure
+| ✅ Aceptada · revisada
+
+| xref:11_gestion_producto/adr/adr-bs-002_efcore_dos_proveedores.adoc[ADR-BS-002]
+| EF Core 8 Code-First — revisada: queda un solo proveedor
+| ✅ Aceptada · revisada
+
+| xref:11_gestion_producto/adr/adr-bs-003_conectividad_onpremise.adoc[ADR-BS-003]
+| Conectividad Azure ↔ red corporativa
+| ⛔ Descartada
+
+| xref:11_gestion_producto/adr/adr-bs-004_ef_core_fuente_unica_esquema.adoc[ADR-BS-004]
+| EF Core como fuente única de verdad del esquema
+| ✅ Aceptada
+
+| xref:11_gestion_producto/adr/adr-bs-005_servicio_unico.adoc[ADR-BS-005]
+| El Bridge Service es el backend del portal 🆕
+| ✅ Aceptada
+
+| xref:11_gestion_producto/adr/adr-bs-006_ingesta_por_empuje.adoc[ADR-BS-006]
+| El catálogo entra por una API de ingesta propia 🆕
+| ✅ Aceptada
+
+| `backlog_inicial_v1.0.adoc`
+| Backlog MoSCoW y sprint planning
+| ⬜ PENDIENTE
+
+| `roadmap_tecnico_v1.0.adoc`
+| Roadmap por versiones
+| ⬜ PENDIENTE
+|===
+
+NOTE: `ADR-BS-003` está *descartada*, no superada: el problema que evaluaba —cómo atravesar
+la red corporativa— desapareció con `ADR-BS-006`. El documento se conserva en su sitio,
+fuera de `_historico/`, porque su análisis de exposición de red sigue siendo válido si algún
+día hiciera falta alcanzar un recurso corporativo. Una decisión descartada no se reabre.
+
+[#_integraciones-externas]
+== 12 · Integraciones externas
+
+[cols="2,3,1",options="header"]
+|===
+| Documento | Contenido | Estado
+
+| `sinsatools/integracion_ingesta_sinsatools_v1.0.adoc`
+| Lo que el Bridge Service espera del microservicio de integraciones de SinsaTools: cadencia,
+  credenciales, modos de lote y tratamiento de errores
+| ⬜ PENDIENTE
+|===
+
+NOTE: El Portal de Videos deja de ser una integración externa. Desde `ADR-BS-005` el
+frontend y este servicio son el mismo sistema; lo que el frontend espera está en los
+`api_*.yaml` y en `portal-docs`. Se decidió no fundirlas —`DEC-BS-12`, cerrada—, así que
+aún abierta— esta sección quedará solo con SinsaTools.
+
+== Entregables
+
+[cols="2,3",options="header"]
+|===
+| Archivo | Contenido
+
+| `_entregables/arquitectura_bridge_service.html`
+| Versión visual de la arquitectura para revisión con stakeholders.
+  🔴 *Desactualizado:* refleja la v1.1 —tres servicios, lectura de on-premise y la comparación
+  de las tres opciones de conectividad— y debe rehacerse contra la v2.0.
+|===

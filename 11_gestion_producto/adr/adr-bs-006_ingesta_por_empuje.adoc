@@ -1,0 +1,291 @@
+= ADR-BS-006 — El catálogo entra por una API de ingesta propia
+:author: Equipo de Desarrollo
+:revnumber: 1.0
+:revdate: 2026-09-16
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:icons: font
+:lang: es
+:root: ../..
+:section-id: gestion-producto
+:section-title: Gestión de Producto
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+[cols="1,3"]
+|===
+| *Estado* | ✅ *Aceptada*
+| *Fecha* | 2026-09-16
+| *Supera a* | ADR-BS-003 (queda descartada); la mitad DB-First de ADR-BS-002
+| *Depende de* | ADR-BS-001 (existe una base propia donde persistir lo que llega)
+| *Bloquea* | Nada. La desbloquea: `DEC-BS-01`, `DEC-BS-02` y `DEC-BS-04` quedan sin objeto
+|===
+
+== Contexto
+
+Toda la v1.1 estaba construida sobre un supuesto que nunca se verificó: que el Bridge
+Service leería directamente el SQL Server de SinsaTools. De ese supuesto salían las dos
+decisiones rojas del proyecto y el riesgo más grave de la documentación.
+
+.Lo que el supuesto arrastraba
+[cols="1,3",options="header"]
+|===
+| Elemento | Situación el 2026-09-15
+
+| `ADR-BS-003` — conectividad
+| ⏳ Sin decidir tras un mes. Tres opciones evaluadas (VPN site-to-site, IP fija con
+  firewall, Azure Hybrid Connections) y ninguna elegida, porque todas dependían de un equipo
+  de redes que no está identificado. *Bloqueaba el despliegue a staging.*
+
+| `REST-BS-10` — esquema desconocido
+| _«El esquema del SQL Server on-premise es desconocido para este equipo.»_ Cinco tablas
+  nombradas de oídas (`Products`, `Stock_Keeping_Units`, `Images`, `Entity_Files`, `Files`)
+  y **nadie las había visto nunca**.
+
+| Campos de auditoría
+| Riesgo bloqueante declarado en tres documentos: _«si `UpdatedAt` no existe o viene nulo en
+  `Images` y `Entity_Files`, el delta será silenciosamente incompleto»_. Sin verificar.
+
+| `DT-BS-01`
+| El scaffolding DB-First es manual. Un cambio en el esquema ajeno rompe el mapeo *en tiempo
+  de ejecución*, no de compilación.
+|===
+
+Siete preguntas sobre ese esquema seguían abiertas y ninguna se podía responder sin acceso
+de lectura a la base real, acceso que nunca se consiguió.
+
+El 2026-09-16, preguntado por cómo obtener ese acceso, el responsable técnico cerró la
+cuestión: *«debemos solicitar a su microservicio de integraciones que nos sincronice la
+información que necesitemos, nunca vamos a tocar su BD»*.
+
+Eso cambia la pregunta. Deja de ser *«cómo leemos su base»* y pasa a ser *«cómo recibimos lo
+que nos manden»*.
+
+== Opciones evaluadas
+
+=== Opción A — Lectura directa del SQL Server
+
+Lo documentado en la v1.1. Un `SyncWorker` se conecta por TDS al puerto 1433 a través de la
+red corporativa, consulta `WHERE UpdatedAt > @ultimoSync`, unifica `Images` con
+`Entity_Files` y actualiza la réplica.
+
+=== Opción B — Escritura directa en nuestro PostgreSQL
+
+El microservicio de integraciones recibe credenciales de nuestra base de datos y ejecuta
+`INSERT` / `UPDATE` sobre nuestras tablas.
+
+=== Opción C — API de ingesta que publicamos nosotros
+
+Exponemos `POST /v1/ingest/catalog`. El microservicio nos empuja lotes en JSON, autenticado
+con un Service JWT de scope `catalog:ingest`. Nosotros validamos, normalizamos y
+persistimos.
+
+=== Opción D — Cola o Event Grid
+
+El microservicio publica eventos de cambio en una cola de Azure; nosotros los consumimos.
+
+=== Tabla comparativa
+
+[cols="2,1,1,1,1",options="header"]
+|===
+| Criterio | A · Lectura directa | B · Escritura directa | C · API de ingesta | D · Cola
+
+| Conectividad de red a resolver
+| ❌ VPN o puerto 1433 expuesto
+| ⚠️ Puerto de PostgreSQL abierto a su red
+| ✅ HTTPS saliente desde su lado
+| ✅ HTTPS
+
+| ¿Conocemos su esquema?
+| ❌ Obligatorio, y es desconocido
+| ✅ Irrelevante
+| ✅ Irrelevante
+| ✅ Irrelevante
+
+| ¿Quién posee nuestro esquema?
+| ✅ Nosotros
+| ❌ *Contrato bilateral*: cada migración puede romperles
+| ✅ Nosotros, sin restricción
+| ✅ Nosotros
+
+| Validación de lo que entra
+| ⚠️ Lo que haya en su base
+| ❌ Ninguna: escriben directo
+| ✅ Esquema OpenAPI + reglas de negocio
+| ✅ Esquema del evento
+
+| Auditoría de lo que entró
+| Nuestro `SYNC_RUN`
+| ❌ Ninguna
+| ✅ Lote, contadores, ítems fallidos
+| ✅ Por evento
+
+| Idempotencia
+| ⚠️ Por nuestra clave de upsert
+| ❌ Su problema
+| ✅ Por `batchId`, garantizada por la base
+| ⚠️ Requiere deduplicación
+
+| Detección de bajas
+| ⚠️ Solo si marcan `active`
+| ❌ Sin control
+| ✅ Explícita, más foto de reconciliación
+| ❌ Difícil sin foto
+
+| Dependencia de campos de auditoría en origen
+| ❌ *Bloqueante y sin verificar*
+| ✅ No
+| ✅ No
+| ✅ No
+
+| Piezas de infraestructura nuevas
+| VPN o Hybrid Connection
+| Ninguna
+| ✅ Ninguna
+| ❌ Service Bus o Event Grid
+
+| Quién controla la cadencia
+| ✅ Nosotros
+| Ellos
+| Ellos
+| Ellos
+
+| Esfuerzo para 1 desarrollador
+| ❌ Alto: scaffolding, unificación, worker, resiliencia
+| ✅ Mínimo
+| Medio: validador, normalizador, reconciliador
+| ❌ Alto: cola, consumidor, orden, deduplicación
+
+| Reversibilidad
+| —
+| ❌ Baja: desacoplar después exige migrar su código
+| ✅ Alta
+| Media
+|===
+
+== Decisión
+
+*Se elige la opción C — publicamos una API de ingesta y el microservicio de integraciones de
+SinsaTools nos empuja los cambios.*
+
+El contrato está en `05_contratos_api/ingesta/ingest_catalog_v1.0.yaml`.
+
+== Justificación
+
+. **La opción A depende de dos cosas que no controlamos y que no se consiguieron.** La
+  conectividad llevaba un mes sin decidir porque exige un equipo de redes que nadie ha
+  identificado, y el acceso de lectura a un entorno de pruebas —imprescindible para el
+  scaffolding— nunca llegó. Una arquitectura que lleva un mes sin poder escribir su primera
+  línea de código no es una arquitectura, es una espera.
+
+. **La opción A apoyaba todo su peso en un supuesto no verificado.** El delta incremental
+  filtraba por `UpdatedAt` en `Images` y `Entity_Files`. Si esas columnas no existen o vienen
+  nulas, el delta no falla: *devuelve menos registros de los que debería*, en silencio, para
+  siempre. Tres documentos distintos lo señalaban como bloqueante y ninguno pudo
+  comprobarlo. Construir sobre eso era aceptar un modo de fallo invisible.
+
+. **La opción B convierte nuestro esquema en un contrato bilateral, y eso destruye
+  ADR-BS-004.** Si su microservicio escribe en nuestras tablas, cada `dotnet ef migrations
+  add` pasa a ser un cambio coordinado con un equipo externo. EF Core dejaría de ser la
+  fuente única de verdad del esquema para convertirse en una propuesta a negociar. Es
+  exactamente lo que ADR-BS-004 decidió evitar, y por el mismo motivo: el esquema debe poder
+  evolucionar a la velocidad del código que lo usa.
+
+. **La opción B además renuncia a saber qué entró.** Sin API no hay validación, ni
+  contadores, ni ítems fallidos, ni idempotencia, ni forma de responder «¿por qué falta este
+  vídeo?». Se cambia un problema de integración por uno de diagnóstico, que es peor porque
+  aparece más tarde.
+
+. **La opción D resuelve problemas que no tenemos y añade uno que sí.** La cola aporta
+  absorción de picos y tolerancia a que estemos caídos; nuestro volumen —un catálogo de unos
+  cientos de productos que cambia a diario— no necesita ninguna de las dos. A cambio suma una
+  pieza de infraestructura que operar, y traslada a nuestro lado la responsabilidad de
+  ordenar y deduplicar eventos. Para un solo desarrollador, es coste sin contrapartida.
+
+. **La opción C pone la frontera donde debe estar: en un contrato explícito.** Dejamos de
+  depender de cómo esté hecha su base y pasamos a depender de lo que acordemos que nos
+  manden. Es la misma disciplina que ya rige la frontera con el frontend, y que ahí funciona.
+
+. **Y nos deja especificar en vez de adivinar.** Las siete preguntas abiertas sobre su
+  esquema —¿existe `UpdatedAt`?, ¿qué aspecto tiene `UrlWeb`?, ¿de dónde sale la industria?—
+  dejan de ser preguntas. Son campos obligatorios del contrato.
+
+== Consecuencias
+
+=== Positivas
+
+* **Desaparecen las dos decisiones rojas del proyecto.** `DEC-BS-02` (conectividad) queda sin
+  objeto, y con ella `ADR-BS-003`. `DEC-BS-01` (frecuencia del sync) también: la cadencia ya
+  no es nuestra.
+* **Desaparece el riesgo bloqueante de los campos de auditoría.** No filtramos por su
+  `UpdatedAt`: ellos nos dicen qué cambió.
+* **Se da de baja `DT-BS-01`.** No hay scaffolding que mantener ni esquema ajeno que se rompa
+  sin aviso.
+* **El despliegue a staging deja de estar bloqueado.** No hay red corporativa que atravesar.
+* `ADR-BS-004` se refuerza: EF Core sigue siendo la fuente única del esquema *precisamente
+  porque* elegimos C y no B.
+* La `industry` —obligatoria en el contrato del frontend y ausente de todo el contrato
+  anterior— pasa a ser un campo obligatorio de la ingesta.
+* El `storageUri` llega como URI absoluto y resoluble, en vez de una ruta cruda cuya forma
+  nadie conocía.
+
+=== Negativas y compromisos
+
+* **No controlamos la cadencia.** Si el microservicio deja de empujar, el catálogo envejece y
+  nosotros no podemos hacer nada al respecto. Mitigación obligatoria: `RNF-BS-09` —
+  `generatedAt` en cada lote, `catalog-freshness` como check de `/health`, y la alerta de
+  catálogo obsoleto, que pasa a ser *la alerta más importante del sistema*.
+
+* **El fallo por silencio no produce ningún error.** Un emisor que se detiene no genera un
+  `500` ni un timeout: simplemente no llama. Es el mismo modo de fallo que `DT-BS-04`
+  describía, visto desde el otro lado. Mitigación: la foto completa periódica (`RF-BS-14`) y
+  el check de frescura.
+
+* **Dependemos de que implementen el contrato.** Hasta que lo hagan no entra un solo dato
+  real. Mitigación: el simulador de `tools/IngestSimulator`, alimentado con las semillas del
+  mock del frontend —250 productos, 613 versiones, 1.842 recursos ya existen en
+  `fixtures.ts`—. El desarrollo no espera a nadie.
+
+* **`POST /admin/sync` se queda sin sentido.** El frontend ya tiene el botón construido y no
+  podemos disparar la sincronización de una base que no leemos. Registrado como `DEC-BS-07`;
+  mientras tanto se apaga con `features.triggerSync: false` en `config.json`, sin tocar
+  código.
+
+* **Un lote grande es un punto de carga sincrónico.** La validación de forma ocurre antes de
+  responder `202`. Con 200 productos y sus recursos, eso es trabajo real en el hilo del
+  request. Los límites de `RNF-BS-10` existen por esto.
+
+* **Trabajo tirado.** `RF-BS-03`, `RF-BS-04`, `RF-BS-07`, `RF-BS-09`, `RF-BS-10`, `RF-BS-11`,
+  `REST-BS-05`, `REST-BS-08`, `REST-BS-09`, `REST-BS-10`, `DOM-BS-01..03`, `SEC-BS-05`,
+  `SEC-BS-07` y los cuatro `bridge_*.yaml`. Todos quemados.
+
+=== Reglas derivadas, de cumplimiento obligatorio
+
+[cols="1,4",options="header"]
+|===
+| ID | Regla
+
+| DOM-BS-08 | La clave natural de un recurso es el par *origen + identificador de origen* — `(source, sourceId)` en el contrato de ingesta, `(origin, ext_media_id)` en la base—, nunca el identificador solo: `Images.Id` y `Entity_Files.Id` viven en secuencias distintas y pueden colisionar.
+| DOM-BS-09 | Un solo lote en ejecución a la vez, garantizado por índice único parcial sobre `status = 'running'`. Obliga a `heartbeat_at` y a un barrido que libere los lotes muertos.
+| DOM-BS-10 | `storage_provider`, `storage_container` y `storage_path` se derivan de `storageUri` en la ingesta. El URI original se conserva íntegro para poder rehacer la derivación sin pedir una reingesta.
+| REST-BS-12 | No hay borrado físico de catálogo. Una baja se refleja como `active = false`.
+| REST-BS-13 | La ingesta nunca hace `DELETE` + `INSERT`. El identificador interno es estable de por vida, porque los permisos apuntan a él.
+| SEC-BS-10 | `storage_uri`, `storage_path`, `storage_container` y `storage_token` no aparecen en ninguna respuesta ni en ningún log.
+|===
+
+[IMPORTANT]
+====
+`REST-BS-13` es la regla más peligrosa de incumplir de todas las que emite este ADR.
+
+Un `DELETE` + `INSERT` durante la ingesta parece inocuo —la fila se queda igual— pero
+propaga el borrado en cascada a `group_version_access` y `user_media_exceptions`, que apuntan
+al identificador interno. El resultado es que **el siguiente lote vacía los permisos de todos
+los usuarios**: sin error, sin log, y sin que nadie lo note hasta que alguien pierde el
+acceso a un vídeo que antes veía.
+====
+
+include::{root}/_nav.adoc[]

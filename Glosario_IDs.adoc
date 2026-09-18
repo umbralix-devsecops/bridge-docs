@@ -1,0 +1,239 @@
+= Glosario de IDs y trazabilidad — Bridge Service
+:author: Equipo de Desarrollo
+:revnumber: 2.4
+:revdate: 2026-09-17
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:icons: font
+:lang: es
+:root: .
+:section-id: glosario
+:section-title: Glosario de IDs
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+== Por qué el sufijo `-BS`
+
+El Bridge Service y el Portal de Videos se leen a menudo juntos: comparten equipo, comparten
+contrato y sus documentaciones se referencian mutuamente. Sin un prefijo diferenciador,
+`ADR-003` sería ambiguo — existe en ambos repositorios y significa cosas distintas.
+
+*Regla:* todo identificador emitido en `bridge-docs` lleva `-BS`.
+
+NOTE: Desde ADR-BS-005 el Bridge Service *es* el backend del portal, así que las dos
+documentaciones describen un único sistema. Se decidió *no fundirlas* (`DEC-BS-12`) sino
+fijar una frontera explícita, así que el sufijo sigue siendo necesario. Ver
+`portal-docs/Frontera_Documental.adoc`.
+
+== Tabla de prefijos
+
+[cols="1,2,1,2",options="header"]
+|===
+| Prefijo | Significado | Ejemplo | Dónde vive
+
+| `RF-BS-NN` | Requerimiento Funcional | `RF-BS-12` | `01_requerimientos/`
+| `RNF-BS-NN` | Requerimiento No Funcional | `RNF-BS-09` | `01_requerimientos/`
+| `REST-BS-NN` | Restricción técnica | `REST-BS-13` | `01_requerimientos/`
+| `CU-BS-NNN` | Caso de uso | `CU-BS-002` | `02_casos_de_uso/`
+| `HU-BS-NNN` | Historia de usuario | `HU-BS-010` | `02_casos_de_uso/historias_usuario/`
+| `ADR-BS-NNN` | Architecture Decision Record | `ADR-BS-006` | `11_gestion_producto/adr/`
+| `DT-BS-NN` | Deuda técnica | `DT-BS-04` | Declarada en el documento que la origina
+| `DEC-BS-NN` | Decisión abierta | `DEC-BS-07` | `00_Estado_Actual.adoc`
+| `SEC-BS-NN` | Regla de seguridad de código | `SEC-BS-10` | `04_arquitectura_tecnica/`
+| `MIG-BS-NNN` | Migración del esquema PostgreSQL | `MIG-BS-001` | `04_arquitectura_tecnica/modelo_datos/changelog_modelo_datos.adoc`
+| `DOM-BS-NN` | Regla de dominio o acceso a datos | `DOM-BS-08` | `04_arquitectura_tecnica/`
+| `T-BS-NNN` | 🆕 Tarea de implementación | `T-BS-013` | `11_gestion_producto/plan_tareas_bridge_v1.0.adoc`
+| `EST-BS-NN` | 🆕 Regla de estándar de código | `EST-BS-09` | `10_estandares_procesos/estandares_codigo_v1.0.adoc`
+|===
+
+[NOTE]
+====
+*Referencias a identificadores ajenos.* La documentación cita IDs de dos orígenes externos,
+que *no se emiten aquí*:
+
+* `RF-NN`, `ADR-NNN`, `DEC-NN` sin sufijo → del Portal de Videos, en `portal-docs`.
+* `GAP-NN`, `DEC-FE-NN`, `C-NN`, `D-NN`, `H-NN` → del frontend, en `Sin-PortalVideos`.
+  Están anotados en el código, no en un documento.
+====
+
+== Dominios de casos de uso
+
+[cols="1,3,2",options="header"]
+|===
+| Dominio | Alcance | Endpoints asociados
+
+| `INGEST`
+| Entrada del catálogo desde SinsaTools
+| `POST /v1/ingest/catalog`, `GET /v1/ingest/{ingestId}`, `GET /v1/ingest/watermark`
+
+| `AUTH`
+| Emisión del Service JWT de ingesta y autenticación de personas
+| `POST /v1/auth/token` · `POST /auth/login`, `/register`, `/refresh`, `/logout`
+
+| `CAT`
+| Lectura del catálogo por el frontend
+| `GET /catalog/products`, `/catalog/products/{id}`, `/catalog/versions/{id}/media`
+
+| `MEDIA`
+| Acceso y entrega de recursos
+| `GET /media/{id}/access`, `GET /media/{id}/stream`
+
+| `ADMIN`
+| Usuarios, grupos, excepciones, logs y panel de sincronización
+| `/admin/**`
+
+| `OPS`
+| Diagnóstico y salud del servicio
+| `GET /health`
+|===
+
+NOTE: El dominio `SYNC` de la v1.0 desaparece: no hay sincronización que disparar. Sus casos
+de uso pasan a `INGEST`.
+
+== Cadena de trazabilidad
+
+[source,text]
+----
+RF-BS  ──►  CU-BS  ──►  HU-BS  ──►  reglas (SEC-BS / DOM-BS / REST-BS)
+                                            │
+                                            └── gobernadas por ADR-BS
+
+Pendientes que cuelgan de cualquier eslabón:
+   DT-BS   → deuda técnica asumida conscientemente
+   DEC-BS  → decisión aún no tomada
+   MIG-BS  → cambio del esquema derivado de todo lo anterior
+----
+
+Cada eslabón debe poder recorrerse en ambos sentidos:
+
+* *Hacia abajo:* un `RF-BS` sin ningún `CU-BS` que lo implemente es un requerimiento huérfano.
+* *Hacia arriba:* una `HU-BS` sin `RF-BS` de origen es alcance no solicitado.
+
+== IDs actualmente emitidos
+
+.ADRs
+[cols="1,3,1",options="header"]
+|===
+| ID | Decisión | Estado
+
+| ADR-BS-001 | Persistencia propia en PostgreSQL Azure | ✅ Aceptada · revisada
+| ADR-BS-002 | EF Core 8 Code-First sobre PostgreSQL (un solo proveedor) | ✅ Aceptada · revisada
+| ADR-BS-003 | Conectividad Azure ↔ red corporativa | ⛔ Descartada
+| ADR-BS-004 | EF Core como fuente única del esquema | ✅ Aceptada
+| ADR-BS-005 | El Bridge Service es el backend del portal | ✅ Aceptada 🆕
+| ADR-BS-006 | El catálogo entra por una API de ingesta propia | ✅ Aceptada 🆕
+| ADR-BS-007 | Cómo obtiene el Bridge los bytes de Azure Blob Storage | ✅ Aceptada 🆕
+| ADR-BS-008 | Inversión de dependencias entre capas | ✅ Aceptada 🆕
+|===
+
+.Reglas de seguridad
+[cols="1,4",options="header"]
+|===
+| ID | Regla
+
+| SEC-BS-01 | Ningún secreto en `appsettings.json`; todo por Key Vault + Managed Identity
+| SEC-BS-02 | Comparación de `clientSecret` y de hash de contraseña en tiempo constante
+| SEC-BS-03 | Toda consulta parametrizada; prohibida la interpolación de cadenas, también en `FromSqlRaw`
+| SEC-BS-04 | Los logs nunca registran `clientSecret`, `accessToken`, `password_hash` ni el `token` de un recurso
+| SEC-BS-06 | El cuerpo de un `500` nunca contiene detalle de excepción
+| SEC-BS-08 | `gitleaks` en el pipeline; secreto detectado ⇒ build fallido
+| SEC-BS-09 | 🆕 Credenciales de ingesta y de usuario independientes; el claim `aud` se valida antes que nada
+| SEC-BS-10 | 🆕 `storage_uri`, `storage_path`, `storage_container` y `storage_token` no salen en ninguna respuesta ni log
+| SEC-BS-11 | 🆕 La credencial de almacenamiento no sale del proceso: ni en respuesta, ni en log, ni en error, ni en un `302`. El cliente recibe bytes
+| SEC-BS-12 | 🆕 El proxy resuelve el permiso en base en la misma petición que sirve. Ningún veredicto de autorización se cachea entre peticiones
+|===
+
+.Reglas de dominio y acceso a datos
+[cols="1,4",options="header"]
+|===
+| ID | Regla
+
+| DOM-BS-04 | El esquema se modifica solo mediante migraciones de EF Core sobre `AppDbContext`
+| DOM-BS-05 | Toda migración lleva su entrada `MIG-BS-NNN` en el changelog, en el mismo commit
+| DOM-BS-06 | Si cambia la forma del modelo, se emite `modelo_datos_bridge_vN.mermaid` nuevo
+| DOM-BS-07 | El SQL de vistas y permisos va en archivos `.sql` incrustados, no en literales C#
+| DOM-BS-08 | 🆕 La clave natural de un recurso es el par *origen + identificador de origen* — `(source, sourceId)` en el contrato de ingesta, `(origin, ext_media_id)` en la base—, nunca el identificador solo: `Images.Id` y `Entity_Files.Id` viven en secuencias distintas y pueden colisionar.
+| DOM-BS-09 | 🆕 Un solo lote de ingesta en ejecución, por índice único parcial. Exige `heartbeat_at` y un barrido que libere los muertos
+| DOM-BS-10 | 🆕 `storage_provider`, `storage_container` y `storage_path` se derivan de `storageUri`; el URI original se conserva íntegro
+| DOM-BS-11 | 🆕 `IngestMedia.storageUri` es un URI *sin componente de consulta*. Un valor con `?` se rechaza con `422`: una firma no es una ruta
+| DOM-BS-12 | 🆕 El proxy propaga la cabecera `Range` y responde `206` con `Content-Range`. Un `200` completo ante un `Range` es un fallo
+| DOM-BS-13 | 🆕 Un recurso cuyo `webPlatformId` no sea el del portal es un error del emisor y se rechaza
+|===
+
+.Deuda técnica
+[cols="1,4,1",options="header"]
+|===
+| ID | Descripción | Impacto
+
+| DT-BS-02 | Política de purga definida pero sin implementar el barrido | Medio
+| DT-BS-04 | Sin métrica de deriva frente a SinsaTools. Mitigada en parte por la foto completa | Medio
+| DT-BS-06 | El changelog del modelo depende de un gate humano | Medio
+| DT-BS-07 | ⬜ *Retirada el 2026-09-17.* `Files.Size` viaja en el lote; no hay `HEAD` que revalidar | —
+| DT-BS-08 | 🆕 El proxy de streaming ocupa un hilo por transferencia, sin límite de tamaño | Medio
+| DT-BS-09 | 🆕 Cuatro reglas del estándar de código dependen de revisión humana, y el equipo es de una persona: no hay segundo par de ojos | Medio
+|===
+
+.Decisiones abiertas
+[cols="1,4,1",options="header"]
+|===
+| ID | Descripción | Prioridad
+
+| DEC-BS-03 | Ratificar la política de purga: 90 días, los fallos un año | 🟡
+| DEC-BS-05 | Rotación del `client_secret` de ingesta sin indisponibilidad | 🟢
+| DEC-BS-09 | 🆕 Intervalo esperado de ingesta | 🟠
+| DEC-BS-15 | 🆕 Qué credencial concede SinsaTools: rol `Storage Blob Data Reader` o cadena de conexión | 🔴 *Plazo ajeno*
+| DEC-BS-16 | 🆕 ¿Contenedor propio del portal o el mismo que usa SinsaTools? Determina el alcance del rol | 🟡
+| DEC-BS-17 | 🆕 Reabrir la opción D2 (redirect con *user delegation SAS*) si el proxy se estrecha | 🟢
+|===
+
+.Decisiones cerradas
+[cols="1,4",options="header"]
+|===
+| ID | Resolución
+
+| DEC-BS-06 | *Cerrada el 2026-09-16.* `industry` viene de SinsaTools como atributo del software. Campo obligatorio del contrato de ingesta.
+| DEC-BS-12 | *Cerrada el 2026-09-17.* No se funden las dos documentaciones. Frontera explícita: `portal-docs` documenta el producto, `bridge-docs` el servicio. Ver `portal-docs/Frontera_Documental.adoc`.
+| DEC-BS-08 | *Cerrada el 2026-09-17.* `webPlatformId` es el *filtro de alcance*: el portal es una fila de `Web_Platforms` y recibe solo sus recursos. `deviceType` queda como informativo mientras no se diga lo contrario.
+| DEC-BS-10 | *Cerrada el 2026-09-17.* `Files.Size` existe y viaja en el lote. `sizeBytes` no se obtiene por `HEAD`; se retira `DT-BS-07`.
+| DEC-BS-14 | *Cerrada el 2026-09-17 por `ADR-BS-007`.* El Bridge lee los bytes con credencial propia (opción A). El lote trae la ruta sin firmar.
+| DEC-BS-13 | *Cerrada el 2026-09-17.* `sessions` lleva `replaced_by_session_id` y `revoked_reason` desde `MIG-BS-001`. Habilita revocar la cadena entera al detectar reutilización.
+| DEC-BS-11 | *Cerrada el 2026-09-17.* Se añade `GET /media/{id}/access` al contrato del portal. Devuelve metadatos y veredicto, nunca una URL de almacenamiento.
+| DEC-BS-07 | *Cerrada el 2026-09-17.* `POST /admin/sync` pide una reingesta al microservicio de SinsaTools. ⚠️ *Pasa a depender de un endpoint suyo que aún no existe:* hasta entonces responde `503` (`T-BS-054`).
+|===
+
+== Numeración quemada
+
+Los números no se reutilizan nunca. Estos quedaron libres al cambiar la arquitectura el
+2026-09-16 y *no vuelven a asignarse*:
+
+[cols="1,4",options="header"]
+|===
+| Categoría | Números quemados
+
+| `RF-BS` | 03, 04, 07, 09, 10, 11 — servían a la lectura directa del SQL Server y al backend de portal separado
+| `RNF-BS` | 05 — resiliencia ante la caída de on-premise
+| `REST-BS` | 02, 05, 08, 09, 10 — conectividad, esquema ajeno de solo lectura, `mediaPath`, `CommandTimeout`, esquema desconocido
+| `SEC-BS` | 05, 07 — TLS hacia SQL Server, usuario de BD on-premise
+| `DOM-BS` | 01, 02, 03 — gobernaban `OnPremiseDbContext`
+| `DT-BS` | 01, 03, 05 — scaffolding manual, catálogo sin paginar, validación de `Files.FilePath`
+| `DEC-BS` | 01, 02, 04 — *sin objeto*, no resueltas: el problema desapareció
+| `ADR-BS` | 003 — descartada; el archivo se conserva con su explicación
+|===
+
+== Reglas de asignación
+
+. *Los números no se reutilizan nunca.* Si un ADR se rechaza, se descarta o se supera, su
+  número queda quemado.
+. *La numeración es correlativa por prefijo*, no global.
+. *Un ID se emite en un único documento* — el que lo define. El resto lo referencia.
+. *Al superar un documento*, sus IDs conservan el número: cambia el contenido, no la
+  identidad.
+. *Todo ID nuevo se registra en este glosario* en el mismo commit que lo introduce.
+. *Un ID dado de baja se traslada a <<_numeración_quemada>>* con el motivo, en el mismo
+  commit. Borrarlo sin dejar rastro rompe la trazabilidad de los documentos que lo citaban.
+
+include::{root}/_nav.adoc[]

@@ -1,0 +1,305 @@
+= Guía para agentes y colaboradores — bridge-docs
+:author: Equipo de Desarrollo
+:revnumber: 2.0
+:revdate: 2026-09-16
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:icons: font
+:lang: es
+:root: .
+:section-id: guia-agentes
+:section-title: Guía para agentes
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+== Orden de lectura obligatorio
+
+Antes de responder a nada sobre este proyecto, en este orden:
+
+. xref:00_Estado_Actual.adoc[00_Estado_Actual] — dónde está realmente el proyecto hoy.
+. `manifest.yaml` — qué documentos existen y cuáles están vigentes.
+. xref:Glosario_IDs.adoc[Glosario_IDs] — qué significan los identificadores.
+. xref:index.adoc[index.adoc] — el mapa completo.
+
+Y si lo que vas a tocar es código, además:
+xref:Analisis_Arranque_Bridge_v1.0.adoc[Analisis_Arranque_Bridge_v1.0] — qué hay construido de
+verdad en cada repositorio y por dónde empieza el trabajo.
+
+[IMPORTANT]
+====
+*Nunca respondas desde el índice solo.* El índice dice qué documentos existen;
+`00_Estado_Actual.adoc` dice cuáles reflejan la realidad. Un documento puede estar
+enlazado y aun así tener correcciones pendientes registradas en el estado actual.
+====
+
+[WARNING]
+====
+*Cuidado con la documentación anterior al 2026-09-16.* Las decisiones de ese día
+(xref:11_gestion_producto/adr/adr-bs-005_servicio_unico.adoc[ADR-BS-005] y
+xref:11_gestion_producto/adr/adr-bs-006_ingesta_por_empuje.adoc[ADR-BS-006]) invalidaron la
+premisa sobre la que estaba escrito todo lo anterior: había tres servicios y leíamos un SQL
+Server ajeno.
+
+Si un texto menciona el `SyncWorker`, el `OnPremiseDbContext`, un backend de portal separado,
+la conectividad con la red corporativa o los contratos `bridge_*.yaml`, *está en `_historico/`
+o es una cita deliberada de lo que se dio de baja*. No lo uses como fuente. Compruébalo contra
+el `00_Estado_Actual.adoc`.
+====
+
+== Reglas de vigente frente a histórico
+
+* El documento *vigente* vive en la *raíz de su sección*.
+* Las versiones superadas se *mueven* a `_historico/`. *Nunca se borran.*
+* `index.adoc` enlaza *solo* documentos vigentes.
+
+Al mover o renombrar un documento hay que hacer, en el mismo commit:
+
+. Reescribir el atributo `:root:` según la nueva profundidad.
+. Corregir todos los `xref:` que apuntaban al documento.
+. Actualizar `index.adoc`.
+. Actualizar `manifest.yaml`.
+. Actualizar `00_Estado_Actual.adoc`.
+. Buscar referencias externas: READMEs del repo de código, comentarios en el código,
+  configuración de agentes.
+
+=== Superado no es lo mismo que descartado
+
+[cols="1,2,2",options="header"]
+|===
+| Situación | Qué se hace con el documento | Ejemplo
+
+| *Superado* — otra opción gana
+| Se marca `Supersedida por ADR-BS-NNN` y se *mueve* a `_historico/`
+| `requerimientos_bridge_service_v1.1.adoc`, superado por la v2.0
+
+| *Descartado* — el problema desaparece
+| Se marca `Descartada`, se explica por qué, y se *queda donde está*
+| `adr-bs-003_conectividad_onpremise.adoc`: no ganó otra opción, es que ya no hay red que
+  atravesar
+
+| *Sin objeto* — una decisión abierta deja de tener sentido
+| No se resuelve: se registra como «sin objeto» en el glosario y su número queda quemado
+| `DEC-BS-01`, `DEC-BS-02`, `DEC-BS-04`
+|===
+
+Los tres casos conservan el rastro. Borrar un documento o un ID sin dejar constancia rompe la
+trazabilidad de todo lo que los citaba.
+
+== Cabecera estándar
+
+Todo `.adoc` empieza así:
+
+[source,asciidoc]
+----
+= Título del documento
+:author: Equipo de Desarrollo
+:revnumber: 1.0
+:revdate: AAAA-MM-DD
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:icons: font
+:lang: es
+:root: .
+:section-id: id-de-seccion
+:section-title: Nombre de la sección
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+----
+
+Y termina con un segundo `include::{root}/_nav.adoc[]`.
+
+.Valor de `:root:` según la profundidad
+[cols="1,1,2",options="header"]
+|===
+| Ubicación | `:root:` | Ejemplo
+
+| Raíz de `bridge-docs/` | `.` | `00_Estado_Actual.adoc`
+| Dentro de una sección | `..` | `01_requerimientos/requerimientos_bridge_service_v2.0.adoc`
+| Dentro de una sección | `..` | `04_arquitectura_tecnica/arquitectura_tecnica_bridge_service_v2.0.adoc`
+| Subcarpeta de sección | `../..` | `11_gestion_producto/adr/adr-bs-006_ingesta_por_empuje.adoc`
+| Subcarpeta de sección | `../..` | `04_arquitectura_tecnica/modelo_datos/changelog_modelo_datos.adoc`
+| Dentro de `_historico/` | un nivel más que su vecino vigente | `01_requerimientos/_historico/requerimientos_bridge_service_v1.1.adoc` → `../..`
+|===
+
+NOTE: Los artefactos que no son AsciiDoc —`.yaml` de contrato, `.mermaid` de modelo— no llevan
+cabecera ni `:root:`. Se enlazan desde un `.adoc` con su ruta relativa, y su versión va en el
+nombre del archivo: `ingest_catalog_v1.0.yaml`, `modelo_datos_bridge_v2.mermaid`.
+
+.Referencias cruzadas
+[cols="2,3",options="header"]
+|===
+| Caso | Sintaxis
+
+| Entre hermanos de la misma carpeta | `xref:Otro.adoc[texto]`
+| Entre secciones distintas | `xref:{root}/NN_seccion/Archivo.adoc[texto]`
+| A un ancla del índice | `link:{root}/index.adoc#_ancla[texto]`
+|===
+
+== Convenciones de formato
+
+[cols="2,3",options="header"]
+|===
+| Tipo de contenido | Formato
+
+| Documentación narrativa | AsciiDoc (`.adoc`)
+| Contratos de API | OpenAPI 3.1 YAML (`.yaml`)
+| Diagramas standalone | Mermaid (`.mermaid`)
+| Diagramas embebidos | bloque `[source,mermaid]` dentro del `.adoc`
+| Entregables para stakeholders | HTML en `_entregables/`
+|===
+
+.Nomenclatura
+* *Documentos:* `lowercase_snake` con versión — `arquitectura_tecnica_bridge_service_v2.0.adoc`
+* *Carpetas de sección:* `NN_lowercase` — `04_arquitectura_tecnica/`
+* *ADRs:* `adr-bs-NNN_slug_descriptivo.adoc`
+* *Prohibido mezclar convenciones.*
+
+== Idioma del código y de la documentación
+
+[IMPORTANT]
+====
+*Todo artefacto técnico se nombra en inglés. La documentación se escribe en español.*
+
+Regla adoptada el 2026-08-23. Aplica a este y a todos los proyectos del equipo.
+====
+
+[cols="2,1,3",options="header"]
+|===
+| Artefacto | Idioma | Ejemplo
+
+| Tablas y columnas de base de datos | 🇬🇧 Inglés | `product_id`, `storage_path`, `last_seen_at`
+| Clases, interfaces, métodos, variables | 🇬🇧 Inglés | `MediaNormalizer`, `IngestCatalogAsync`
+| Componentes y servicios | 🇬🇧 Inglés | `CatalogIngestService`, `SnapshotReconciler`
+| Rutas de endpoint | 🇬🇧 Inglés | `/v1/ingest/catalog`, `/catalog/products`
+| Campos y schemas de los contratos OpenAPI | 🇬🇧 Inglés | `batchId`, `generatedAt`, `storageUri`, `mediaGroup`
+| Parámetros de query | 🇬🇧 Inglés | `?page=`, `?search=`
+| Códigos de error | 🇬🇧 Inglés | `VALIDATION_ERROR`, `STORAGE_PROVIDER_UNAVAILABLE`
+| Ramas, commits y nombres de test | 🇬🇧 Inglés | `IngestCatalog_DuplicateBatchId_Returns202`
+| Prosa de la documentación | 🇪🇸 Español | Este mismo párrafo
+| Nombres de archivo `.adoc` y carpetas `NN_` | 🇪🇸 Español | `04_arquitectura_tecnica/`
+| IDs de trazabilidad | 🇪🇸 Español | `RF-`, `CU-`, `ADR-`, `DEC-`
+| Comentarios dentro del código | 🇪🇸 Español | `// Un lote duplicado devuelve el resultado original`
+| Etiquetas de actor y acción en diagramas | 🇪🇸 Español | `Microservicio`, `Empuja un lote`
+| Nombres de componente en diagramas | 🇬🇧 Inglés | `IngestController`, `AppDbContext`
+|===
+
+=== Excepción: los valores que llegan del origen
+
+El campo `source` de un recurso transporta valores acuñados por SinsaTools —`Images` y
+`EntityFiles`— y *no se renombran*. Identifican en qué catálogo de origen nació el recurso, y
+junto con `sourceId` forman su clave natural (`DOM-BS-08`). Traducirlos rompería la
+correspondencia con el emisor, que es lo único que nos permite reconocer una fila ya vista.
+
+NOTE: Esta excepción es lo único que queda de la antigua «excepción del esquema on-premise».
+Las tablas `Products`, `Stock_Keeping_Units`, `Images`, `Entity_Files` y `Files` ya no
+aparecen en ningún documento vigente: no consultamos esa base de datos ni conocemos su
+esquema.
+
+== Reglas de contenido
+
+=== No inventar decisiones técnicas
+
+Si falta información para decidir algo, *se pregunta*. Una decisión inventada que se
+propaga por cinco documentos cuesta mucho más que una pregunta.
+
+Lo que no está decidido se registra como `DEC-BS-NN` en `00_Estado_Actual.adoc`, con
+prioridad y fecha límite.
+
+[TIP]
+====
+Este proyecto tiene una lección cara sobre esto. Toda la v1.1 se escribió sobre un supuesto
+que nadie verificó —que leeríamos el SQL Server de SinsaTools— y arrastró un mes de bloqueo,
+seis requerimientos, cinco restricciones y cuatro contratos que hubo que dar de baja de golpe.
+
+El supuesto no estaba marcado como supuesto. Estaba escrito como hecho.
+====
+
+=== No contradecir una decisión tomada sin señalarlo
+
+Si un documento nuevo entra en conflicto con un ADR aceptado, hay que:
+
+. Señalarlo explícitamente, en un bloque `WARNING`.
+. Justificarlo con impacto técnico concreto, no con preferencia.
+. Emitir un ADR que supere al anterior.
+. Marcar el ADR anterior como `Supersedida por ADR-BS-NNN` y moverlo a `_historico/`.
+
+Ejemplo real: ADR-BS-005 superó el modelo de tres servicios de la v1.1 porque el backend del
+portal que ese modelo presuponía no existía en ningún repositorio, y porque separar el catálogo
+de los permisos hacía imposible la integridad referencial entre ambos.
+
+=== Mantener la consistencia de IDs
+
+Los identificadores, nombres de archivo y referencias cruzadas se *reutilizan siempre*.
+Antes de emitir un ID nuevo, comprobar el xref:Glosario_IDs.adoc[glosario].
+
+Y antes de dar uno de baja, comprobar también: los números *no se reutilizan nunca*. Un ID
+retirado se traslada a la sección «Numeración quemada» del glosario, con su motivo, en el
+mismo commit que lo retira.
+
+=== Cada afirmación técnica se apoya en algo
+
+Un documento de arquitectura no opina: cita el ADR, el RF o el contrato que respalda cada
+afirmación. Si nada la respalda, o falta un ADR o es una decisión abierta.
+
+== Los contratos son bilaterales
+
+Hay *dos* contratos con contraparte, y `REST-BS-06` gobierna ambos. Ninguno cambia de forma
+incompatible sin acuerdo; un cambio incompatible exige versionar la ruta.
+
+[cols="2,2,3",options="header"]
+|===
+| Contrato | Contraparte | Quién se adapta a quién
+
+| `05_contratos_api/ingesta/ingest_catalog_v1.0.yaml`
+| Equipo de SinsaTools
+| *Simétrico.* Está emitido y pendiente de su acuerdo. Todavía se puede negociar.
+
+| Los seis `api_*.yaml` de `Sin-PortalVideos/openapi/sources/`
+| El frontend
+| *Asimétrico.* Ya está implementado y probado del lado del cliente, con 94 % de cobertura.
+  *El servidor se adapta a él*; una divergencia es un fallo del servidor, no una diferencia
+  de criterio (`REST-BS-11`).
+|===
+
+Cualquier cambio incompatible exige:
+
+. Registrarlo en `00_Estado_Actual.adoc` como corrección pendiente.
+. Acordarlo con la contraparte.
+. Versionar el YAML y mover el anterior a `_historico/`.
+. Verificar el impacto en el otro repositorio, que tiene su propia copia.
+
+[NOTE]
+====
+Los cuatro `bridge_*.yaml` —`bridge_master`, `bridge_auth`, `bridge_catalog` y `bridge_sync`—
+*se dieron de baja*. Describían la frontera entre el Bridge y un backend de portal que nunca
+existió: un contrato bilateral cuyas dos partes eran la misma persona (ADR-BS-005). Si
+aparecen en un documento, ese documento está en `_historico/`.
+====
+
+== Checklist antes de dar por cerrado un documento
+
+* [ ] Cabecera estándar completa, con `:root:` correcto para su profundidad
+* [ ] `include::{root}/_nav.adoc[]` al inicio y al final
+* [ ] `:revnumber:` y `:revdate:` actualizados
+* [ ] Todos los `xref:` resuelven
+* [ ] Ninguna referencia a componentes o documentos dados de baja, salvo para decir que lo
+  están
+* [ ] IDs nuevos registrados en `Glosario_IDs.adoc`
+* [ ] IDs retirados trasladados a «Numeración quemada», con su motivo
+* [ ] Decisiones abiertas registradas como `DEC-BS-NN`
+* [ ] Deuda técnica registrada como `DT-BS-NN`
+* [ ] `index.adoc` actualizado, cambiando `⬜ PENDIENTE` por el enlace real
+* [ ] `manifest.yaml` actualizado
+* [ ] `00_Estado_Actual.adoc` actualizado: semáforo, cambios y próximos pasos
+* [ ] Si supera a otro documento: el anterior movido a `_historico/` y marcado
+* [ ] Si lo deja sin objeto: el anterior marcado `Descartada` *en su sitio*, con el motivo
+
+include::{root}/_nav.adoc[]

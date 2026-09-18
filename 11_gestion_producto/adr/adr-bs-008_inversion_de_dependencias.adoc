@@ -1,0 +1,189 @@
+= ADR-BS-008 — Inversión de dependencias entre capas
+:author: Equipo de Desarrollo
+:revnumber: 1.0
+:revdate: 2026-09-17
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:icons: font
+:lang: es
+:root: ../..
+:section-id: gestion-producto
+:section-title: Gestión de Producto
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+[cols="1,3"]
+|===
+| *Estado* | ✅ *Aceptada*
+| *Fecha* | 2026-09-17
+| *Origen* | Una contradicción interna de `arquitectura_tecnica_bridge_service_v2.0.adoc`, §5
+| *Depende de* | ADR-BS-005 (tres capas en un solo servicio)
+| *Supera a* | La regla de dependencia de la v2.0 y la ubicación de `IMediaStorageProvider.cs` en su árbol
+|===
+
+== Contexto
+
+La v2.0 del documento de arquitectura afirmaba dos cosas incompatibles con dos líneas de
+separación:
+
+[quote]
+____
+`Api` → `Application` → `Infrastructure`. *Nunca al revés.*
+
+[...] `Infrastructure` no conoce a `Application`: expone interfaces que `Application` define.
+____
+
+Si `Application` define los puertos, `Infrastructure` necesita referenciarla para
+implementarlos, y la flecha va al revés de lo declarado. El árbol de archivos seguía la
+primera lectura: `IMediaStorageProvider.cs` aparecía bajo `Infrastructure/Storage/`.
+
+La contradicción es inocua en un documento y cara en un `.csproj`: fija la dirección de todas
+las referencias de proyecto del repositorio. Se detecta antes de escribir la primera línea,
+que es el único momento barato para resolverla.
+
+== Opciones evaluadas
+
+=== Opción A — Capas clásicas: `Application` → `Infrastructure`
+
+Los puertos viven en `Infrastructure` y `Application` los consume. Es lo que describía el
+árbol de la v2.0.
+
+=== Opción B — Inversión real: `Infrastructure` → `Application`
+
+Los puertos viven en `Application/Abstractions/`. `Infrastructure` referencia a `Application`
+para implementarlos. `Api` conoce a las tres y cablea la inyección de dependencias.
+
+=== Opción C — Un cuarto proyecto `.Abstractions`
+
+Puertos y modelos compartidos en un proyecto sin dependencias, al que miran `Application` e
+`Infrastructure`.
+
+=== Tabla comparativa
+
+[cols="2,1,1,1",options="header"]
+|===
+| Criterio | A · Capas | B · Inversión | C · Cuarto proyecto
+
+| Qué arrastra `Application` al compilar
+| ❌ EF Core, `Azure.Storage.Blobs`, `Azure.Identity`
+| ✅ Nada
+| ✅ Nada
+
+| Probar `MediaAccessEvaluator` sin infraestructura
+| ❌ Exige dobles de tipos de EF Core y del SDK de Azure
+| ✅ Un doble de una interfaz propia
+| ✅ Igual
+
+| Dónde se declara el contrato de un puerto
+| ❌ Lejos de quien lo usa
+| ✅ Junto a quien lo usa
+| ⚠️ En un tercer sitio
+
+| Sustituir Azure Blob por otro proveedor
+| ⚠️ Toca `Application` si cambia la interfaz
+| ✅ `Application` no se entera
+| ✅ Igual
+
+| Proyectos a mantener
+| ✅ 3
+| ✅ 3
+| ❌ 4
+
+| Ceremonia para un equipo de una persona
+| ✅ Mínima
+| ✅ Mínima
+| ❌ Un `.csproj` más y una decisión más en cada clase nueva
+
+| Verificable por analizador
+| ✅ Sí
+| ✅ Sí
+| ⚠️ Más reglas que escribir
+
+| Coste de cambiar de idea después
+| ❌ Refactorización transversal
+| ❌ Igual
+| ❌ Igual
+|===
+
+== Decisión
+
+*Se elige la opción B — inversión de dependencias real.* Los puertos suben a
+`BridgeService.Application/Abstractions/`; `BridgeService.Infrastructure` referencia a
+`BridgeService.Application`; `BridgeService.Api` referencia a las dos y es el único sitio
+donde se cablea la DI.
+
+[source,text]
+----
+Api ──────────► Application ◄────────── Infrastructure
+ │                   ▲                        │
+ │                   │ implementa los puertos  │
+ └── cablea la DI ───┴────────────────────────┘
+----
+
+`BridgeService.Application.csproj` no lleva ninguna referencia de proyecto ni ningún paquete
+de infraestructura. Es la forma ejecutable de la regla.
+
+== Justificación
+
+. **La opción A convierte la capa de negocio en cliente de EF Core.** `MediaAccessEvaluator`
+  implementa cuatro reglas con precedencia estricta —revocación, grupo, concesión, denegación
+  por defecto— y es la pieza donde un fallo es una fuga de contenido. Probarla exhaustivamente
+  contra una matriz de casos no debería exigir dobles de `DbSet<T>` ni del SDK de Azure.
+
+. **`ADR-BS-005` ya pagó el precio de la tercera capa con este argumento.** Decía que meter la
+  evaluación de acceso en los controladores produce _«clases de varios cientos de líneas
+  imposibles de probar sin levantar un host web»_. Dejar los puertos en `Infrastructure`
+  reintroduce el mismo problema un piso más abajo: la lógica sigue sin poder probarse sola.
+
+. **`IMediaStorageProvider` solo tiene sentido como puerto.** Existe para que la evaluación de
+  acceso no sepa si los bytes vienen de Azure Blob o de un HTTP genérico. Declararlo en el
+  proyecto que conoce Azure es declarar la abstracción dentro de lo que pretende abstraer.
+
+. **La opción C resuelve lo mismo cobrando un proyecto de más.** Con un solo desarrollador
+  (`RNF-BS-07`), cada `.csproj` extra es una decisión recurrente —«¿esto dónde va?»— sin
+  beneficio: no hay un segundo consumidor de esas abstracciones que justifique separarlas.
+
+. **Es el momento barato.** Hoy son tres líneas en tres `.csproj`. Con quince clases escritas
+  es una refactorización transversal que toca *using*, constructores y pruebas.
+
+== Consecuencias
+
+=== Positivas
+
+* `Application` se prueba sin PostgreSQL, sin Azurite y sin host web. Las pruebas de la lógica
+  de permisos son rápidas y deterministas, que es lo que permite exigirles el 100 %
+  (`EST-BS-08`).
+* La frontera con el almacenamiento queda expresada como contrato propio: `ADR-BS-007` eligió
+  leer los bytes con credencial propia, y si algún día se reabre la opción D2 —redirect con
+  *user delegation SAS*, `DEC-BS-17`— el cambio queda contenido en `Infrastructure`.
+* La regla es verificable: un analizador detecta una referencia de proyecto prohibida y falla
+  el build (`EST-BS-01`).
+
+=== Negativas y compromisos
+
+* **Hay que escribir los puertos.** `ICatalogRepository`, `IAccessRepository`,
+  `IIngestRepository`, `ISessionRepository`, `IJwtIssuer`, `IUnitOfWork`, `IClock`. Es
+  trabajo real que la opción A no exigía.
+* **Tentación de filtrar EF Core por la puerta de atrás.** Un puerto que devuelva `IQueryable`
+  deja pasar la infraestructura por el hueco. Los puertos devuelven modelos propios o
+  colecciones materializadas: `EST-BS-02`.
+* **Las consultas complejas quedan del lado de `Infrastructure`.** El `JOIN` de `mediaCount`
+  y la consulta de acceso se escriben ahí, detrás de un puerto con nombre de negocio. Es lo
+  correcto, pero significa que la prueba de que *esa consulta* es correcta es de integración,
+  con PostgreSQL real, no unitaria.
+
+=== Reglas derivadas, de cumplimiento obligatorio
+
+[cols="1,4",options="header"]
+|===
+| ID | Regla
+
+| EST-BS-01 | `BridgeService.Application` no lleva referencias de proyecto ni paquetes de infraestructura. Verificado por analizador; una violación falla el build.
+| EST-BS-02 | Ningún puerto de `Application/Abstractions/` expone `IQueryable`, `DbSet`, `DbContext` ni tipos de los SDK de Azure. Devuelven modelos propios o colecciones materializadas.
+|===
+
+include::{root}/_nav.adoc[]

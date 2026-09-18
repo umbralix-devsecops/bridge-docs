@@ -1,0 +1,249 @@
+= ADR-BS-001 — Caché propio en PostgreSQL Azure
+:author: Equipo de Desarrollo
+:revnumber: 1.1
+:revdate: 2026-08-22
+:revremark: Revisada el 2026-09-16: la decisión se sostiene, pero la base deja de ser un caché y pasa a ser la del sistema
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:icons: font
+:lang: es
+:root: ../..
+:section-id: gestion-producto
+:section-title: Gestión de Producto
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+[cols="1,3"]
+|===
+| *Estado* | ✅ *Aceptada* — revisada el 2026-09-16: la decisión se sostiene, cambia su motivo
+| *Fecha* | 2026-08-22
+| *Supera a* | `requerimientos_bridge_service_v1.0.adoc` — REST-BS-04 y el principio «no tiene BD propia / es stateless»
+| *Relacionada con* | ADR-BS-002 (acceso a datos), ADR-BS-005 (servicio único), ADR-BS-006 (ingesta)
+| *Nota* | ADR-BS-003 queda descartada; la relación con ADR-006 del portal desaparece al no haber dos réplicas
+|===
+
+== Contexto
+
+El Bridge Service expone el catálogo de la aplicación on-premise al backend del Portal de
+Videos. Al arrancar el diseño se estableció informalmente que *no tendría base de datos
+propia*: cada request consultaría el SQL Server on-premise en vivo.
+
+La restricción quedó formalizada en `requerimientos_bridge_service_v1.0.adoc` (Abril 2025):
+
+* Principio fundamental: «El Bridge Service *no almacena* datos del catálogo… No tiene BD propia.»
+* Principio fundamental: «El Bridge Service es *stateless*.»
+* REST-BS-04: «El Bridge Service *no tiene base de datos propia*.»
+
+Al revisar los contratos OpenAPI ya acordados con el equipo del portal apareció una
+contradicción directa con ese mismo documento:
+
+* `bridge_sync.yaml` define `POST /v1/sync` como *«solicita al Bridge Service que actualice
+  su caché interno (PostgreSQL en Azure) desde la BD SQL Server on-premise de forma
+  asíncrona»*.
+* `bridge_sync.yaml` define `GET /v1/sync/{syncId}`, que exige que el estado de una
+  sincronización sea consultable después, es decir, *durable*.
+* `bridge_auth.yaml` declara en `/health` un check llamado `postgresql-azure`.
+
+El contrato es bilateral y ya está acordado. O se honra, o se renegocia con el equipo del
+portal introduciendo un cambio incompatible.
+
+[IMPORTANT]
+====
+*La contradicción es anterior a esta decisión.* Los requerimientos y el contrato se
+redactaron en la misma fecha diciendo cosas incompatibles: uno prohíbe la base de datos
+propia, el otro la describe y exige que su estado sobreviva entre requests. Este ADR no
+introduce el conflicto — elige un lado y deja constancia de cuál.
+
+Un tercer síntoma lo confirma: `POST /v1/sync` y `GET /v1/sync/{syncId}` existían en el
+contrato *sin ningún RF que los respaldara*. Eran endpoints huérfanos. Los requerimientos
+v1.1 los formalizan como RF-BS-09 y RF-BS-10.
+====
+
+Además, hay un condicionante operativo: el SQL Server on-premise vive detrás de la red
+corporativa y el enlace hacia él todavía no está definido (ADR-BS-003). Cualquier diseño
+que ponga ese enlace en el camino crítico de cada request hereda su latencia y su
+disponibilidad.
+
+== Opciones evaluadas
+
+=== Opción A — Pass-through puro, sin base de datos
+
+Cada request del portal desencadena una consulta en vivo al SQL Server on-premise.
+
+Exige eliminar `POST /v1/sync` y `GET /v1/sync/{syncId}` del contrato.
+
+=== Opción B — Caché en memoria (`IMemoryCache`)
+
+Sin base de datos, pero con el catálogo cacheado en el proceso.
+`POST /v1/sync` pasaría a significar «invalidar y recargar el caché en memoria».
+
+=== Opción C — Caché propio en PostgreSQL Azure
+
+El Bridge mantiene una réplica desnormalizada del catálogo en su propia base de datos.
+Un proceso en segundo plano la sincroniza; los endpoints de lectura la consultan.
+
+=== Tabla comparativa
+
+[cols="2,1,1,1",options="header"]
+|===
+| Criterio | A · Pass-through | B · Memoria | C · PostgreSQL
+
+| Honra el contrato acordado
+| ❌ Exige cambio incompatible
+| ⚠️ Parcial: `syncId` no sobrevive al reinicio
+| ✅ Completo
+
+| `GET /v1/sync/{syncId}` funciona tras reiniciar
+| ❌ No existe
+| ❌ No
+| ✅ Sí
+
+| Latencia p95 de `GET /v1/softwares`
+| Depende del enlace de red
+| Buena en caliente, mala en frío
+| Buena y estable
+
+| Sobrevive a una caída de on-premise
+| ❌ Devuelve `503`
+| ⚠️ Mientras el caché siga caliente
+| ✅ Sirve desde caché, `/health` = `Degraded`
+
+| Carga sobre el SQL Server de producción
+| Alta y proporcional al tráfico
+| Media
+| Baja y predecible
+
+| Frescura del dato
+| ✅ Máxima, siempre en vivo
+| Según TTL
+| ⚠️ Depende de la frecuencia del sync
+
+| Costo mensual añadido
+| USD 0
+| USD 0
+| ≈ USD 15–30
+
+| Complejidad operativa
+| Mínima
+| Baja
+| Media: migraciones, backup, purga
+
+| Escalado horizontal del App Service
+| ✅ Sin estado
+| ❌ Cada instancia con su propio caché
+| ✅ Estado compartido
+|===
+
+== Decisión
+
+*Se elige la opción C — caché propio en Azure Database for PostgreSQL Flexible Server.*
+
+== Justificación
+
+. *El contrato ya estaba acordado y describe la opción C.* Renegociarlo implicaría un
+  cambio incompatible sobre un equipo que ya tiene su documentación cerrada al 100 % y su
+  Sprint 0 planificado. El costo de coordinación supera al de operar una base de datos.
+
+. *`GET /v1/sync/{syncId}` es incompatible con las opciones A y B.* Un `syncId` que
+  desaparece al reciclar el App Service —cosa que Azure hace rutinariamente— convierte ese
+  endpoint en una fuente de `404` intermitentes imposibles de diagnosticar.
+
+. *Desacopla la disponibilidad del Bridge de la de on-premise.* Con la opción A, cualquier
+  corte de la VPN o mantenimiento del SQL Server se propaga como `503` al portal y desde
+  ahí al usuario final. Con C, el portal sigue recibiendo `200`; solo el dato envejece.
+  Dado que ADR-BS-003 sigue abierto, no podemos asumir un enlace fiable.
+
+. *Protege al SQL Server de producción.* Es el sistema del que depende la operación diaria
+  del negocio. La opción A haría que su carga creciera con el tráfico del portal, un
+  sistema sobre el que ese servidor no tiene ningún control.
+
+. *La opción B falla al escalar.* Con dos o más instancias de App Service, cada una tendría
+  su propio caché y su propio `syncId`. `POST /v1/sync` en la instancia 1 y
+  `GET /v1/sync/{id}` en la 2 devolvería `404`.
+
+== Consecuencias
+
+=== Positivas
+
+* `GET /v1/softwares` y `GET /v1/media/updates` responden en decenas de milisegundos y
+  con latencia estable, independiente del enlace de red.
+* Una caída de on-premise degrada el servicio en vez de tumbarlo. `/health` lo refleja con
+  `Degraded`, no con `Unhealthy`, y el App Service no retira la instancia de balanceo.
+* El historial de sincronizaciones es consultable y auditable.
+* El App Service puede escalar horizontalmente sin cambios.
+* La carga sobre el SQL Server on-premise es predecible: una consulta por ciclo de sync,
+  no una por request.
+* Los endpoints huérfanos del contrato quedan justificados: RF-BS-09 y RF-BS-10 ya tienen
+  requerimiento que los respalda, y la cadena de trazabilidad se cierra.
+
+=== Negativas y compromisos
+
+* *Frescura compuesta.* Se añade un cuarto nivel de caché a la cadena. Con sync horaria en
+  el Bridge y sync horaria en el portal (ADR-006), el peor caso de latencia de publicación
+  pasa de ~1 h a ~2 h más el TTL del Service Worker. *Esto abre DEC-BS-01*, que debe
+  cerrarse antes de escribir el `SyncWorker`.
+* *Costo.* ≈ USD 15–30 mensuales por el PostgreSQL Flexible Server en su SKU más pequeño.
+* *Un esquema más que mantener.* Migraciones EF, backup, y política de retención del
+  historial (registrada como DT-BS-02).
+* *Doble mantenimiento del modelo.* Cualquier campo nuevo en el contrato hay que añadirlo
+  al esquema del caché, al mapper y a la migración.
+* *Obliga a reescribir los requerimientos.* REST-BS-04 y dos principios fundamentales de la
+  v1.0 quedan superados. Emitida `requerimientos_bridge_service_v1.1.adoc`; la v1.0 pasa a
+  `_historico/`.
+* *Riesgo de deriva silenciosa.* Si el sync deja de traer datos —por ejemplo, porque
+  `UpdatedAt` no se puebla en on-premise— el servicio seguirá respondiendo `200` con datos
+  viejos y nada lo delatará. Registrado como DT-BS-04; exige una métrica de antigüedad
+  máxima del dato.
+
+
+[NOTE]
+====
+== Revisión del 2026-09-16 — la decisión se mantiene, su naturaleza cambia
+
+Esta decisión se tomó para justificar un *caché de lectura*: una réplica desnormalizada de
+una base de datos remota, que no era fuente de verdad y podía reconstruirse resincronizando.
+
+Con xref:adr-bs-005_servicio_unico.adoc[ADR-BS-005] y
+xref:adr-bs-006_ingesta_por_empuje.adoc[ADR-BS-006], esa base pasa a ser *la única base de
+datos del sistema*.
+
+[cols="1,2,2",options="header"]
+!===
+! ! Como se decidió (v1.0) ! Como queda (2026-09-16)
+
+! Naturaleza
+! Caché de lectura
+! La base del sistema
+
+! Fuente de verdad
+! De nada. Todo vivía en on-premise
+! Del catálogo *no*: sigue siendo SinsaTools. De la identidad, los permisos y la auditoría,
+  *sí* — nacen y mueren aquí
+
+! Ante un desastre
+! Se reconstruye resincronizando
+! El catálogo se reconstruye pidiendo una foto completa. *Los usuarios, los grupos y los
+  permisos no se reconstruyen: hay que restaurarlos de copia de seguridad*
+
+! Contenido
+! `PRODUCT`, `VERSION`, `MEDIA`, `SYNC_RUN`, `SYNC_ITEM`
+! 17 tablas: catálogo, identidad, permisos, ingesta y auditoría
+!===
+
+*La consecuencia práctica más importante de esta revisión es la última fila.* La v1.0 de
+este ADR y `adr-bs-004` afirmaban que _«el caché se reconstruye, no se restaura»_, y de ahí
+que algunas migraciones destructivas se consideraran recuperables. **Eso deja de ser cierto
+para catorce de las diecisiete tablas.** La política de copias de seguridad ya no es opcional, y
+una migración que pierda datos de identidad o de permisos es irreversible.
+
+El argumento original que cerró la decisión —que `GET /v1/sync/{syncId}` exigía un `syncId`
+durable que ni el pass-through ni la caché en memoria podían ofrecer— ya no aplica: ese
+endpoint no existe. Pero la conclusión no cambia, y ahora por un motivo mucho más fuerte: sin
+persistencia propia no hay usuarios, ni sesiones, ni permisos, ni portal.
+====
+
+include::{root}/_nav.adoc[]

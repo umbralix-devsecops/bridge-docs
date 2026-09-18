@@ -1,0 +1,278 @@
+= ADR-BS-003 — Conectividad Azure ↔ red corporativa
+:author: Equipo de Desarrollo
+:revnumber: 1.1
+:revdate: 2026-08-22
+:revremark: Descartada el 2026-09-16 por ADR-BS-006: no hay red corporativa que atravesar
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:icons: font
+:lang: es
+:root: ../..
+:section-id: gestion-producto
+:section-title: Gestión de Producto
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+[cols="1,3"]
+|===
+| *Estado* | ⛔ *Descartada* — sin objeto desde 2026-09-16
+| *Fecha* | 2026-08-22
+| *Bloquea* | — (bloqueaba el despliegue a staging y DEC-BS-02; ambos liberados)
+| *Descartada por* | xref:adr-bs-006_ingesta_por_empuje.adoc[ADR-BS-006]
+| *Depende de* | ADR-BS-001 (el caché propio reduce la criticidad del enlace, no la elimina)
+|===
+
+[IMPORTANT]
+====
+*Este ADR está abierto.* Es la última pieza sin definir de la arquitectura del Bridge
+Service. El desarrollo puede avanzar sin cerrarlo —el `SyncWorker` se prueba contra un SQL
+Server en Docker— pero *no hay despliegue a staging posible* hasta que se decida.
+====
+
+== Contexto
+
+El Bridge Service corre en Azure App Service (Linux). El SQL Server que debe leer vive en
+la red corporativa, sin exposición pública. Hace falta un mecanismo de conectividad entre
+ambos.
+
+La decisión original quedó anotada de forma ambigua como *«VPN site-to-site o IP fija»*,
+sin cerrarse.
+
+Dos hechos acotan la decisión:
+
+. *Gracias a ADR-BS-001, el enlace ya no está en el camino crítico de ningún request.* Solo
+  el `SyncWorker` lo atraviesa, en segundo plano. Esto relaja mucho los requisitos de
+  latencia: ya no hay que optimizar milisegundos, hay que garantizar que el enlace exista y
+  sea seguro.
+
+. *El SQL Server es la fuente de verdad de toda la operación del negocio* —no solo del
+  portal de videos. Su exposición es un riesgo que excede el alcance de este proyecto.
+
+== Opciones evaluadas
+
+=== Opción A — VPN Site-to-Site
+
+Azure VPN Gateway conectado por túnel IPsec al router corporativo. El App Service sale por
+VNet Integration hacia la red privada.
+
+[source,text]
+----
+App Service ──► VNet Integration ──► VPN Gateway ══[IPsec]══► Router corporativo ──► SQL Server
+                                                                         (sin IP pública)
+----
+
+=== Opción B — IP fija de salida + regla de firewall
+
+Se publica el puerto 1433 del SQL Server hacia internet, restringido por allow-list a las
+IPs de salida del App Service.
+
+[source,text]
+----
+App Service ──► IPs de salida ══[internet público]══► Firewall / NAT :1433 ──► SQL Server
+                (cambian al escalar)                                    (alcanzable since internet)
+----
+
+=== Opción C — Azure Hybrid Connections
+
+Relay de App Service con un agente (Hybrid Connection Manager) instalado en un servidor de
+la red corporativa. *La conexión la inicia el agente, hacia fuera.*
+
+[source,text]
+----
+App Service ──► Azure Relay ◄══[TCP 443 saliente]══ Hybrid Connection Manager ──► SQL Server
+                              la sesión la inicia on-premise    (agente on-premise)
+----
+
+=== Tabla comparativa
+
+[cols="2,1,1,1",options="header"]
+|===
+| Criterio | A · VPN S2S | B · IP fija | C · Hybrid Conn.
+
+| Exposición del SQL Server
+| ✅ Ninguna
+| ❌ Puerto 1433 público
+| ✅ Ninguna
+
+| Costo mensual añadido
+| ≈ USD 27 (VPN GW Basic)
+| USD 0
+| USD 0 desde plan Standard
+
+| Puertos entrantes a abrir
+| UDP 500 / 4500 al router
+| TCP 1433 al SQL Server
+| ✅ Ninguno
+
+| Depende del equipo de redes
+| ❌ Sí, bloqueante
+| ⚠️ Sí, regla NAT
+| ✅ Solo instalar el agente
+
+| Latencia añadida por salto
+| Baja · ~5–15 ms
+| Baja · directa
+| Media · relay intermedio
+
+| Punto único de fallo nuevo
+| VPN Gateway (SLA 99,9 %)
+| —
+| ⚠️ El HCM en un servidor
+
+| Se rompe solo cuando…
+| Cae el túnel o cambia el peer
+| ❌ Escalas el App Service
+| Se reinicia el servidor del HCM
+
+| Cifrado en tránsito
+| IPsec + TLS
+| Solo TLS
+| TLS + relay
+
+| Encaje con 1 desarrollador
+| ⚠️ Necesita apoyo externo
+| ✅ Inmediato
+| ✅ Autónomo
+
+| Reversibilidad
+| Media
+| Alta
+| Alta
+|===
+
+== Decisión
+
+⏳ *Pendiente.*
+
+La recomendación técnica es:
+
+* *Opción A* si existe equipo de redes disponible para configurar el endpoint IPsec del
+  router corporativo.
+* *Opción C* si no lo hay, o si la coordinación con redes introduce una demora que bloquee
+  el Sprint 0.
+
+*La opción B se descarta para producción.* No por el costo, sino por su modo de fallo: las
+IPs de salida del App Service cambian al escalar de plan y en ciertos redespliegues. La
+allow-list se rompe sin aviso, la sincronización empieza a fallar y la causa no aparece en
+ningún log de aplicación — solo en la configuración del firewall corporativo, que este
+equipo no administra. Es un fallo silencioso, intermitente y difícil de diagnosticar.
+
+Sigue siendo aceptable como configuración *temporal de desarrollo*, nunca como destino
+final.
+
+== Justificación (preliminar)
+
+. *El requisito no negociable es que el SQL Server no quede accesible desde internet.* Solo
+  A y C lo cumplen. Es un servidor del que depende la operación diaria del negocio, no un
+  recurso del portal de videos.
+
+. *La diferencia entre A y C es organizativa, no técnica.* A necesita a alguien que
+  configure el router corporativo; C necesita un servidor donde instalar y mantener un
+  agente. Ambas resuelven el problema con seguridad equivalente.
+
+. *La latencia dejó de ser un criterio decisivo* gracias a ADR-BS-001. El relay intermedio
+  de la opción C añade latencia solo al `SyncWorker`, que corre en segundo plano y no tiene
+  usuario esperando.
+
+. *El punto único de fallo de C es real pero manejable*: si el HCM se cae, el Bridge sigue
+  sirviendo desde caché y `/health` reporta `Degraded`. El impacto es dato envejecido, no
+  servicio caído.
+
+== Consecuencias
+
+=== Si se elige A
+
+* El SQL Server nunca se publica; el tráfico va cifrado extremo a extremo.
+* Se añade ≈ USD 27 mensuales y una dependencia bloqueante del equipo de redes.
+* Hay que documentar el peer IPsec, la clave compartida y el rango de direcciones en el
+  runbook de operaciones.
+* La VNet Integration del App Service exige plan Standard o superior.
+
+=== Si se elige C
+
+* No se abre ningún puerto entrante a la red corporativa: es el perfil de exposición más
+  bajo de las tres.
+* Aparece un componente nuevo que mantener: el HCM, con su propio ciclo de actualización,
+  su servidor anfitrión y su monitoreo. Debe entrar en el runbook y en el plan de alertas.
+* Hay límite de conexiones concurrentes por Hybrid Connection según el plan de App Service:
+  verificar que cubre la concurrencia del `SyncWorker` antes de comprometerse.
+* Si el servidor del HCM se reinicia por parches de Windows, el enlace cae hasta que el
+  agente vuelva. Exige arranque automático del servicio.
+
+=== Si se elige B (no recomendado)
+
+* Coste cero y puesta en marcha inmediata.
+* El SQL Server queda alcanzable desde internet, con una allow-list como única defensa.
+* La allow-list se rompe silenciosamente al escalar el App Service.
+* Obliga a registrar deuda técnica explícita y un plan de migración a A o C antes de
+  producción.
+
+== Información nueva — 2026-08-22
+
+[IMPORTANT]
+====
+Al cruzar los repositorios apareció que `portal-docs/01_requerimientos/requerimientos_api_externa_v1.0.adoc`
+*ya daba por decidida* la conectividad, y elige la opción B:
+
+* «Lectura directa (IP fija + firewall)»
+* «La BD SQL Server on-premise solo aceptará conexiones provenientes de la IP fija o rango de
+  IPs del Bridge Service en Azure.»
+* Supuesto declarado: «La BD SQL Server on-premise tiene una IP fija y estable, *accesible
+  desde la VNET de Azure* bajo las reglas de firewall configuradas.»
+
+Dos lecturas, y hay que resolverlas antes de cerrar este ADR:
+
+. Si el SQL Server ya es *alcanzable desde una VNET de Azure*, existe conectividad privada y
+  la opción A deja de requerir montar un túnel desde cero: puede que ya haya uno. Eso cambia
+  la estimación de esfuerzo y de coste de A.
+. Si en cambio se refiere a exponerlo públicamente restringido por allow-list, sigue en pie
+  la objeción de este ADR: las IPs de salida del App Service cambian al escalar de plan y la
+  regla se rompe en silencio.
+
+La diferencia entre ambas lecturas es la pregunta 5 de la lista de abajo.
+====
+
+== Información necesaria para cerrar este ADR
+
+. ¿Existe un equipo o proveedor de redes que pueda configurar el endpoint IPsec del router
+  corporativo, y en qué plazo?
+. ¿Hay un servidor en la red corporativa con disponibilidad continua donde instalar el HCM?
+. ¿Qué plan de App Service está previsto contratar? Condiciona tanto VNet Integration
+  (opción A) como el límite de Hybrid Connections (opción C).
+. ¿Existe alguna política corporativa que prohíba de entrada publicar el puerto 1433?
+   De ser así, la opción B queda descartada formalmente y no solo por recomendación.
+. *¿Qué significa exactamente «accesible desde la VNET de Azure» en el documento del portal?*
+  ¿Hay ya conectividad privada entre alguna VNET y la red corporativa, o se refiere a exponer
+  el puerto públicamente con allow-list? De la respuesta depende que la opción A sea barata o
+  cara, y que la opción B siga siendo descartable.
+
+
+[WARNING]
+====
+== Por qué esta decisión quedó sin objeto
+
+Este ADR evaluaba *cómo atravesar la red corporativa* para que el `SyncWorker` leyera el SQL
+Server de SinsaTools. Llevaba un mes sin cerrarse porque las tres opciones dependían de un
+equipo de redes que nunca se identificó, y bloqueaba el despliegue a staging.
+
+El 2026-09-16 se decidió que *el Bridge Service nunca accede a la base de datos de
+SinsaTools*: es su microservicio de integraciones quien nos empuja el catálogo por HTTPS
+(xref:adr-bs-006_ingesta_por_empuje.adoc[ADR-BS-006]).
+
+No hay ningún tramo de red que resolver. Las tres opciones —VPN site-to-site, IP fija con
+firewall, Azure Hybrid Connections— dejan de ser aplicables, no porque una fuera mejor que
+las otras, sino porque **el problema desapareció**.
+
+El documento se conserva íntegro por dos motivos: el análisis de exposición de red sigue
+siendo válido si algún día hiciera falta alcanzar un recurso corporativo, y `DEC-BS-02`
+figura como decisión abierta en varios documentos que conviene poder rastrear hasta aquí.
+
+*No se reabre.* Si en el futuro se necesitara conectividad corporativa, se emite un ADR
+nuevo con su propio número.
+====
+
+include::{root}/_nav.adoc[]

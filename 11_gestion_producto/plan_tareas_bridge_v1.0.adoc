@@ -1,0 +1,474 @@
+= Plan de tareas — Bridge Service
+:author: Equipo de Desarrollo
+:revnumber: 1.2
+:revdate: 2026-09-17
+:revremark: T-BS-006, umbral de cobertura, y corrección de los nombres de rol y del recuento de enums tras la Fase 1
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:sectnumlevels: 3
+:icons: font
+:lang: es
+:root: ..
+:section-id: gestion-producto
+:section-title: Gestión de Producto
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+---
+
+[.lead]
+Desglose de tareas de `Sin-PortalBridge`. El *qué* y el *porqué* están en
+`plan_primera_entrega_v1.0.adoc`; esto es el *cómo*, en unidades que caben en una sesión de
+trabajo y que se pueden marcar como hechas sin ambigüedad.
+
+== Las tres decisiones, resueltas el 2026-09-17
+
+[cols="1,3",options="header"]
+|===
+| ID | Resolución
+
+| `DEC-BS-13`
+| ✅ *Entran las dos columnas.* `sessions.replaced_by_session_id` y `sessions.revoked_reason`
+  forman parte de `MIG-BS-001`. Habilita `T-BS-023`: al detectar un refresh token ya rotado se
+  revoca la cadena entera, no la sesión de la víctima.
+
+| `DEC-BS-11`
+| ✅ *Se añade `GET /media/{id}/access` al contrato del portal.* Devuelve metadatos y veredicto
+  de permiso; nunca una URL de almacenamiento (`SEC-BS-10`, `SEC-BS-11`). El frontend ya está
+  probado contra él y `REST-BS-11` manda que el servidor se adapte.
+
+| `DEC-BS-07`
+| ✅ *`POST /admin/sync` pide una reingesta al microservicio de SinsaTools.* Es una llamada de
+  vuelta a su API; el lote llega después, por empuje, como cualquier otro.
+|===
+
+[WARNING]
+====
+*La resolución de `DEC-BS-07` tiene una consecuencia que conviene tener presente: deja de ser
+una decisión nuestra y pasa a ser una dependencia externa.*
+
+El botón no puede funcionar hasta que SinsaTools exponga ese endpoint de reingesta, y ese
+endpoint todavía no existe ni está pedido. Tres efectos concretos:
+
+. *Se añade la pregunta 11 a la lista del mapeo* — que expongan
+  `POST /reingest` (o como lo llamen), con qué credencial se invoca y qué devuelve.
+. *La respuesta es necesariamente asíncrona.* El lote no llega en la respuesta: llega después,
+  por empuje. `POST /admin/sync` puede devolver `202 Accepted` como mucho, y el administrador
+  sigue el resultado en la pantalla de estado de lotes.
+. *En la Entrega 1 el endpoint existe pero responde `503`* con un mensaje explícito
+  («reingesta no disponible: el emisor aún no expone el disparador»), y el frontend apaga el
+  botón con `features.triggerSync: false`. Es un estado transitorio declarado, no un olvido.
+  Es `T-BS-054`.
+====
+
+== Convención de identificadores
+
+`T-BS-NNN` — tarea de implementación. Numeración por centenas según la fase. Registrado en
+`Glosario_IDs.adoc`.
+
+Cada tarea declara:
+
+* *Hecho cuando* — el criterio binario. Si hay que discutir si está hecha, está mal escrita.
+* *Depende de* — solo dependencias duras.
+* *Trazas* — el `RF-BS` / `SEC-BS` / `DOM-BS` que implementa.
+
+== Fase 0 — Cimientos
+
+Nada de esto tiene lógica de negocio. Existe para que las fases siguientes no arrastren
+decisiones de fontanería.
+
+[cols="1,3,2,1",options="header"]
+|===
+| ID | Tarea | Hecho cuando | Depende de
+
+| `T-BS-001`
+| Esqueleto de la solución: `BridgeService.Api`, `.Application`, `.Infrastructure` y tres
+  proyectos de pruebas. `Directory.Build.props` con `TreatWarningsAsErrors`, `Nullable`,
+  `LangVersion`. `.editorconfig` y `.gitignore`.
+| `dotnet build` y `dotnet test` pasan en limpio sobre un repositorio recién clonado.
+| —
+
+| `T-BS-002`
+| `docker-compose.yml`: `postgres:16`, `azurite`, y la API. `healthcheck` en los tres y
+  dependencias por condición.
+| `docker compose up` deja los tres contenedores en *healthy* y `GET /health` responde `200`.
+| `T-BS-001`
+
+| `T-BS-003`
+| Pipeline de CI: restore, build, test con cobertura, `dotnet format --verify-no-changes` y
+  `gitleaks`.
+| Un secreto de prueba inyectado en un commit tumba el build.
+| `T-BS-001`
+
+| `T-BS-004`
+| Arranque transversal: Serilog con enriquecimiento por petición, `ProblemDetails` global que
+  *nunca* filtra detalle de excepción, CORS para el origen del frontend, versionado de API.
+| Una excepción no controlada devuelve un `500` con `traceId` y sin *stack trace*, y el log
+  sí lo lleva.
+| `T-BS-001`
+
+| `T-BS-005`
+| `Directory.Packages.props` con versiones centralizadas: EF Core 10, Npgsql, `Azure.Storage.Blobs`,
+  `Azure.Identity`, `Serilog`, `FluentValidation`, `xUnit`, `Testcontainers`.
+| No queda ninguna versión de paquete escrita en un `.csproj`.
+| `T-BS-001`
+
+| `T-BS-006` 🆕
+| *Hacer ejecutable `estandares_codigo_v1.0.adoc`:* `.editorconfig` severo, analizadores de
+  Roslyn en `latest-all`, `TreatWarningsAsErrors`, `Nullable enable`, y una prueba de
+  arquitectura que verifique `EST-BS-01`, `EST-BS-02` y `EST-BS-04`.
+| Añadir a `BridgeService.Application` una referencia a `BridgeService.Infrastructure`
+  **rompe el build**. Lo mismo un puerto que devuelva `IQueryable`.
+| `T-BS-001`
+|===
+
+*Traza:* `SEC-BS-06`, `SEC-BS-08`.
+
+== Fase 1 — Datos
+
+La fase que más cuesta deshacer. Se hace entera antes de tocar ningún endpoint.
+
+[cols="1,3,2,1",options="header"]
+|===
+| ID | Tarea | Hecho cuando | Depende de
+
+| `T-BS-010`
+| `AppDbContext` y entidades del bloque *catálogo*: `catalog_products`, `catalog_versions`,
+  `catalog_media`. Clave natural compuesta `(origin, ext_media_id)`.
+| El modelo de EF Core reproduce las tres tablas con sus tipos y restricciones.
+| `T-BS-005`
+
+| `T-BS-011`
+| Entidades del bloque *identidad*: `roles`, `role_permissions`, `users`, `sessions`,
+  `groups`, `user_groups`, `group_version_access`, `user_media_exceptions`.
+  `users.role_id` es FK, no enum. `sessions` lleva `replaced_by_session_id` y
+  `revoked_reason` (`DEC-BS-13`).
+| Las ocho tablas están modeladas y `users.role_id` referencia a `roles`.
+| `T-BS-005`
+
+| `T-BS-012`
+| Entidades del bloque *ingesta y auditoría*: `ingest_batches`, `ingest_items`,
+  `ext_api_request_log`, `video_access_log`, `api_request_log`, `notification_log`. Las
+  particionadas con PK compuesta `(id, created_at)`.
+| Las seis tablas están modeladas con la PK correcta para particionar por rango.
+| `T-BS-005`
+
+| `T-BS-013`
+| `MIG-BS-001`. Incluye a mano lo que EF Core no genera: los índices únicos *parciales*
+  (`ux_ingest_running`, `ux_snapshot_close`), el `PARTITION BY RANGE`, las extensiones
+  `citext` y `pgcrypto`, y el índice GIN de búsqueda.
+| La migración aplicada sobre una base vacía produce un esquema **idéntico** a
+  `schema_derivado_v2.sql`: 17 tablas, 13 enums, 40 índices, 0 errores. Verificado por
+  comparación automática en la prueba de integración.
+| `T-BS-010`, `T-BS-011`, `T-BS-012`
+
+| `T-BS-014`
+| Semilla de `roles` y `role_permissions` con los cuatro roles y su mapa de permisos sobre
+  seis recursos. Los nombres técnicos son `administrator`, `content_editor`, `auditor` y
+  `viewer` — *no* los de las cuentas de prueba del frontend: el rol de `admin@portal.dev` es
+  `administrator`.
+| Un `SELECT` sobre `role_permissions` devuelve 24 filas y el mismo mapa que declara
+  `guia_roles_permisos_v1.0.adoc` §4.
+| `T-BS-013`
+
+| `T-BS-015`
+| Entrada `MIG-BS-001` en `changelog_modelo_datos.adoc`, **en el mismo commit**.
+| El changelog y la migración están en el mismo commit.
+| `T-BS-013`
+|===
+
+*Traza:* `DOM-BS-04`, `DOM-BS-05`, `DOM-BS-08`, `ADR-BS-004`.
+
+[NOTE]
+====
+`T-BS-013` es la tarea con más probabilidad de morder. EF Core no expresa índices únicos
+parciales con `HasFilter` sobre una expresión constante como `((true))`, ni el
+particionamiento. La migración llevará `migrationBuilder.Sql(...)` con esos fragmentos,
+y `ADR-BS-004` sigue cumpliéndose: EF Core es la fuente del esquema, y el SQL crudo vive
+*dentro* de su migración, no fuera.
+====
+
+== Fase 2 — Identidad
+
+[cols="1,3,2,1",options="header"]
+|===
+| ID | Tarea | Hecho cuando | Depende de
+
+| `T-BS-020`
+| Hash y verificación de contraseña, con comparación en tiempo constante.
+| Una prueba mide que verificar una contraseña correcta y una incorrecta del mismo largo no
+  difiere de forma medible.
+| `T-BS-014`
+
+| `T-BS-021`
+| `LoginCommandHandler`: valida credenciales, construye el mapa de permisos **una sola vez**
+  consultando `role_permissions`, crea la sesión.
+| Un login emite un token cuyos claims de permiso salen de la base, no de una constante.
+| `T-BS-020`
+
+| `T-BS-022`
+| Emisión y validación del JWT de usuario. Claim `aud` propio, validado **antes que
+  cualquier otra comprobación**.
+| Un token de ingesta presentado a `/api/**` se rechaza en el primer filtro, sin llegar a
+  autorización.
+| `T-BS-021`
+
+| `T-BS-023`
+| `/auth/refresh` con rotación y cadena. Al presentar un token ya rotado se revoca **la cadena
+  entera** —siguiendo `replaced_by_session_id`— con `revoked_reason = 'reuse_detected'`.
+| Prueba: sesión A rota a B; presentar A revoca A y B, y deja el motivo registrado. *El
+  atacante y la víctima quedan fuera los dos, que es lo correcto.*
+| `T-BS-022`
+
+| `T-BS-024`
+| `/auth/register` (alta en estado pendiente), `/auth/logout`, y el filtro de autorización por
+  permiso.
+| Un usuario pendiente no puede autenticarse; un usuario sin el permiso recibe `403`, no `404`.
+| `T-BS-022`
+|===
+
+*Traza:* `SEC-BS-02`, `SEC-BS-09`, `ADR-008` del portal.
+
+== Fase 3 — Ingesta
+
+[cols="1,3,2,1",options="header"]
+|===
+| ID | Tarea | Hecho cuando | Depende de
+
+| `T-BS-030`
+| `POST /v1/auth/token`: credenciales de ingesta, `aud` distinto del de usuario. Comparación
+  de `clientSecret` en tiempo constante.
+| El token emitido no abre ningún `/api/**`, y el de usuario no abre ningún `/v1/ingest/**`.
+| `T-BS-022`
+
+| `T-BS-031`
+| `POST /v1/ingest/catalog`: validación completa del lote contra
+  `ingest_catalog_v1.0.yaml`. Incluye `DOM-BS-11` (`storageUri` sin *query string*) y
+  `DOM-BS-13` (`webPlatformId` ajeno ⇒ rechazo).
+| Un lote con un `storageUri` que lleve `?sig=` devuelve `422` y **no aplica nada**.
+| `T-BS-030`, `T-BS-013`
+
+| `T-BS-032`
+| Idempotencia por `batchId`, lote único en ejecución por índice parcial, `heartbeat_at`.
+| Enviar dos veces el mismo `batchId` aplica una sola vez y devuelve el mismo `ingestId`.
+  Dos lotes simultáneos: el segundo recibe `409`.
+| `T-BS-031`
+
+| `T-BS-033`
+| *Upsert* por `(origin, ext_media_id)` y reconciliación por `last_seen_at`: lo que no aparece
+  en la foto se retira.
+| Un lote que omite un recurso presente en el anterior lo deja inaccesible, sin borrarlo.
+| `T-BS-032`
+
+| `T-BS-034`
+| `StorageUriResolver`: descompone `storageUri` en proveedor, contenedor y ruta de forma
+  **genérica**. Nunca reconoce por patrón ni el host ni el nombre del contenedor.
+| Prueba con un URI de Azurite y otro de `blob.core.windows.net`: los dos se descomponen
+  bien, y ninguna regla depende de que el contenedor se llame `…-private`.
+| `T-BS-031`
+
+| `T-BS-035`
+| `GET /v1/ingest/{ingestId}` y `GET /v1/ingest/watermark`.
+| Devuelven el estado real del lote y la marca de agua del último aplicado.
+| `T-BS-032`
+
+| `T-BS-036`
+| Barrido de lotes muertos: un `running` sin `heartbeat_at` reciente se marca fallido y libera
+  el índice.
+| Matar el proceso a mitad de un lote no deja la ingesta bloqueada para siempre.
+| `T-BS-032`
+|===
+
+*Traza:* `DOM-BS-09`, `DOM-BS-10`, `DOM-BS-11`, `DOM-BS-13`, `SEC-BS-10`, `ADR-BS-006`,
+`ADR-BS-007`.
+
+== Fase 4 — Catálogo
+
+[cols="1,3,2,1",options="header"]
+|===
+| ID | Tarea | Hecho cuando | Depende de
+
+| `T-BS-040`
+| *La consulta de acceso.* Resuelve, para un usuario y un conjunto de versiones o recursos,
+  qué puede ver: grupos (`group_version_access`) más excepciones
+  (`user_media_exceptions`). Todo lo demás la reutiliza.
+| Una sola consulta, probada de forma aislada contra una matriz de casos: sin grupo, con
+  grupo, con excepción que concede, con excepción que deniega.
+| `T-BS-033`, `T-BS-024`
+
+| `T-BS-041`
+| `GET /catalog/products`: paginación, búsqueda de texto y filtro por `industry`.
+| Responde el contrato del frontend sin que este cambie una línea.
+| `T-BS-040`
+
+| `T-BS-042`
+| `mediaCount` por `JOIN` — no por filtrado en memoria. Es la razón de ser de `ADR-BS-005`.
+| El plan de ejecución no trae la tabla entera; el número coincide con lo que el usuario ve
+  al entrar.
+| `T-BS-040`
+
+| `T-BS-043`
+| `GET /catalog/products/{id}` y `GET /catalog/versions/{id}/media`.
+| Dos usuarios de grupos distintos reciben listas distintas sobre los mismos datos.
+| `T-BS-042`
+|===
+
+*Traza:* `ADR-BS-005`.
+
+== Fase 5 — Administración
+
+[cols="1,3,2,1",options="header"]
+|===
+| ID | Tarea | Hecho cuando | Depende de
+
+| `T-BS-050`
+| Usuarios: listado, alta, aprobación, suspensión, cambio de rol.
+| Un administrador aprueba una cuenta pendiente y esa cuenta puede autenticarse.
+| `T-BS-024`
+
+| `T-BS-051`
+| Grupos y `group_version_access`: crear, asignar usuarios, conceder versiones.
+| Conceder una versión a un grupo cambia de inmediato lo que ven sus miembros.
+| `T-BS-050`, `T-BS-040`
+
+| `T-BS-052`
+| `user_media_exceptions`: conceder o denegar un recurso concreto a un usuario concreto.
+| Una excepción que deniega gana sobre el acceso que le da su grupo.
+| `T-BS-051`
+
+| `T-BS-053`
+| Consulta de los registros: `api_request_log`, `ext_api_request_log`, `notification_log`.
+  Ningún log muestra `clientSecret`, `accessToken`, `password_hash` ni `token`.
+| Una prueba recorre los registros buscando esos campos y falla si encuentra alguno.
+| `T-BS-050`
+
+| `T-BS-054`
+| `POST /admin/sync` → llamada de reingesta al microservicio de SinsaTools (`DEC-BS-07`).
+  *Mientras ese endpoint no exista:* devuelve `503` con un mensaje explícito y el frontend
+  apaga el botón por configuración.
+| El `503` lleva un mensaje que un administrador entiende sin abrir el log. El día que
+  respondan, cambia la URL de destino y nada más.
+| `T-BS-035`
+|===
+
+*Traza:* `SEC-BS-04`, `DEC-BS-07`.
+
+== Fase 6 — Simulador y aceptación
+
+Esta fase es la que permite terminar la Entrega 1 sin SinsaTools, y además es *la mejor
+prueba del contrato que les vamos a pedir que implementen*. Si el simulador no puede
+construir un lote válido, el contrato está mal escrito.
+
+[cols="1,3,2,1",options="header"]
+|===
+| ID | Tarea | Hecho cuando | Depende de
+
+| `T-BS-060`
+| Extractor: convierte `fixtures.ts` del frontend en un JSON canónico —250 productos,
+  613 versiones, 1.842 recursos—.
+| Los tres recuentos cuadran exactamente con el mock.
+| —
+
+| `T-BS-061`
+| Emisor: construye lotes conformes al contrato desde ese JSON y los empuja contra
+  `/v1/ingest/catalog`. Incluye un modo «foto incompleta» para probar la reconciliación.
+| Un `docker compose up` seguido de un comando deja el catálogo completo cargado.
+| `T-BS-060`, `T-BS-033`
+
+| `T-BS-062`
+| Suite E2E del criterio de aceptación.
+| *Un usuario de un grupo con acceso a tres softwares inicia sesión en el frontend sin tocar
+  el mock, ve exactamente esos tres, y el `mediaCount` coincide con lo que el `JOIN` le
+  concede. Otro usuario, otro catálogo, mismos datos.*
+| `T-BS-061`, `T-BS-043`
+
+| `T-BS-063`
+| `verify.sh`: build, pruebas con cobertura, `dotnet format --verify-no-changes`, `gitleaks`.
+  Umbral **80 % global y 100 % en `MediaAccessEvaluator`, `SessionService` y
+  `PermissionResolver`** (`EST-BS-08`).
+| Un comando decide si la rama es entregable, y bajar del 100 % en esas tres clases lo tumba.
+| `T-BS-062`, `T-BS-006`
+|===
+
+== Entrega 2 — Fase 7, fuera de este alcance
+
+Se lista para que se vea el encaje, no para hacerla ahora.
+
+[cols="1,3,1",options="header"]
+|===
+| ID | Tarea | Precondición
+
+| `T-BS-070`
+| `GET /media/{id}/access` — metadatos y veredicto, nunca una URL de almacenamiento.
+| `DEC-BS-11` ✅ ya resuelta
+
+| `T-BS-071`
+| Proxy `GET /media/{id}/stream` con propagación de `Range` y respuesta `206`.
+| `DEC-BS-15` — *el rol de lectura, plazo ajeno*
+
+| `T-BS-072`
+| `video_access_log` y límite de transferencias concurrentes (`DT-BS-08`).
+| `T-BS-071`
+
+| `T-BS-073`
+| Service Worker contra la URL estable del proxy.
+| `T-BS-071`
+|===
+
+== Orden de ataque
+
+[source,text]
+----
+F0 Cimientos ──► F1 Datos ──┬──► F2 Identidad ──┬──► F4 Catálogo ──► F6 Aceptación
+                            │                   │                        ▲
+                            └──► F3 Ingesta ────┴──► F5 Administración ──┘
+                                      │
+                                      └──► F6 Simulador (T-BS-060 se puede adelantar: no
+                                           depende de nada, solo del fixtures.ts)
+----
+
+*Dos cosas se pueden hacer en paralelo desde el primer día:* `T-BS-060`, que no depende de
+nada nuestro, y las dos peticiones a SinsaTools —el rol `Storage Blob Data Reader`, el `Id` de
+`Web_Platforms` y ahora también el endpoint de reingesta—.
+
+== Lo que este plan deliberadamente no hace
+
+* *No despliega a Azure.* La Entrega 1 vive en `docker-compose`. La infraestructura es
+  Entrega 2, cuando haya algo que servir que lo necesite.
+* *No reproduce material privado.* Sin el rol no hay bytes que servir.
+* *No implementa notificaciones.* `notification_log` existe en el esquema; enviar correos no
+  entra en la Entrega 1.
+* *No optimiza.* Índices los del modelo; si algo va lento se mide primero.
+
+== Riesgos de ejecución
+
+[cols="1,3,2",options="header"]
+|===
+| Riesgo | Por qué | Mitigación
+
+| `T-BS-013` se desvía del DDL verificado
+| EF Core no expresa índices parciales ni particionamiento, y el SQL crudo se escribe a mano.
+| La comparación automática contra `schema_derivado_v2.sql` es parte del criterio de la tarea,
+  no una revisión posterior.
+
+| La consulta de acceso (`T-BS-040`) se reimplementa en cada endpoint
+| Es la tentación natural: cada endpoint tiene su forma.
+| Se escribe *una vez*, se prueba aislada, y los demás la componen. Si aparece una segunda
+  versión, es un fallo de revisión.
+
+| Equipo de una persona
+| Cualquier ausencia detiene el proyecto. Riesgo ya registrado.
+| Fases cerradas y criterios binarios: cualquiera que retome el trabajo sabe dónde está la
+  línea.
+
+| El `503` de `T-BS-054` se queda para siempre
+| Es la vía fácil, y nadie la nota porque el botón está apagado.
+| La pregunta 11 al equipo de SinsaTools y `DEC-BS-07` quedan abiertas en `00_Estado_Actual`
+  hasta que el endpoint responda de verdad.
+|===
+
+include::{root}/_nav.adoc[]

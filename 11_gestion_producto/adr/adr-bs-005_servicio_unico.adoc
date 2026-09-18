@@ -1,0 +1,246 @@
+= ADR-BS-005 — El Bridge Service es el backend del portal
+:author: Equipo de Desarrollo
+:revnumber: 1.0
+:revdate: 2026-09-16
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:icons: font
+:lang: es
+:root: ../..
+:section-id: gestion-producto
+:section-title: Gestión de Producto
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+[cols="1,3"]
+|===
+| *Estado* | ✅ *Aceptada*
+| *Fecha* | 2026-09-16
+| *Supera a* | REST-BS-03 en su lectura de «dos servicios»; el modelo de tres capas de `arquitectura_tecnica_v1.1`
+| *Depende de* | —
+| *Bloquea* | Nada. La desbloquea: `DEC-BS-01` y `DEC-BS-02` quedan sin objeto
+|===
+
+== Contexto
+
+Hasta el 2026-09-16 la documentación describía **tres** componentes de servidor:
+
+[source]
+----
+SinsaTools → Bridge Service → Backend del Portal → Frontend Angular
+              réplica Postgres  réplica Postgres
+----
+
+Esa arquitectura nunca se contrastó contra el código, porque el código no existía. Al
+revisar el repositorio `Sin-PortalVideos` —frontend Angular 21, 9 commits, 94 % de
+cobertura, mock completo— aparecieron tres hechos que la contradicen:
+
+. **El backend del portal no existe en ningún sitio.** No hay repositorio, ni carpeta, ni
+  commit. El frontend apunta a `https://localhost:7001` a través de `proxy.conf.json` y
+  nadie escucha ahí.
+. **`Sin-PortalBridge` está vacío.** Un solo commit y un `README.md` que es una copia del
+  README del frontend. Es el único repositorio de servidor que existe.
+. **El frontend no conoce al Bridge.** Sus seis contratos OpenAPI describen `/api/...`.
+  Las rutas `/v1/softwares` y `/v1/videos/updates` aparecen *una sola vez*, en la prosa
+  descriptiva de `api_sync.yaml`, y nunca como operación.
+
+A esto se suma una restricción de equipo que la v1.1 ya registraba como riesgo: **un solo
+desarrollador** (`RNF-BS-07`, y el riesgo _«equipo de una persona — cualquier ausencia
+detiene el proyecto por completo»_ en `00_Estado_Actual`).
+
+El detonante de la decisión fue directo: preguntado por quién sirve `/api`, el responsable
+técnico respondió que *«el portal no tiene su schema, eso nunca pasa, solo consumirá lo que
+bridge le dé»*, y describió el proyecto como *«el puente entre SinsaTools y el frontend»*.
+
+== Opciones evaluadas
+
+=== Opción A — Dos servicios, cada uno con su réplica
+
+Lo documentado en la v1.1. El Bridge mantiene una réplica del catálogo y la expone en
+`/v1/`; el backend del portal mantiene *su propia* réplica, la sincroniza cada hora contra el
+Bridge, y sirve `/api` al frontend. Dos despliegues, dos bases de datos, el catálogo copiado
+dos veces.
+
+=== Opción B — Dos servicios, el portal sin réplica
+
+El backend del portal sirve `/api` pero no persiste catálogo: consulta al Bridge en caliente
+en cada request. Dos despliegues, una base de datos de catálogo.
+
+=== Opción C — Un servicio
+
+El Bridge sirve `/api` directamente al frontend: identidad, permisos, catálogo y proxy de
+streaming, todo contra una única base de datos. Un despliegue, una base.
+
+=== Tabla comparativa
+
+[cols="2,1,1,1",options="header"]
+|===
+| Criterio | A · Dos + dos réplicas | B · Dos + pass-through | C · Uno
+
+| Despliegues a operar
+| 2
+| 2
+| ✅ 1
+
+| Bases de datos
+| 2, catálogo duplicado
+| 1
+| ✅ 1
+
+| Copias del catálogo
+| 2
+| 1
+| ✅ 1
+
+| Latencia del dato hasta el usuario
+| ❌ Suma de dos cadencias
+| ✅ Un salto
+| ✅ Un salto
+
+| Contratos internos a mantener
+| ❌ Los 4 `bridge_*.yaml`, con versionado
+| ❌ Los 4 `bridge_*.yaml`
+| ✅ Ninguno: es una llamada de método
+
+| FK entre permisos y catálogo
+| ❌ Imposible: bases distintas
+| ❌ Imposible
+| ✅ Integridad referencial real
+
+| `mediaCount` por usuario
+| ❌ Filtrado en memoria
+| ❌ Filtrado en memoria
+| ✅ Un `JOIN`
+
+| Paginación y búsqueda del catálogo
+| Resuelta en el portal
+| ❌ Obliga a añadir paginación, búsqueda y filtro a `/v1/softwares`
+| ✅ En la consulta SQL
+
+| Superficie que abre el túnel a la red corporativa
+| ✅ Solo el Bridge
+| ✅ Solo el Bridge
+| ⚠️ El mismo servicio que expone el login
+
+| Pipelines de CI
+| 2
+| 2
+| ✅ 1
+
+| Costo mensual añadido
+| ❌ 2 App Service + 2 PostgreSQL
+| 2 App Service + 1 PostgreSQL
+| ✅ 1 App Service + 1 PostgreSQL
+
+| Esfuerzo para 1 desarrollador
+| ❌ Alto
+| Medio-alto
+| ✅ Medio
+
+| Reversibilidad
+| —
+| Media
+| ✅ Alta: separar después no cambia el modelo de datos
+|===
+
+[NOTE]
+====
+La columna «superficie que abre el túnel» era el argumento fuerte a favor de A y B, y
+*dejó de serlo el mismo día*: con ADR-BS-006 nadie abre ningún túnel. El Bridge no se conecta
+a la red corporativa, es SinsaTools quien nos llama. Evaluada esa fila con la información
+correcta, las tres opciones empatan.
+====
+
+== Decisión
+
+*Se elige la opción C — un solo servicio. El Bridge Service es el backend del Portal de
+Videos.*
+
+== Justificación
+
+. **La opción A resuelve un problema que no tenemos.** Su única ventaja real era contener la
+  exposición de la red corporativa, y ADR-BS-006 elimina esa exposición por completo. Lo que
+  queda de A es el coste: dos despliegues, dos pipelines, dos esquemas EF Core, el catálogo
+  replicado dos veces y una cadena de latencia que había que gestionar —era `DEC-BS-01`, la
+  decisión roja que llevaba un mes bloqueando el `SyncWorker`—. Se pagaba todo eso por un
+  beneficio que ya no existe.
+
+. **La opción B empeora el contrato en vez de simplificarlo.** Sin réplica en el portal,
+  cada listado de catálogo se convierte en una llamada HTTP al Bridge, y `GET /v1/softwares`
+  —que hoy devuelve el catálogo entero sin paginar— tendría que crecer para admitir
+  paginación, búsqueda de texto y filtro por industria. Es decir: reimplementar en un
+  contrato REST lo que PostgreSQL ya hace con dos índices.
+
+. **A y B hacen imposible la integridad referencial de los permisos.** `group_version_access`
+  y `user_media_exceptions` apuntan a versiones y recursos del catálogo. Con el catálogo en
+  otra base de datos, esas referencias son enteros sin clave foránea: nada impide conceder
+  acceso a una versión que ya no existe, y nada limpia los permisos cuando desaparece. Con
+  una sola base son `REFERENCES` de verdad.
+
+. **`mediaCount` obliga a cruzar catálogo y permisos.** El contrato lo define como _«número de
+  medios accesibles por el usuario autenticado en esta versión»_. Es un `JOIN` entre `catalog_media`,
+  `group_version_access` y `user_media_exceptions`. Separados, hay que traer los recursos de
+  la versión por HTTP y filtrarlos en memoria en cada request.
+
+. **El contrato bilateral era consigo mismo.** `REST-BS-06` exigía aprobación del «Tech Lead
+  del Portal» para tocar los `bridge_*.yaml`. Con un solo desarrollador, esa figura y el
+  autor del Bridge son la misma persona. Un contrato versionado, con ejemplos y reglas de
+  compatibilidad, cuyo único consumidor es uno mismo, es ceremonia sin contraparte.
+
+. **Es la opción reversible.** El modelo de datos de C no impide separar después: los tres
+  bloques —catálogo, identidad, ingesta— están ya delimitados, y extraer el de catálogo a su
+  propio servicio es mover tablas y sustituir llamadas de método por HTTP. Al revés no
+  funciona: partir de A y fusionar obliga a rehacer las claves y a decidir qué réplica manda.
+
+== Consecuencias
+
+=== Positivas
+
+* **`DEC-BS-01` y `DEC-BS-02` quedan sin objeto.** Eran las dos decisiones rojas que
+  bloqueaban el `SyncWorker` y el despliegue a staging. No se resuelven: desaparecen.
+* Una sola cadencia de actualización, y por tanto una sola medida de frescura.
+* Integridad referencial entre permisos y catálogo, garantizada por la base de datos.
+* Un despliegue, un pipeline, un esquema, una migración, un `docker-compose`.
+* Menos coste de infraestructura: un App Service y un PostgreSQL en vez de dos de cada.
+* Los cuatro `bridge_*.yaml` dejan de ser deuda de mantenimiento.
+
+=== Negativas y compromisos
+
+* **El servicio que expone el login público es también el que recibe la ingesta.** Un fallo
+  de autorización en la frontera de ingesta tiene consecuencias mayores que en un servicio
+  aislado. Mitigación obligatoria: `SEC-BS-09` — credenciales independientes, claim `aud`
+  distinto, y validación de `aud` *antes* que cualquier otra comprobación. Un token de
+  ingesta no abre ningún `/api`, y un token de administrador no abre ningún `/v1/ingest`.
+
+* **Escalado acoplado.** Un pico de ingesta y un pico de tráfico de usuarios comparten
+  instancia. Hoy es aceptable —la ingesta es esporádica y el portal, privado y de pocos
+  clientes— pero si el streaming empieza a saturar instancias, la ingesta lo sufrirá.
+  Registrado como `DT-BS-08` (el proxy ocupa un hilo por transferencia).
+
+* **Un despliegue fallido tumba las dos caras.** Antes, un error en el Bridge dejaba el
+  portal sirviendo su réplica. Ahora no hay ese aislamiento. Mitigación: *deployment slots*
+  de App Service con intercambio, para que el arranque se valide antes de recibir tráfico.
+
+* **Trabajo tirado.** Los cuatro `bridge_*.yaml`, `RF-BS-03`, `RF-BS-04`, `RF-BS-09`,
+  `RF-BS-10` y `RF-BS-11` pierden su objeto. Se mueven a `_historico/` y sus números quedan
+  quemados.
+
+* **Dos documentaciones para un solo servicio.** `bridge-docs` y `portal-docs` duplican
+  convenciones, glosario e índice. Resuelto el 2026-09-17 (`DEC-BS-12`): no se funden, se fija
+  una frontera explícita en `portal-docs/Frontera_Documental.adoc`.
+
+=== Reglas derivadas, de cumplimiento obligatorio
+
+[cols="1,4",options="header"]
+|===
+| ID | Regla
+
+| SEC-BS-09 | Las credenciales de ingesta y las de usuario son independientes. La validación del claim `aud` precede a cualquier otra comprobación de autorización.
+| REST-BS-11 | El contrato del frontend ya está implementado y probado del lado del cliente. El servidor se adapta a él; una divergencia es un fallo del servidor.
+|===
+
+include::{root}/_nav.adoc[]

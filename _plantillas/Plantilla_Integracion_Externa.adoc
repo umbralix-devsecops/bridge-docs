@@ -1,0 +1,139 @@
+= Integración externa — {Nombre de la contraparte} v1.0
+:author: Equipo de Desarrollo
+:revnumber: 1.0
+:revdate: AAAA-MM-DD
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:icons: font
+:lang: es
+:root: ..            # ajustar a la profundidad del destino al copiar
+:section-id: integraciones-externas
+:section-title: Integraciones Externas
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+// ═══════════════════════════════════════════════════════════════════
+// INSTRUCCIONES (borrar al rellenar)
+// Este documento describe una contraparte que NO controlamos.
+// Regla de oro: separar siempre lo VERIFICADO de lo SUPUESTO.
+// Un supuesto no marcado como tal acaba tratado como hecho.
+// ═══════════════════════════════════════════════════════════════════
+
+== Identificación de la contraparte
+
+[cols="1,3",options="header"]
+|===
+| Aspecto | Detalle
+
+| Nombre | {sistema o equipo}
+| Rol en la integración | {proveedor / consumidor / ambos}
+| Dueño | {equipo interno / proveedor externo / tercero}
+| Podemos modificarlo | {sí / no}
+| Canal de coordinación | {cómo se acuerdan los cambios}
+| Repositorio de su documentación | {ruta o "no disponible"}
+|===
+
+== Contrato de integración
+
+[cols="2,3",options="header"]
+|===
+| Aspecto | Detalle
+
+| Protocolo | {REST / SOAP / cola de mensajes / acceso directo a BD}
+| Formato | {JSON / XML / TDS}
+| Autenticación | {mecanismo}
+| Documento de contrato | {archivo YAML o "acuerdo verbal — riesgo"}
+| Versionado | {cómo se versiona}
+| Es bilateral | {sí — no se modifica unilateralmente / no}
+|===
+
+== Qué consumimos de ellos
+
+[cols="2,3,1",options="header"]
+|===
+| Recurso | Uso | Frecuencia
+
+| {endpoint o tabla} | {para qué lo usamos} | {cada cuánto}
+|===
+
+== Qué les exponemos
+
+[cols="2,3,1",options="header"]
+|===
+| Recurso | Quién lo consume | Frecuencia
+
+| {endpoint} | {su componente} | {cada cuánto}
+|===
+
+== Lo que sabemos con certeza
+
+// Verificado: probado contra el sistema real, o documentado en un
+// contrato firmado por ambas partes.
+
+* {hecho verificado, y cómo se verificó}
+
+== Lo que estamos suponiendo
+
+[cols="3,2,1",options="header"]
+|===
+| Supuesto | Impacto si es falso | Cómo verificarlo
+
+| {supuesto} | {consecuencia} | {acción concreta}
+|===
+
+[WARNING]
+====
+Todo supuesto sin verificar sobre un sistema que no controlamos es un riesgo abierto.
+Registrarlo también en `00_Estado_Actual.adoc`.
+====
+
+== Comportamiento ante fallos
+
+[cols="2,2,3",options="header"]
+|===
+| Fallo de la contraparte | Cómo lo detectamos | Cómo respondemos
+
+| No disponible | {health check / timeout} | {degradar / reintentar / fallar}
+| Respuesta malformada | {validación} | {respuesta}
+| Datos incompletos silenciosamente | {métrica de deriva} | {alerta}
+|===
+
+[IMPORTANT]
+====
+El fallo más peligroso de una integración externa no es la caída, que es ruidosa y
+evidente. Es la *degradación silenciosa*: respuestas `200` con datos incompletos.
+Toda integración necesita al menos una métrica que detecte eso.
+====
+
+== Límites y cuotas
+
+[cols="2,2,2",options="header"]
+|===
+| Límite | Valor | Qué pasa al superarlo
+
+| {rate limit / tamaño / concurrencia} | {valor} | {consecuencia}
+|===
+
+== Puntos de coordinación abiertos
+
+[cols="2,3,1",options="header"]
+|===
+| Tema | Qué hay que acordar | Estado
+
+| {tema} | {decisión conjunta pendiente} | {🔴 / 🟡 / 🟢}
+|===
+
+== Historial de versiones
+
+[cols="1,1,3",options="header"]
+|===
+| Versión | Fecha | Cambios
+
+| 1.0 | AAAA-MM-DD | Versión inicial
+|===
+
+include::{root}/_nav.adoc[]

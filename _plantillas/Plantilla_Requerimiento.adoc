@@ -1,0 +1,128 @@
+= Requerimientos — {Nombre del ámbito} v1.0
+:author: Equipo de Desarrollo
+:revnumber: 1.0
+:revdate: AAAA-MM-DD
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:icons: font
+:lang: es
+:root: ..
+:section-id: requerimientos
+:section-title: Requerimientos
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+// ═══════════════════════════════════════════════════════════════════
+// INSTRUCCIONES (borrar al rellenar)
+// · Un RF describe QUÉ hace el sistema, nunca CÓMO.
+// · Todo RF debe ser verificable: si no se puede escribir un criterio
+//   de aceptación, no es un requerimiento, es un deseo.
+// · Los IDs no se reutilizan jamás.
+// ═══════════════════════════════════════════════════════════════════
+
+== Propósito y alcance
+
+=== Qué cubre
+
+=== Qué NO cubre
+
+== Actores
+
+[cols="1,2,3",options="header"]
+|===
+| Actor | Tipo | Interacción con el sistema
+
+| {nombre} | {humano / sistema} | {qué hace}
+|===
+
+== Requerimientos funcionales
+
+[cols="1,3,1,2",options="header"]
+|===
+| ID | Requerimiento | Prioridad | Verificable mediante
+
+| RF-BS-01
+| El sistema debe {acción observable}
+| 🔴 Must
+| {CU-DOM-NNN o test}
+|===
+
+=== Detalle por requerimiento
+
+==== RF-BS-01 — {título}
+
+*Descripción:* {qué hace el sistema}
+
+*Origen:* {quién lo pide y por qué}
+
+*Criterios de aceptación:*
+
+* Dado {contexto}, cuando {acción}, entonces {resultado observable}
+
+*Casos de uso que lo implementan:* {CU-DOM-NNN}
+
+*Restricciones aplicables:* {REST-BS-NN}
+
+== Requerimientos no funcionales
+
+[cols="1,2,2,2",options="header"]
+|===
+| ID | Categoría | Objetivo medible | Cómo se mide
+
+| RNF-BS-01 | Disponibilidad | ≥ {X} % mensual | {fuente de la métrica}
+| RNF-BS-02 | Latencia | p95 < {X} ms en {endpoint} | {fuente}
+| RNF-BS-03 | Observabilidad | {objetivo} | {fuente}
+|===
+
+[NOTE]
+====
+Un RNF sin número y sin fuente de medición no es un RNF: es una aspiración.
+«El sistema debe ser rápido» no se puede verificar ni incumplir.
+====
+
+== Restricciones técnicas
+
+[cols="1,3,2",options="header"]
+|===
+| ID | Restricción | Origen
+
+| REST-BS-01 | {restricción impuesta} | {decisión previa, contrato, limitación externa}
+|===
+
+== Supuestos y dependencias
+
+[cols="3,2",options="header"]
+|===
+| Supuesto | Qué pasa si resulta falso
+
+| {supuesto que no hemos verificado} | {impacto}
+|===
+
+== Fuera de alcance
+
+// Explícito. Lo que alguien podría razonablemente esperar y NO vamos a hacer,
+// con el motivo.
+
+== Trazabilidad
+
+[cols="1,2,2",options="header"]
+|===
+| RF | Casos de uso | ADR que lo gobierna
+
+| RF-BS-01 | CU-DOM-NNN | ADR-BS-NNN
+|===
+
+== Historial de versiones
+
+[cols="1,1,3",options="header"]
+|===
+| Versión | Fecha | Cambios
+
+| 1.0 | AAAA-MM-DD | Versión inicial
+|===
+
+include::{root}/_nav.adoc[]

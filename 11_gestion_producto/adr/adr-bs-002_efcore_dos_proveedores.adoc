@@ -1,0 +1,237 @@
+= ADR-BS-002 — EF Core 8 con dos proveedores
+:author: Equipo de Desarrollo
+:revnumber: 1.1
+:revdate: 2026-08-22
+:revremark: Revisada el 2026-09-16: queda un solo proveedor. La mitad DB-First queda sin objeto
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:icons: font
+:lang: es
+:root: ../..
+:section-id: gestion-producto
+:section-title: Gestión de Producto
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+[cols="1,3"]
+|===
+| *Estado* | ✅ *Aceptada* — revisada el 2026-09-16: queda **un solo proveedor**
+| *Fecha* | 2026-08-22
+| *Depende de* | ADR-BS-001 (existe una BD propia que necesita su propio acceso a datos)
+| *Relacionada con* | ADR-001 del portal (Clean Architecture en .NET)
+| *Revisada por* | xref:adr-bs-006_ingesta_por_empuje.adoc[ADR-BS-006]
+|===
+
+== Contexto
+
+Tras ADR-BS-001, el Bridge Service tiene que hablar con *dos motores de base de datos con
+características opuestas*:
+
+[cols="1,2,2",options="header"]
+|===
+| | SQL Server on-premise | PostgreSQL Azure
+
+| Dueño del esquema | Terceros | Este equipo
+| Conocimiento del esquema | *Desconocido* — solo los campos del contrato | Total
+| Modo de acceso | Lectura + escrituras menores | Lectura y escritura
+| Puede cambiar sin aviso | Sí | No
+| Migraciones | Prohibidas | Necesarias
+| Complejidad de consulta | Alta: unificar `Images` + `Entity_Files` + `Files` | Baja
+|===
+
+El equipo es de *un solo desarrollador .NET*, lo que penaliza cualquier opción que
+multiplique el código de infraestructura a mantener.
+
+== Opciones evaluadas
+
+=== Opción A — Dapper en ambos extremos
+
+Micro-ORM sobre SQL explícito. Sin tracking, sin migraciones, sin abstracción del esquema.
+
+=== Opción B — EF Core 8 en ambos extremos, con dos estilos
+
+DB-First con scaffolding contra el SQL Server on-premise; Code-First con migraciones contra
+el PostgreSQL propio.
+
+=== Opción C — Híbrido: Dapper para on-premise, EF Core para PostgreSQL
+
+Cada extremo con la herramienta que mejor le encaja.
+
+=== Tabla comparativa
+
+[cols="2,1,1,1",options="header"]
+|===
+| Criterio | A · Dapper | B · EF Core | C · Híbrido
+
+| Migraciones para el esquema propio
+| ❌ Manuales, con SQL a mano
+| ✅ `dotnet ef migrations`
+| ✅ EF en el lado propio
+
+| Encaje con esquema ajeno y desconocido
+| ✅ SQL explícito, sin sorpresas
+| ⚠️ Requiere re-scaffolding
+| ✅
+
+| Consistencia con el portal backend
+| ⚠️ Stack distinto
+| ✅ Idéntico
+| ⚠️ Mixto
+
+| Curva para 1 desarrollador
+| Media: hay que escribir todo el SQL
+| ✅ Baja: patrón ya conocido
+| ❌ Alta: dos modelos mentales
+
+| Control de la consulta de unificación multimedia
+| ✅ Total
+| ⚠️ Requiere `FromSqlRaw` en el caso complejo
+| ✅
+
+| Riesgo al cambiar el esquema on-premise
+| Falla en tiempo de ejecución
+| Falla en tiempo de ejecución
+| Falla en tiempo de ejecución
+
+| Dependencias del proyecto
+| 1 paquete
+| 2 proveedores EF
+| 3 paquetes
+
+| Testing con Testcontainers
+| Requiere fixtures a mano
+| ✅ Soporte directo
+| ⚠️ Doble configuración
+|===
+
+[NOTE]
+====
+Ninguna opción protege contra un cambio en el esquema on-premise: las tres fallan en tiempo
+de ejecución, no de compilación. Ese riesgo es inherente al problema, no a la herramienta,
+y queda registrado como DT-BS-01.
+====
+
+== Decisión
+
+*Se elige la opción B — EF Core 8 en ambos extremos, con estilos opuestos:*
+
+* `OnPremiseDbContext` → `Microsoft.EntityFrameworkCore.SqlServer`, *DB-First* por
+  scaffolding, `AsNoTracking()` global, sin migraciones.
+* `BridgeDbContext` → `Npgsql.EntityFrameworkCore.PostgreSQL`, *Code-First* con migraciones.
+
+== Justificación
+
+. *Un solo modelo mental para un solo desarrollador.* La opción C es la más elegante en el
+  papel y la peor en la práctica para un equipo de una persona: obliga a mantener dos
+  formas distintas de pensar el acceso a datos, dos estilos de test y dos maneras de
+  depurar. El costo de contexto supera la ganancia técnica.
+
+. *Consistencia con el portal backend.* El mismo desarrollador puede acabar tocando ambos
+  repositorios. Compartir stack de acceso a datos reduce la fricción de saltar entre ellos.
+
+. *Las migraciones del esquema propio son un requisito real.* El caché de ADR-BS-001 va a
+  evolucionar conforme el contrato crezca. Hacerlo con SQL manual y versionado a mano es
+  precisamente el tipo de tarea que se degrada cuando la mantiene una sola persona.
+
+. *El scaffolding es aceptable para un esquema de solo lectura.* No necesitamos que EF
+  modele el esquema on-premise con fidelidad, solo que lea las tablas del contrato. Y para
+  la consulta compleja de unificación multimedia siempre queda `FromSqlRaw`, que da el
+  mismo control que Dapper cuando hace falta.
+
+. *Testcontainers funciona de forma directa con ambos proveedores*, lo que mantiene la
+  estrategia de testing de integración alineada con el estándar del proyecto.
+
+== Consecuencias
+
+=== Positivas
+
+* Migraciones versionadas y reproducibles para el esquema propio.
+* Un único patrón de acceso a datos, tests y depuración.
+* Escape hatch disponible: `FromSqlRaw` cubre la consulta de unificación multimedia sin
+  cambiar de herramienta.
+* Testing de integración con bases de datos reales en Docker, sin mocks de acceso a datos.
+
+=== Negativas y compromisos
+
+* *Dos proveedores EF en el mismo proyecto.* `Npgsql.EntityFrameworkCore.PostgreSQL` y
+  `Microsoft.EntityFrameworkCore.SqlServer` conviven en `BridgeService.Infrastructure`.
+  Todos los comandos del CLI de EF exigen `--context` explícito, o fallan.
+* *El scaffolding es manual.* Regenerar el modelo del esquema on-premise es una tarea
+  humana, en su propio commit, que además obliga a revisar `MediaMapper`. Registrado
+  como DT-BS-01.
+* *Riesgo de migración accidental contra on-premise.* Mitigación obligatoria:
+  `OnPremiseDbContext` se registra *sin* `IDesignTimeDbContextFactory`, de modo que el CLI
+  de EF no pueda apuntarle aunque se lo indique.
+* *Peso en memoria.* Dos proveedores cargados aumentan el arranque en frío del App Service.
+  Es marginal, pero medible en planes pequeños.
+
+=== Reglas derivadas, de cumplimiento obligatorio
+
+[cols="1,4",options="header"]
+|===
+| ID | Regla
+
+| SEC-BS-03 | Toda consulta a on-premise va parametrizada. Prohibida la interpolación de strings, también dentro de `FromSqlRaw`.
+| SEC-BS-07 | El usuario de BD on-premise tiene `SELECT` sobre las tablas del contrato y `UPDATE` solo sobre columnas de marca de sincronización.
+| DOM-BS-01 | `OnPremiseDbContext` usa `QueryTrackingBehavior.NoTracking` a nivel de contexto.
+| DOM-BS-02 | Prohibido ejecutar migraciones contra `OnPremiseDbContext`.
+| DOM-BS-03 | `CommandTimeout` explícito y configurable en la conexión on-premise; por defecto 30 s.
+|===
+
+
+[IMPORTANT]
+====
+== Revisión del 2026-09-16 — la mitad DB-First queda sin objeto
+
+xref:adr-bs-006_ingesta_por_empuje.adoc[ADR-BS-006] establece que el Bridge Service nunca
+accede a la base de datos de SinsaTools. Con ello desaparece la mitad de esta decisión.
+
+.Qué queda y qué se cae
+[cols="1,1,3",options="header"]
+!===
+! Elemento ! Estado ! Nota
+
+! `BridgeDbContext` → Npgsql, Code-First con migraciones
+! ✅ Vigente
+! Renombrado a `AppDbContext`: ya no es el contexto de un caché, es el de todo el sistema.
+
+! `OnPremiseDbContext` → SqlServer, DB-First por scaffolding
+! ⛔ Sin objeto
+! No hay esquema ajeno que mapear.
+
+! `Microsoft.EntityFrameworkCore.SqlServer`
+! ⛔ Se retira
+! Con él desaparecen los dos proveedores conviviendo, el `--context` obligatorio en el CLI de
+  EF y el peso extra en el arranque en frío. Las tres eran consecuencias negativas declaradas
+  en este mismo ADR.
+
+! Testcontainers con SQL Server
+! ⛔ Se retira
+! Solo queda el contenedor de PostgreSQL.
+!===
+
+.Reglas derivadas afectadas
+[cols="1,1,3",options="header"]
+!===
+! ID ! Estado ! Nota
+
+! SEC-BS-03 ! ✅ Vigente, reformulada ! *Toda* consulta va parametrizada, no solo las de on-premise.
+! SEC-BS-07 ! ⛔ Dada de baja ! No hay usuario de BD on-premise. Número quemado.
+! DOM-BS-01 ! ⛔ Dada de baja ! Gobernaba `OnPremiseDbContext`. Número quemado.
+! DOM-BS-02 ! ⛔ Dada de baja ! Ídem.
+! DOM-BS-03 ! ⛔ Dada de baja ! Ídem. Con ella muere también la contradicción viva entre los 30 s que decía este ADR y los 8 s de REST-BS-09.
+!===
+
+También se da de baja `DT-BS-01` (scaffolding manual): era la consecuencia negativa principal
+de esta decisión y desaparece con ella.
+
+*La justificación original se sostiene.* El argumento decisivo era _«un solo modelo mental
+para un solo desarrollador»_, y la revisión lo refuerza: ahora hay un solo motor, un solo
+proveedor y un solo estilo de acceso a datos. El ADR no se supera; se simplifica.
+====
+
+include::{root}/_nav.adoc[]

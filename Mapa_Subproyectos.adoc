@@ -1,0 +1,332 @@
+= Mapa de subproyectos y contrapartes
+:author: Equipo de Desarrollo
+:revnumber: 2.0
+:revdate: 2026-09-16
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:icons: font
+:lang: es
+:root: .
+:section-id: mapa-subproyectos
+:section-title: Mapa de subproyectos
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+== Panorama
+
+[source,mermaid]
+----
+flowchart TB
+    subgraph EXT["Terceros · SinsaTools"]
+        OP[("SQL Server<br/>fuente de verdad del catálogo")]
+        MS["Microservicio de integraciones<br/><i>nuestra única contraparte</i>"]
+    end
+
+    subgraph SYS["PORTAL DE VIDEOS · un solo sistema"]
+        FE["Sin-PortalVideos<br/>Angular 21 · SPA + PWA"]
+        BS["Sin-PortalBridge<br/>Bridge Service · .NET 8"]
+        PG[("PostgreSQL 16<br/>única base de datos")]
+    end
+
+    subgraph DOCS["Documentación"]
+        BD["bridge-docs<br/><i>este repositorio</i>"]
+        PD["portal-docs"]
+    end
+
+    BLOB[("Almacenamiento<br/>de recursos")]
+
+    OP --> MS
+    MS -->|"POST /v1/ingest/catalog"| BS
+    FE -->|"/api · User JWT"| BS
+    BS <--> PG
+    BS -->|"proxy de streaming"| BLOB
+    BD -.->|"referencia mutua"| PD
+----
+
+[IMPORTANT]
+====
+*Ya no hay dos proyectos con una frontera entre ellos.* Desde
+xref:11_gestion_producto/adr/adr-bs-005_servicio_unico.adoc[ADR-BS-005] el Bridge Service
+*es* el backend del Portal de Videos: un solo servicio, una sola base de datos, un solo
+despliegue. Lo que queda de «subproyectos» son cuatro repositorios y una contraparte externa.
+
+La única frontera real del sistema está en el microservicio de integraciones de SinsaTools.
+Todo lo que queda a su izquierda es de otro equipo y no lo tocamos
+(xref:11_gestion_producto/adr/adr-bs-006_ingesta_por_empuje.adoc[ADR-BS-006]).
+====
+
+== Repositorios
+
+[cols="2,2,2,1",options="header"]
+|===
+| Repositorio | Contenido | Stack | Dueño
+
+| `bridge-docs`
+| *Este repositorio.* Documentación del Bridge Service
+| AsciiDoc + Mermaid + OpenAPI
+| Este equipo
+
+| `Sin-PortalBridge`
+| Código del Bridge Service: ingesta, identidad, catálogo, permisos y streaming
+| .NET 8, EF Core 8, PostgreSQL 16
+| Este equipo
+
+| `Sin-PortalVideos`
+| Frontend del portal, ya construido
+| Angular 21, SPA + PWA
+| Este equipo
+
+| `portal-docs`
+| Documentación del Portal de Videos
+| AsciiDoc + Mermaid + OpenAPI
+| Este equipo
+|===
+
+[NOTE]
+====
+*Dos repositorios del mapa anterior ya no existen.*
+
+* `portal-backend` — nunca llegó a existir: no hay repositorio, ni carpeta, ni commit. Su
+  responsabilidad la asume el Bridge Service (ADR-BS-005).
+* `bridge-service` — el código del Bridge vive en `Sin-PortalBridge` (REST-BS-03), que hasta
+  hoy contiene un solo commit y un `README.md` equivocado: describe un frontend Angular,
+  copiado del README de `Sin-PortalVideos`. Corregirlo es la primera tarea del arranque.
+
+*Un solo dueño para los cuatro.* El equipo es una persona (RNF-BS-07). Las cuatro columnas
+«Dueño» dicen lo mismo a propósito: no hay contraparte interna con la que negociar nada, y por
+eso los cuatro `bridge_*.yaml` —contratos bilaterales de uno consigo mismo— se dieron de baja.
+====
+
+== Contraparte: el frontend Angular (`Sin-PortalVideos`)
+
+=== Estado
+
+*Construido y probado.* 9 commits, cobertura del 94 %, API simulada completa con semillas de
+250 productos, 613 versiones y 1.842 recursos. Seis contratos OpenAPI en `openapi/sources/`.
+
+Lo que falta no es el frontend: es el servidor que responda a `/api`. Hoy apunta a
+`https://localhost:7001` por `proxy.conf.json` y no hay nadie escuchando.
+
+=== Qué espera del Bridge Service
+
+Todo por `/api`, con un User JWT RS256 emitido por nosotros. La única excepción es `/health`,
+que es público.
+
+[cols="2,3",options="header"]
+|===
+| Contrato · endpoints | Uso desde el portal
+
+| `api_auth.yaml` +
+`POST /auth/login` · `/register` · `/refresh` · `/logout`
+| Identidad de las personas. El `access_token` lleva `sub`, `role`, `perms{}`, `sid`, `exp` y
+  `aud`; el refresh rota la sesión.
+
+| `api_catalog.yaml` +
+`GET /catalog/products` · `/catalog/products/{productId}` · `/catalog/versions/{versionId}/media`
+| *El más usado.* Listado paginado, con búsqueda y filtro por industria, ya recortado por los
+  permisos del usuario autenticado. `mediaCount` es el número de recursos accesibles *por ese
+  usuario* en esa versión.
+
+| `api_media.yaml` +
+`GET /media/{mediaId}/stream`
+| Proxy de streaming con soporte de `Range` (200 y 206). La ruta de almacenamiento nunca sale
+  en la respuesta (SEC-BS-10).
+
+| *Sin contrato* +
+`GET /media/{mediaId}/access`
+| Pre-flight antes de cada reproducción. *El frontend ya lo llama y no está en ningún
+  archivo.* Ver <<_coordinacion,coordinación>> y `DEC-BS-11`.
+
+| `api_admin.yaml` +
+`/admin/users/**` · `/admin/groups/**` · `/admin/logs/**`
+| Las 20 operaciones de administración: usuarios, aprobaciones, grupos, accesos por versión,
+  excepciones individuales y consulta de logs.
+
+| `api_sync.yaml` +
+`/admin/sync/**`
+| Panel de sincronización. Lo servimos sobre el historial de ingesta, sin cambiar la forma de
+  los DTO (RF-BS-20).
+
+| `GET /health`
+| Diagnóstico. Público, sin autenticación.
+|===
+
+=== Comportamiento del portal ante fallos nuestros
+
+* El Service Worker sirve desde caché lo ya visitado: una caída nuestra no deja la pantalla en
+  blanco, deja el dato viejo.
+* `GET /admin/sync/status` devuelve `isDataStale` y `staleThresholdMinutes` (90 por defecto).
+  Con `isDataStale = true` el portal muestra su banner de advertencia.
+* Las acciones que aún no tienen servidor se apagan desde `public/config.json` mediante
+  `features.*`, sin tocar código. Es el mecanismo con el que ya están apagadas `myVideos`,
+  `notifications` y `help`, y con el que se apaga `triggerSync` mientras `DEC-BS-07` siga
+  abierta.
+
+[NOTE]
+====
+El portal tolera que el dato envejezca; no tolera que el servicio no esté. Desde ADR-BS-005 ya
+no existe la réplica del portal que antes amortiguaba nuestras caídas: si el Bridge no
+responde, no hay login, no hay catálogo nuevo y no hay reproducción.
+
+Eso endurece el RNF de disponibilidad ≥ 99,5 % en vez de relajarlo. La mitigación acordada son
+los *deployment slots* de App Service, para que un arranque fallido no llegue a recibir
+tráfico.
+====
+
+=== Decisiones del portal que nos condicionan
+
+[cols="1,3",options="header"]
+|===
+| ADR del portal | Cómo nos afecta
+
+| ADR-002 · JWT RS256 asimétrico
+| Emitimos los *dos* tokens —el de ingesta y el de las personas— con RS256. Van separados por
+  el claim `aud`, que se valida antes que cualquier otra comprobación (SEC-BS-09).
+
+| ADR-003 · Proxy de streaming
+| Lo implementamos nosotros, en `MediaController`. `storage_uri`, `storage_path`,
+  `storage_container` y `storage_token` no salen en ninguna respuesta ni en ningún log
+  (SEC-BS-10).
+
+| ADR-006 · Caché del catálogo en la BD del portal, sync horaria
+| *Queda sin objeto.* No hay segunda réplica que sincronizar: el catálogo vive una sola vez,
+  en nuestro PostgreSQL. Con él desaparece la «frescura compuesta» y la decisión que colgaba
+  de ella (`DEC-BS-01`).
+
+| ADR-008 · Rotación de refresh tokens
+| Nos obliga a registrar las sesiones para poder revocarlas. Su justificación —_«la
+  reutilización deja un evento observable»_— exige poder encadenar la sesión rotada con la que
+  la sustituye; de ahí `DEC-BS-13`.
+|===
+
+== Contraparte: SinsaTools
+
+[cols="1,3",options="header"]
+|===
+| Aspecto | Detalle
+
+| Rol | Fuente de verdad del catálogo de productos, versiones y multimedia
+| Interlocutor | Su *microservicio de integraciones*. Es el único componente suyo con el que hablamos
+| Dirección | SinsaTools → Bridge. La conexión la inicia siempre su lado
+| Transporte | HTTPS saliente desde su red contra `POST /v1/ingest/catalog`
+| Autenticación | Service JWT RS256 con scope `catalog:ingest`, emitido por `POST /v1/auth/token`
+| Su esquema | *Irrelevante.* No lo conocemos, no lo consultamos y no necesitamos conocerlo
+| Cadencia | La fija el emisor. Nosotros solo la observamos — `DEC-BS-09`
+| Conectividad de red | ✅ Ninguna que resolver. Sin VPN, sin IP fija, sin túnel corporativo
+|===
+
+[NOTE]
+====
+*El mapa anterior describía esta contraparte como una base de datos que íbamos a leer.* Cinco
+tablas (`Products`, `Stock_Keeping_Units`, `Images`, `Entity_Files`, `Files`) que nadie de este
+equipo llegó a ver nunca, y un filtro por `UpdatedAt` cuya existencia jamás pudo verificarse.
+
+Nada de eso se resolvió: dejó de hacer falta. La pregunta pasó de «cómo leemos su base» a
+«cómo recibimos lo que nos manden», y la respuesta es un contrato que especificamos nosotros
+(ADR-BS-006).
+====
+
+=== Lo único que nos llega de su modelo
+
+Los recursos multimedia de SinsaTools nacen en dos orígenes distintos, y el contrato de
+ingesta conserva esa distinción en el campo `source`. Son los dos únicos valores ajenos que
+viajan hasta nuestro esquema, y *no se renombran*:
+
+[cols="1,3",options="header"]
+|===
+| Valor de `source` | Qué identifica
+
+| `Images` | Recursos del catálogo de imágenes de SinsaTools
+| `EntityFiles` | Recursos adjuntos a una entidad
+|===
+
+[WARNING]
+====
+La clave natural de un recurso es `(source, sourceId)` en el contrato —`(origin,
+ext_media_id)` en la base—, *nunca* el identificador solo: los
+identificadores de los dos orígenes viven en secuencias independientes y pueden colisionar. Es
+`DOM-BS-08`, y un upsert que lo ignore mezcla recursos de dos orígenes distintos en la misma
+fila.
+====
+
+=== Mientras no haya acuerdo
+
+No entra un solo dato real hasta que el microservicio implemente el contrato. El desarrollo no
+espera: `tools/IngestSimulator` empuja lotes contra la API de ingesta alimentado con las
+semillas del mock del frontend —250 productos, 613 versiones, 1.842 recursos—, que ya existen
+en `fixtures.ts`.
+
+[CAUTION]
+====
+*El fallo por silencio es el modo de fallo característico de esta contraparte.* Un emisor que
+deja de empujar no produce un `500` ni un timeout: simplemente no llama, y el catálogo envejece
+sin que nada se queje.
+
+Por eso el check `catalog-freshness` de `/health` y la alerta de catálogo obsoleto no son
+observabilidad de adorno: son *la alerta más importante del sistema* (RNF-BS-09).
+====
+
+[#_coordinacion]
+== Puntos de coordinación
+
+[cols="2,3,1",options="header"]
+|===
+| Tema | Qué hay que acordar | Estado
+
+| Contrato de ingesta
+| Que el equipo de SinsaTools acepte `05_contratos_api/ingesta/ingest_catalog_v1.0.yaml`, o lo
+  discuta. Es la frontera completa entre los dos sistemas
+| 🔴 Pendiente
+
+| Credenciales de ingesta
+| `clientId` y `clientSecret` del microservicio, y su custodia en Key Vault por nuestro lado
+| 🔴 Pendiente
+
+| Cadencia de la ingesta
+| Cada cuánto empujan y si habrá foto completa periódica. De ahí salen el umbral de frescura y
+  la alerta de catálogo obsoleto — `DEC-BS-09`
+| 🟡 Pendiente
+
+| `GET /media/{id}/access`
+| Añadirlo a `api_media.yaml`. El frontend ya lo llama antes de cada reproducción; sin él no se
+  reproduce ningún recurso — `DEC-BS-11`
+| 🔴 Pendiente
+
+| `POST /admin/sync`
+| El botón existe en el frontend y no hay base que sincronizar. Decidir si desaparece del
+  contrato, si dispara una petición de foto al emisor, o si queda apagado — `DEC-BS-07`
+| 🔴 Pendiente
+
+| Fusión de las dos documentaciones
+| `bridge-docs` y `portal-docs` describen hoy un único sistema y duplican convenciones,
+  glosario e índice — resuelto por `DEC-BS-12` con una frontera explícita
+| 🟡 Pendiente
+|===
+
+[NOTE]
+====
+*Solo el primer punto bloquea la llegada de datos reales.* Los demás bloquean funcionalidad
+concreta o son deuda de organización. Ninguno impide escribir código: con el simulador y los
+seis contratos del frontend, el arranque del servicio no depende de nadie.
+====
+
+== Cómo se disponen los repositorios
+
+`bridge-docs` y `portal-docs` se clonan como *carpetas hermanas* bajo un directorio común. La
+documentación del portal enlaza a los ADR de este repositorio por rutas relativas; sin esa
+disposición, esos enlaces no resuelven.
+
+[source,text]
+----
+mi-carpeta-de-trabajo/
+├── portal-docs/        ← documentación del portal
+├── bridge-docs/        ← este repositorio
+├── Sin-PortalVideos/   ← frontend Angular 21
+└── Sin-PortalBridge/   ← Bridge Service .NET 8
+----
+
+include::{root}/_nav.adoc[]

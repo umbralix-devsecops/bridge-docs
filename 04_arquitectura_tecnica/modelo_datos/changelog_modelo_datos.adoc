@@ -1,0 +1,320 @@
+= Historial de cambios del modelo de datos — Bridge Service
+:author: Equipo de Desarrollo
+:revnumber: 2.1
+:revdate: 2026-09-17
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:icons: font
+:lang: es
+:root: ../..
+:section-id: arquitectura-tecnica
+:section-title: 04 — Arquitectura Técnica
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+[IMPORTANT]
+====
+*Documento vivo y derivado.* No define el esquema: lo describe. La fuente de verdad son las
+migraciones de EF Core sobre `AppDbContext`
+(xref:{root}/11_gestion_producto/adr/adr-bs-004_ef_core_fuente_unica_esquema.adoc[ADR-BS-004]).
+
+*Una entrada por migración, sin excepciones* (DOM-BS-05).
+====
+
+[WARNING]
+====
+*El esquema de SinsaTools no aparece aquí, y ahora tampoco nos afecta.*
+
+Hasta el 2026-09-16 este aviso decía que su esquema era de terceros, que sus cambios llegaban
+sin avisar y que rompían el scaffolding DB-First. Con
+xref:{root}/11_gestion_producto/adr/adr-bs-006_ingesta_por_empuje.adoc[ADR-BS-006] el Bridge
+Service ya no accede a esa base de datos: su microservicio de integraciones nos empuja el
+catálogo por contrato.
+
+La frontera pasa a ser `05_contratos_api/ingesta/ingest_catalog_v1.0.yaml`. Un cambio en su
+esquema interno no nos alcanza mientras el contrato siga respondiendo lo mismo, y un cambio
+*del contrato* es una negociación, no una sorpresa. `DT-BS-01` queda dada de baja.
+====
+
+== Para qué sirve
+
+`dotnet ef migrations list` da la lista. Lo que no da:
+
+* *Por qué* se hizo el cambio — el RF-BS, CU-BS, ADR-BS o deuda que lo motivó.
+* *Si es reversible* y qué se pierde al revertir.
+* *Si toca datos existentes.*
+* *Si exige ventana de mantenimiento.*
+* *Qué versión del ER* refleja el esquema resultante.
+
+[CAUTION]
+====
+*El matiz de reversibilidad cambió el 2026-09-16, y es el cambio más importante de esta
+versión.*
+
+La v1.0 decía que _«como la réplica se puede reconstruir resincronizando, algunas migraciones
+que en el portal serían destructivas aquí son recuperables»_. Eso era cierto cuando el
+esquema contenía solo un caché de lectura.
+
+Con xref:{root}/11_gestion_producto/adr/adr-bs-005_servicio_unico.adoc[ADR-BS-005], esta base
+es *la única del sistema*, y de sus diecisiete tablas **solo tres se reconstruyen**:
+
+[cols="1,2,3",options="header"]
+!===
+! Bloque ! Tablas ! Si se pierden
+
+! Catálogo
+! `catalog_products`, `catalog_versions`, `catalog_media`
+! 🔄 Se recuperan pidiendo una foto completa a SinsaTools.
+
+! Identidad y permisos
+! `roles`, `role_permissions`, `users`, `sessions`, `groups`, `user_groups`,
+  `group_version_access`, `user_media_exceptions`
+! ❌ *No se reconstruyen desde ningún sitio.* Solo se sale restaurando copia de seguridad.
+
+! Ingesta y auditoría
+! `ingest_batches`, `ingest_items`, `ext_api_request_log`, `video_access_log`,
+  `api_request_log`, `notification_log`
+! ❌ Irrecuperables. Son el historial: nadie los vuelve a generar.
+!===
+
+*Una migración que toque las catorce tablas de los dos últimos bloques es irreversible sin
+backup.* La política de copias de seguridad dejó de ser opcional.
+====
+
+== Cómo se mantiene
+
+. `dotnet ef migrations add <NombreEnIngles> --project src/BridgeService.Infrastructure`
+. Entrada `MIG-BS-NNN` en <<_entradas,Entradas>>, *en el mismo commit*.
+. Si cambia la forma del modelo: `modelo_datos_bridge_vN.mermaid` nuevo, el anterior a
+  `_historico/` (DOM-BS-06).
+
+NOTE: El `--context` explícito deja de ser obligatorio: desde la revisión de
+xref:{root}/11_gestion_producto/adr/adr-bs-002_efcore_dos_proveedores.adoc[ADR-BS-002] hay un
+solo `DbContext` y un solo proveedor. `OnPremiseDbContext` ya no existe.
+
+== Convenciones de riesgo
+
+[cols="1,4",options="header"]
+|===
+| Reversibilidad | Significado
+
+| ✅ Total | El `Down()` devuelve esquema y datos al estado anterior.
+| 🔄 Recuperable por reingesta | Se pierden datos de catálogo, pero se recuperan pidiendo una foto completa. *Solo aplica a `catalog_products`, `catalog_versions` y `catalog_media`.*
+| ⚠️ Parcial | Se pierden datos que nadie regenera — típicamente historial de ingesta o auditoría.
+| ❌ Irreversible | Solo se sale restaurando backup. *Es el caso de todo lo que toque identidad o permisos.*
+|===
+
+[cols="1,4",options="header"]
+|===
+| Impacto en datos | Ventana
+
+| Ninguno · Migración de datos · Pérdida de datos | No · Sí, con motivo
+|===
+
+[IMPORTANT]
+====
+*Los dos índices más delicados del esquema:*
+
+`media (version_id, position) WHERE active` sirve el listado de recursos de una versión —la
+consulta más frecuente del portal—. Y `ingest_batches (generated_at DESC) WHERE status IN
+('completed','partial')` es el que calcula `isDataStale` en cada carga del panel.
+
+Cualquier migración que los toque sobre tablas con datos debe usar
+`CREATE INDEX CONCURRENTLY` con
+`migrationBuilder.Sql(..., suppressTransaction: true)`, o bloqueará la tabla mientras se
+construye.
+
+*Y un caso especial:* los dos índices únicos parciales de `ingest_batches`
+(`ux_ingest_running`, `ux_snapshot_close`) sostienen garantías de concurrencia. Eliminarlos
+«temporalmente» durante una migración abre la puerta a dos lotes aplicándose a la vez. Si hay
+que rehacerlos, el servicio se detiene primero.
+====
+
+[[_entradas]]
+== Entradas
+
+=== MIG-BS-001 — InitialCreate
+
+[cols="1,3"]
+|===
+| *Migración EF* | `InitialCreate`
+| *Contexto* | `AppDbContext`
+| *Fecha* | 🟡 Modelo escrito el 2026-09-17; migración pendiente de generar
+| *Versión del ER* | `modelo_datos_bridge_v2.mermaid`
+| *Reversibilidad* | ✅ Total (esquema vacío)
+| *Impacto en datos* | Ninguno
+| *Ventana* | No
+| *Motivada por* | xref:{root}/11_gestion_producto/adr/adr-bs-001_cache_postgresql_propio.adoc[ADR-BS-001] · xref:{root}/11_gestion_producto/adr/adr-bs-005_servicio_unico.adoc[ADR-BS-005] · RF-BS-12 · RF-BS-18
+|===
+
+*Qué hace:* crea el esquema completo según `modelo_datos_bridge_v2.mermaid` — 17 tablas,
+13 tipos enumerados y 40 índices, en tres bloques: catálogo, identidad y permisos, e ingesta
+y auditoría.
+
+*Por qué:* es la base del sistema entero. Sin ella no hay catálogo, ni usuarios, ni permisos,
+ni portal.
+
+*Notas de despliegue:*
+
+* Requiere las extensiones `citext` (para `users.email` sin distinción de mayúsculas) y
+  `pgcrypto` (para `gen_random_uuid()`, salvo en PostgreSQL 13+ donde es nativa).
+* Los índices se crean sobre tablas vacías, así que no requieren `CONCURRENTLY`. A partir de
+  la siguiente migración, sí.
+* Las dos tablas particionadas (`video_access_log`, `api_request_log`) necesitan su primera
+  partición creada en la misma migración, o el primer `INSERT` falla. Conviene crear también
+  la del periodo siguiente y automatizar el resto.
+* Debe aplicarse antes de aceptar el primer lote de ingesta.
+
+[NOTE]
+====
+*Entrada anticipada: la migración aún no se ha generado, pero ya no está bloqueada.*
+
+La v1.0 de esta entrada estaba detenida por `DEC-BS-01` —frecuencia del sync interno frente a
+lectura en vivo del delta—, porque esa decisión podía alterar el esquema. `DEC-BS-01` quedó
+sin objeto con ADR-BS-006: no hay sync interno que planificar.
+
+*El modelo está verificado.* El DDL derivado de `modelo_datos_bridge_v2.mermaid` se ejecutó
+contra PostgreSQL 16.13 —17 tablas, 13 enums, 40 índices, cero errores— y se probaron sus
+invariantes: la colisión de identificadores entre `Images` y `Entity_Files` se admite, el
+duplicado de clave natural se rechaza, un segundo lote en ejecución se rechaza, una foto no se
+cierra dos veces, y los permisos sobreviven al `UPDATE` de la ingesta.
+====
+
+==== Estado al 2026-09-17
+
+*El modelo de EF Core está escrito* en `Sin-PortalBridge/src/BridgeService.Infrastructure/Persistence/`:
+las 17 entidades en tres archivos, una `IEntityTypeConfiguration<T>` por entidad
+(`EST-BS-26`), los 13 tipos enumerados y `AppDbContext`. Los nombres de tabla y columna los
+deriva la convención `snake_case`, no se escriben a mano.
+
+*Lo que EF Core no genera va en tres archivos `.sql` incrustados* (`EST-BS-25`, `DOM-BS-07`),
+ejecutados desde dentro de la migración con `EmbeddedSql.Execute(...)` para no romper
+`ADR-BS-004`:
+
+[cols="1,3",options="header"]
+|===
+| Archivo | Qué aporta
+
+| `001_partitioning.sql`
+| El `PARTITION BY RANGE (created_at)` de `video_access_log` y `api_request_log`, más sus
+  primeras particiones (2026 y 2027). Sin al menos una partición que cubra la fecha, el primer
+  `INSERT` falla con _«no partition of relation found for row»_.
+
+| `002_expression_indexes.sql`
+| `ux_ingest_running` —índice único sobre la expresión `((true))`, que es lo que garantiza
+  `DOM-BS-09`— y `ix_products_search`, el GIN sobre `to_tsvector('spanish', …)`.
+
+| `003_seed_roles.sql`
+| Los cuatro roles y sus 24 permisos (`T-BS-014`). Transcripción de
+  `portal-docs/06_seguridad_autorizacion/guia_roles_permisos_v1.0.adoc` §4, idempotente.
+|===
+
+*Verificado contra PostgreSQL 16.13 el 2026-09-17,* aplicando el DDL y los tres archivos
+sobre una base limpia:
+
+* `INSERT` en tabla particionada: funciona.
+* Segundo lote en estado `running`: rechazado por `ux_ingest_running`.
+* Mismo `ext_media_id` en los dos orígenes: admitido (dos filas).
+* Duplicado de la clave natural `(origin, ext_media_id)`: rechazado.
+* `duration_ms`: la base lo calcula —2.500 para un lote de 2,5 s—.
+* Búsqueda GIN con derivación del español: «hidraulicos» encuentra «hidraulico».
+* Semilla: 4 roles, 24 permisos, y reaplicable sin duplicar.
+
+[CAUTION]
+====
+*Lo que falta, y no es poco:* la migración en sí. `dotnet ef migrations add` necesita acceso a
+NuGet, que no estaba disponible en el entorno donde se escribió el modelo, así que
+`Persistence/Migrations/` está vacía y el modelo *no se ha compilado nunca*.
+
+Los pasos están en `Persistence/Migrations/README.md`. Hasta que se ejecuten, `MIG-BS-001`
+sigue siendo una entrada anticipada.
+
+Y una consecuencia de esto: `SchemaParityTests` —la prueba que compara la migración contra
+este DDL derivado— tampoco se ha ejecutado. Es la primera que hay que mirar tras el
+`dotnet restore`.
+====
+
+'''
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PLANTILLA — copiar para cada migración nueva. Borrar los comentarios al usar.
+//
+// === MIG-BS-NNN — NombreDeLaMigracionEnIngles
+//
+// [cols="1,3"]
+// |===
+// | *Migración EF*      | `NombreDeLaMigracionEnIngles`
+// | *Contexto*          | `AppDbContext`
+// | *Fecha*             | AAAA-MM-DD
+// | *Versión del ER*    | `modelo_datos_bridge_vN.mermaid`
+// | *Reversibilidad*    | ✅ Total | 🔄 Recuperable por reingesta | ⚠️ Parcial | ❌ Irreversible
+// | *Impacto en datos*  | Ninguno | Migración de datos | Pérdida de datos
+// | *Ventana*           | No | Sí — motivo
+// | *Motivada por*      | RF-BS-NN · CU-BS-NNN · ADR-BS-NNN · DT-BS-NN
+// |===
+//
+// *Qué hace:* tablas, columnas e índices afectados.
+// *Por qué:* el problema que resuelve.
+// *Al revertir se pierde:* solo si no es ✅. Recordar que solo el catálogo se reconstruye.
+// *Notas de despliegue:* CONCURRENTLY, particiones, índices únicos parciales,
+// orden respecto de la ingesta, y si hay que avisar al equipo de SinsaTools.
+// ─────────────────────────────────────────────────────────────────────────────
+
+== Versiones del modelo ER
+
+[cols="1,2,3,1",options="header"]
+|===
+| Versión | Archivo | Cambio | Estado
+
+| v1
+| `_historico/modelo_datos_bridge_v1.mermaid`
+| Primera versión: el caché de lectura de un servicio que leía un SQL Server remoto.
+  `PRODUCT`, `VERSION`, `MEDIA`, `SYNC_RUN`, `SYNC_ITEM`. Incorpora el renombrado al inglés
+  del 2026-08-23.
+| ⬜ Superado
+
+| v2
+| `modelo_datos_bridge_v2.mermaid`
+| La base única del sistema. Pasa de 5 a 17 tablas: se añaden identidad, permisos, auditoría
+  e ingesta. El catálogo gana identificador interno estable frente a la clave natural de
+  origen, `industry`, la terna de almacenamiento y `last_seen_at`. `SYNC_RUN` / `SYNC_ITEM`
+  se sustituyen por `ingest_batches` / `ingest_items`.
+| ✅ Vigente
+|===
+
+== Deuda técnica de este mecanismo
+
+[cols="1,3,1",options="header"]
+|===
+| ID | Descripción | Impacto
+
+| DT-BS-06
+| El changelog depende de un gate humano. Mitigación posible: comprobación en CI que compare
+  el número de archivos en `Migrations/` con las entradas `MIG-BS-` de este documento y falle
+  el build si no coinciden.
+| Medio
+|===
+
+`DT-BS-01` queda dada de baja: no hay scaffolding DB-First que regenerar.
+
+== Trazabilidad
+
+[cols="1,3",options="header"]
+|===
+| Artefacto | Relación
+
+| Decisión que gobierna | xref:{root}/11_gestion_producto/adr/adr-bs-004_ef_core_fuente_unica_esquema.adoc[ADR-BS-004]
+| Por qué existe la base propia | xref:{root}/11_gestion_producto/adr/adr-bs-001_cache_postgresql_propio.adoc[ADR-BS-001]
+| Por qué es la base única | xref:{root}/11_gestion_producto/adr/adr-bs-005_servicio_unico.adoc[ADR-BS-005]
+| De dónde vienen los datos de catálogo | xref:{root}/11_gestion_producto/adr/adr-bs-006_ingesta_por_empuje.adoc[ADR-BS-006]
+| Acceso a datos | xref:{root}/11_gestion_producto/adr/adr-bs-002_efcore_dos_proveedores.adoc[ADR-BS-002]
+| Modelo vigente | `modelo_datos_bridge_v2.mermaid`
+| Arquitectura | xref:{root}/04_arquitectura_tecnica/arquitectura_tecnica_bridge_service_v2.2.adoc[arquitectura_tecnica_bridge_service_v2.2]
+| Contrato de entrada | `05_contratos_api/ingesta/ingest_catalog_v1.0.yaml`
+|===
+
+include::{root}/_nav.adoc[]

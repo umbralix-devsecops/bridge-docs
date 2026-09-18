@@ -1,0 +1,16 @@
+// _nav.adoc — Bridge Service
+// Fragmento de navegación compartido. No abrir directamente.
+// Se incluye desde cada documento con: include::{root}/_nav.adoc[]
+//
+// Requiere que el documento que lo incluye defina:
+//   :root:          → ruta relativa a la raíz de bridge-docs/
+//   :section-id:    → ancla de la sección en index.adoc
+//   :section-title: → nombre de la sección para el breadcrumb
+
+'''
+link:{root}/index.adoc[← Índice general]
+&nbsp;&nbsp;|&nbsp;&nbsp;
+link:{root}/index.adoc#_{section-id}[↑ {section-title}]
+&nbsp;&nbsp;|&nbsp;&nbsp;
+link:{root}/00_Estado_Actual.adoc[📋 Estado actual]
+'''

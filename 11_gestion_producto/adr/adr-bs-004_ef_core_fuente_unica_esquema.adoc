@@ -1,0 +1,207 @@
+= ADR-BS-004 — EF Core como fuente única de verdad del esquema propio
+:author: Equipo de Desarrollo
+:revnumber: 1.1
+:revdate: 2026-08-23
+:revremark: Nota del 2026-09-16: la API de ingesta es lo que mantiene esta decisión en pie
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:icons: font
+:lang: es
+:root: ../..
+:section-id: gestion-producto
+:section-title: 11 — Gestión de Producto
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+[cols="1,3"]
+|===
+| *Estado* | ✅ *Aceptada*
+| *Fecha de la decisión* | 2026-08-23
+| *Fecha de registro* | 2026-08-23
+| *Depende de* | xref:adr-bs-001_cache_postgresql_propio.adoc[ADR-BS-001], xref:adr-bs-002_efcore_dos_proveedores.adoc[ADR-BS-002]
+| *Equivale a* | ADR-009 del portal, en `portal-docs`
+| *Reforzada por* | xref:adr-bs-006_ingesta_por_empuje.adoc[ADR-BS-006]
+|===
+
+== Contexto
+
+Se planteó un repositorio independiente de scripts SQL para gestionar las bases de datos de
+todo el ecosistema. En el Bridge Service la pregunta tiene un matiz que no tiene en el
+portal: aquí hay *dos* esquemas, con dueños distintos, y
+xref:adr-bs-002_efcore_dos_proveedores.adoc[ADR-BS-002] ya los trata de forma opuesta.
+
+[cols="1,2,2",options="header"]
+|===
+| Esquema | Dueño | Régimen actual (ADR-BS-002)
+
+| PostgreSQL — réplica del catálogo
+| Este equipo
+| EF Core *Code-First* con migraciones
+
+| SQL Server on-premise
+| Terceros
+| EF Core *DB-First* por scaffolding · migraciones prohibidas (DOM-BS-02)
+|===
+
+La pregunta solo aplica al primero. Sobre el segundo no hay nada que decidir: no lo
+controlamos, y DOM-BS-02 ya prohíbe emitir DDL contra él.
+
+Un repositorio de scripts sobre el esquema propio competiría con las migraciones por la
+propiedad, con el mismo modo de fallo silencioso descrito en ADR-009 del portal: una
+columna añadida por script desaparece en la siguiente migración, porque el snapshot de EF
+no la conocía.
+
+== Opciones evaluadas
+
+=== Opción A — Scripts SQL como fuente de verdad del esquema propio
+
+Se abandona Code-First también en el lado PostgreSQL. Ambos esquemas pasarían a DB-First,
+lo que da simetría: un solo régimen de acceso a datos.
+
+=== Opción B — EF Core sigue siendo la única fuente de verdad; el historial se deriva
+
+Se mantiene ADR-BS-002 intacto. El historial de cambios es un documento derivado de las
+migraciones, con un gate en el proceso que impide que se desvíe.
+
+=== Tabla comparativa
+
+[cols="2,1,1",options="header"]
+|===
+| Criterio | A · Scripts | B · Solo EF
+
+| Supera ADR-BS-002
+| ❌ Sí
+| ✅ No
+
+| Simetría entre los dos esquemas
+| ✅ Ambos DB-First
+| Asimétrico: Code-First propio, DB-First ajeno
+
+| Riesgo de deriva entre fuentes
+| No aplica
+| ✅ Ninguno
+
+| Reconstruir el caché desde cero
+| Aplicar scripts en orden
+| ✅ `dotnet ef database update`
+
+| Testcontainers para integración
+| Requiere paso previo
+| ✅ Directo
+
+| Carga para un desarrollador
+| Alta
+| ✅ Baja
+
+| Historial legible
+| Depende de la disciplina
+| ✅ Derivado, con gate
+|===
+
+[NOTE]
+====
+La simetría que ofrece la opción A es aparente. Los dos esquemas son asimétricos *de
+hecho*: uno lo controlamos y evoluciona con el producto, el otro es ajeno y solo lo leemos.
+Tratarlos igual no simplifica nada; oculta una diferencia que importa.
+====
+
+== Decisión
+
+*Se elige la opción B.* EF Core con migraciones Code-First sigue siendo la única fuente de
+verdad del esquema propio en PostgreSQL. No se crea repositorio de base de datos
+independiente. El historial de cambios se documenta en
+xref:{root}/04_arquitectura_tecnica/modelo_datos/changelog_modelo_datos.adoc[changelog_modelo_datos],
+derivado de las migraciones.
+
+== Justificación
+
+. *La opción A supera ADR-BS-002 sin resolver ningún problema real.* La necesidad expresada
+  era tener historial documentado, no cambiar quién define el esquema.
+. *La asimetría entre los dos esquemas es correcta y hay que preservarla.* DB-First contra
+  on-premise existe porque el esquema es ajeno y desconocido (DT-BS-01). Code-First contra
+  PostgreSQL existe porque el esquema es nuestro y evoluciona. Unificarlos importaría el
+  inconveniente del scaffolding manual a un esquema donde no hace falta.
+. *El caché se reconstruye, no se restaura.* Es una réplica: ante un desastre, la vía más
+  rápida es recrear el esquema y resincronizar desde on-premise. Eso pide un mecanismo de
+  «crear desde cero con un comando», que es exactamente lo que dan las migraciones.
+. *Un solo desarrollador no sostiene dos herramientas de esquema.* Es el mismo argumento
+  que ya cerró ADR-BS-002.
+
+== Consecuencias
+
+=== Positivas
+
+* ADR-BS-002 permanece coherente; no hay decisión que reabrir.
+* La réplica se recrea con un comando, lo que hace triviales el entorno local, los tests de
+  integración con Testcontainers y la recuperación ante desastre.
+* El historial de cambios existe y no puede desviarse: sin entrada, la migración no cierra.
+* No aparece un tercer repositorio en un ecosistema que ya tiene cinco.
+
+=== Negativas y compromisos
+
+* *Las vistas, funciones e índices concurrentes viven dentro de migraciones*, vía
+  `migrationBuilder.Sql()`. Menos legible en el diff que un archivo por objeto.
+* *El historial depende de un gate humano.* Registrado como *DT-BS-06*.
+* *Se renuncia a Flyway y Liquibase* y a su tabla de control. Si el PostgreSQL del Bridge
+  llegara a ser consumido por algún sistema ajeno a este servicio, hay que reabrir esta
+  decisión.
+* *`CREATE INDEX CONCURRENTLY` no puede ir en transacción*, así que exige
+  `suppressTransaction: true`. Olvidarlo bloquea la tabla `MEDIA` durante la creación del
+  índice sobre `updated_at_source`, que es precisamente el más caliente del esquema.
+
+=== Reglas derivadas
+
+[cols="1,4",options="header"]
+|===
+| ID | Regla
+
+| DOM-BS-04 | El esquema propio se modifica *exclusivamente* mediante migraciones de EF Core sobre `BridgeDbContext`. Prohibido aplicar DDL a mano en cualquier entorno.
+| DOM-BS-05 | Toda migración lleva una entrada `MIG-BS-NNN` en `changelog_modelo_datos.adoc`, en el mismo commit.
+| DOM-BS-06 | Si la migración altera la forma del modelo, se emite `modelo_datos_bridge_vN.mermaid` y el anterior pasa a `_historico/`.
+| DOM-BS-07 | El SQL de vistas, funciones y permisos se mantiene en archivos `.sql` incrustados como recurso, ejecutados desde la migración.
+|===
+
+[WARNING]
+====
+*Actualización del 2026-09-16.* Esta nota decía que `DOM-BS-02` —«prohibido ejecutar
+migraciones contra `OnPremiseDbContext`»— seguía vigente y reforzaba la asimetría entre los
+dos contextos.
+
+`DOM-BS-02` quedó **dada de baja**: con
+xref:adr-bs-006_ingesta_por_empuje.adoc[ADR-BS-006] no hay `OnPremiseDbContext`, así que no
+hay asimetría que reforzar. *Ya no hay dos contextos, hay uno.* `DOM-BS-04` se reformula
+sobre `AppDbContext`, que es el nombre que toma `BridgeDbContext` al dejar de ser el contexto
+de un caché para ser el de todo el sistema.
+====
+
+
+[IMPORTANT]
+====
+== Nota del 2026-09-16 — qué sostiene esta decisión
+
+xref:adr-bs-006_ingesta_por_empuje.adoc[ADR-BS-006] evaluó dar al microservicio de
+integraciones de SinsaTools credenciales de escritura sobre nuestro PostgreSQL. Se descartó,
+y uno de los motivos fue precisamente este ADR.
+
+*Si un equipo externo escribiera en nuestras tablas, EF Core dejaría de ser la fuente única
+de verdad del esquema.* Cada `dotnet ef migrations add` pasaría a ser un cambio coordinado
+con ellos: el esquema se convertiría en un contrato bilateral, y evolucionaría a la
+velocidad de la reunión más lenta en vez de a la del código que lo usa.
+
+La API de ingesta es lo que mantiene esta decisión en pie. El acoplamiento con SinsaTools
+está en `ingest_catalog_v1.0.yaml`, no en nuestras columnas: podemos renombrar una tabla sin
+avisar a nadie, mientras el contrato siga respondiendo lo mismo.
+
+*Salvedad sobre la reversibilidad.* Este ADR afirmaba que _«el caché se reconstruye, no se
+restaura»_ y que por eso algunas migraciones destructivas eran recuperables. Con
+xref:adr-bs-005_servicio_unico.adoc[ADR-BS-005] eso solo vale para las tres tablas de
+catálogo. Las de identidad, permisos y auditoría **no se reconstruyen desde ningún sitio**:
+una migración que las dañe es irreversible sin copia de seguridad. Ver la revisión de
+xref:adr-bs-001_cache_postgresql_propio.adoc[ADR-BS-001].
+====
+
+include::{root}/_nav.adoc[]

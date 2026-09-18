@@ -1,0 +1,877 @@
+openapi: 3.1.0
+
+info:
+  title: Portal de Videos — API de Ingesta de Catálogo
+  version: 1.0.0
+  description: |
+    Contrato de entrada del catálogo desde el **microservicio de integraciones de
+    SinsaTools** hacia el Portal de Videos.
+
+    El Portal **nunca** accede a la base de datos de SinsaTools. Es el microservicio de
+    integraciones quien empuja los cambios a estos endpoints, y el Portal los persiste en su
+    PostgreSQL. Esta es la única vía de entrada de datos de catálogo al sistema.
+
+    ## Qué se ingiere
+
+    Un árbol de tres niveles: `producto → versión → medio`. Cada lote trae productos
+    completos con sus versiones y los medios de cada versión. No hay endpoints separados por
+    entidad: el árbol llega entero para que el Portal pueda aplicar el lote en una única
+    transacción y nunca quede una versión huérfana de producto.
+
+    ## Los dos modos
+
+    - **`upsert`** — el uso habitual. El lote trae solo lo que cambió. Lo que no viene, no se
+      toca. Una baja se comunica explícitamente con `active: false`.
+    - **`snapshot`** — la foto completa del catálogo, paginada en varios lotes que comparten
+      `snapshotId` y se numeran con `sequence`. Al recibir el lote con `isLast: true`, el
+      Portal **desactiva todo lo que no apareció en la foto**. Es el mecanismo de
+      reconciliación: corrige derivas y recupera bajas que se perdieron.
+
+    ## Idempotencia
+
+    Todo lote lleva un `batchId` que genera el emisor. Reenviar un `batchId` ya procesado
+    devuelve el resultado original con `duplicate: true` y **no vuelve a aplicar nada**. Un
+    reintento tras un timeout de red es seguro.
+
+    ## Frescura del dato
+
+    `generatedAt` es **cuándo SinsaTools extrajo el dato**, no cuándo nos llegó. Es el campo
+    que alimenta el indicador `isDataStale` del panel de administración. Si el microservicio
+    reenvía un lote viejo, el Portal no lo toma por dato fresco.
+
+    ## Dónde viven los bytes
+
+    Los recursos **no viajan en el lote**: SinsaTools los sube a Azure Blob Storage y nos
+    manda el enlace. Hay dos contenedores:
+
+    - El **público** lleva solo material no sensible —portadas, miniaturas—, accesible sin
+      credencial.
+    - El **privado** lleva vídeos y manuales. El Portal lee sus bytes con una credencial de
+      servidor y los sirve como proxy; **esa credencial nunca llega al navegador**, y la ruta
+      real del recurso tampoco.
+
+    El control de acceso por grupos y por excepciones individuales se aplica igual a los dos.
+    `visibility` dice dónde están los bytes, no quién puede verlos.
+
+    ## Autenticación
+
+    `POST /v1/auth/token` con `clientId` y `clientSecret`, devuelve un JWT RS256 de una hora
+    con `scope: catalog:ingest`. Todos los endpoints de ingesta lo exigen.
+
+    ## Trazabilidad
+
+    Cabecera `X-Correlation-ID` opcional; si no viene, el Portal genera una y la devuelve.
+    Queda registrada junto al lote.
+
+  contact:
+    name: Equipo de Desarrollo — Portal de Videos
+  license:
+    name: Confidencial — Solo uso interno
+
+servers:
+  - url: https://portal-api.yourdomain.com
+    description: Producción
+  - url: https://portal-api-dev.yourdomain.com
+    description: Desarrollo
+  - url: https://localhost:7001
+    description: Local
+
+tags:
+  - name: Auth
+    description: Emisión del token de servicio
+  - name: Ingest
+    description: Entrada de catálogo
+
+# ══════════════════════════════════════════════════════════════════════════════
+paths:
+# ══════════════════════════════════════════════════════════════════════════════
+
+  /v1/auth/token:
+    post:
+      tags: [Auth]
+      operationId: getIngestToken
+      summary: Emite el token de servicio
+      description: |
+        Concesión `client_credentials`. Las credenciales las entrega el equipo del Portal y
+        viven en Azure Key Vault; la comparación del secreto es en tiempo constante.
+
+        El token dura **una hora**. El emisor debe cachearlo y renovarlo cuando queden menos
+        de cinco minutos, no pedir uno nuevo por lote.
+
+        Límite de intentos fallidos: 10 por minuto y `clientId`, 50 por minuto e IP.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TokenRequest' }
+      responses:
+        '200':
+          description: Token emitido
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenResponse' }
+        '401':
+          description: Credenciales inválidas
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example: { code: INVALID_CREDENTIALS, message: Credenciales inválidas. }
+        '429':
+          description: Demasiados intentos fallidos
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example: { code: RATE_LIMITED, message: Demasiados intentos. Reintente en 60 s. }
+
+  # ────────────────────────────────────────────────────────────────────────────
+
+  /v1/ingest/catalog:
+    post:
+      tags: [Ingest]
+      operationId: ingestCatalog
+      summary: Recibe un lote de catálogo
+      description: |
+        Aplica el lote de forma **asíncrona**: responde `202` en cuanto lo ha validado y
+        persistido en la cola de ingesta, y devuelve un `ingestId` con el que consultar el
+        resultado en `GET /v1/ingest/{ingestId}`.
+
+        ## Validación
+
+        Se distinguen dos clases de error:
+
+        - **De forma** — el lote no cumple el esquema (falta un campo obligatorio, un enum
+          desconocido, un `storageUri` que no es un URI absoluto). Se rechaza **el lote
+          entero** con `400` y el detalle por campo. No se aplica nada.
+        - **De negocio** — el lote es válido pero un ítem concreto falla (por ejemplo, un
+          medio cuya versión no existe ni viene en el lote). El lote se acepta con `202`, los
+          ítems correctos se aplican, y los fallidos se listan en el resultado con su motivo.
+
+        ## Límites
+
+        Máximo **200 productos** por lote y **10 MB** de cuerpo. Se admite
+        `Content-Encoding: gzip`. Un lote mayor se rechaza con `413`.
+
+        ## Orden
+
+        En modo `upsert` el orden entre lotes no importa: el Portal aplica el más reciente
+        por `updatedAt` de cada entidad.
+
+        En modo `snapshot` el orden **sí** importa. Los lotes se numeran con `sequence`
+        empezando en 1, y el último lleva `isLast: true`. Un `sequence` repetido o fuera de
+        orden se rechaza con `409`.
+      security:
+        - ServiceJWT: [catalog:ingest]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CatalogBatch' }
+            examples:
+              upsert:
+                summary: Lote incremental con un producto
+                value:
+                  batchId: 8f14e45f-ceea-467a-9f4e-2b1c3d4e5f60
+                  mode: upsert
+                  generatedAt: '2026-09-16T14:30:00Z'
+                  products:
+                    - sourceId: 1
+                      internalId: PROD-001
+                      name: Vectra OBD-X Diagnostics Suite
+                      tradeName: Vectra Link
+                      description: Análisis de telemetría y registro de fallos en bus CAN.
+                      industry: automotive
+                      brand: { sourceId: 10, name: Vectra Mobility }
+                      metatags: { title: Vectra OBD-X, keywords: 'obd,can,ecu' }
+                      active: true
+                      createdAt: '2024-02-01T09:00:00Z'
+                      updatedAt: '2026-09-16T13:55:00Z'
+                      versions:
+                        - sourceId: 101
+                          internalId: SKU-2026-NA
+                          name: North America 2026
+                          tradeName: NA Edition
+                          active: true
+                          updatedAt: '2026-09-16T13:55:00Z'
+                          media:
+                            - source: EntityFiles
+                              sourceId: 902
+                              name: manual_tecnico_v2.pdf
+                              extension: pdf
+                              mediaKind: document
+                              mediaGroup: manual
+                              mimeType: application/pdf
+                              sizeBytes: 5242880
+                              storageUri: https://sinsacdn.blob.core.windows.net/media-private/products/1/manual_tecnico_v2.pdf
+                              visibility: private
+                              token: 3kLm9xZm
+                              deviceType: Desktop
+                              position: 1
+                              active: true
+                              createdAt: '2025-11-02T10:00:00Z'
+                              updatedAt: '2026-09-16T13:55:00Z'
+                            - source: Images
+                              sourceId: 445
+                              name: portada.png
+                              extension: png
+                              mediaKind: image
+                              mediaGroup: cover
+                              mimeType: image/png
+                              sizeBytes: 184320
+                              storageUri: https://sinsacdn.blob.core.windows.net/media-public/products/1/portada.png
+                              visibility: public
+                              position: 0
+                              active: true
+                              createdAt: '2025-11-02T10:00:00Z'
+              baja:
+                summary: Baja de un medio
+                value:
+                  batchId: c1a2b3d4-0000-4000-8000-000000000001
+                  mode: upsert
+                  generatedAt: '2026-09-16T15:00:00Z'
+                  products:
+                    - sourceId: 1
+                      name: Vectra OBD-X Diagnostics Suite
+                      industry: automotive
+                      active: true
+                      versions:
+                        - sourceId: 101
+                          name: North America 2026
+                          active: true
+                          media:
+                            - source: EntityFiles
+                              sourceId: 902
+                              name: manual_tecnico_v2.pdf
+                              extension: pdf
+                              storageUri: https://sinsacdn.blob.core.windows.net/media-private/products/1/manual_tecnico_v2.pdf
+                              visibility: private
+                              position: 1
+                              active: false
+                              updatedAt: '2026-09-16T14:58:00Z'
+              snapshot_ultimo:
+                summary: Último lote de una foto completa
+                value:
+                  batchId: 5e5b1c00-0000-4000-8000-0000000000ff
+                  mode: snapshot
+                  snapshotId: 7d2f9a10-0000-4000-8000-000000000abc
+                  sequence: 12
+                  isLast: true
+                  generatedAt: '2026-09-16T03:00:00Z'
+                  products: []
+      responses:
+        '202':
+          description: Lote aceptado
+          headers:
+            X-Correlation-ID:
+              schema: { type: string, format: uuid }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IngestAccepted' }
+              examples:
+                nuevo:
+                  value:
+                    ingestId: 2a7f0c91-0000-4000-8000-000000000010
+                    batchId: 8f14e45f-ceea-467a-9f4e-2b1c3d4e5f60
+                    status: queued
+                    duplicate: false
+                    received: { products: 1, versions: 1, media: 2 }
+                    receivedAt: '2026-09-16T14:30:02Z'
+                reenvio:
+                  summary: Reenvío de un batchId ya procesado
+                  value:
+                    ingestId: 2a7f0c91-0000-4000-8000-000000000010
+                    batchId: 8f14e45f-ceea-467a-9f4e-2b1c3d4e5f60
+                    status: completed
+                    duplicate: true
+                    received: { products: 1, versions: 1, media: 2 }
+                    receivedAt: '2026-09-16T14:30:02Z'
+        '400':
+          description: El lote no cumple el esquema. No se ha aplicado nada.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ValidationErrorResponse' }
+              example:
+                code: VALIDATION_ERROR
+                message: El lote contiene errores de forma.
+                errors:
+                  - field: products[0].industry
+                    message: "Valor 'agricola' no permitido. Valores válidos: automotive, agricultural, marine, forklift, crane, heavy_equipment, generator, controller, other."
+                  - field: products[0].versions[0].media[1].storageUri
+                    message: Debe ser un URI absoluto con esquema https o file.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: Secuencia de snapshot inválida o snapshot ya cerrado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              examples:
+                fuera_de_orden:
+                  value:
+                    code: SNAPSHOT_SEQUENCE_GAP
+                    message: 'Se esperaba sequence 7 y llegó 9. Reenvíe el lote 7.'
+                cerrado:
+                  value:
+                    code: SNAPSHOT_CLOSED
+                    message: El snapshot 7d2f9a10 ya fue cerrado con isLast. Inicie uno nuevo.
+        '413':
+          description: Lote demasiado grande
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example: { code: BATCH_TOO_LARGE, message: 'Máximo 200 productos y 10 MB por lote.' }
+        '429':
+          description: Demasiados lotes por minuto
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example: { code: RATE_LIMITED, message: Máximo 60 lotes por minuto. }
+
+  # ────────────────────────────────────────────────────────────────────────────
+
+  /v1/ingest/{ingestId}:
+    get:
+      tags: [Ingest]
+      operationId: getIngestResult
+      summary: Consulta el resultado de un lote
+      description: |
+        Devuelve el estado y los contadores del lote. Mientras `status` sea `queued` o
+        `running`, los contadores son parciales.
+
+        Cuando hay ítems fallidos, `items[]` los lista con su clave de origen y el motivo.
+        Solo se listan los fallidos: un lote correcto devuelve `items: []`.
+
+        El resultado se conserva **90 días**.
+      security:
+        - ServiceJWT: [catalog:ingest]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+        - name: ingestId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Resultado del lote
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IngestResult' }
+              examples:
+                completado:
+                  value:
+                    ingestId: 2a7f0c91-0000-4000-8000-000000000010
+                    batchId: 8f14e45f-ceea-467a-9f4e-2b1c3d4e5f60
+                    mode: upsert
+                    status: completed
+                    generatedAt: '2026-09-16T14:30:00Z'
+                    receivedAt: '2026-09-16T14:30:02Z'
+                    finishedAt: '2026-09-16T14:30:04Z'
+                    counts:
+                      productsNew: 0
+                      productsUpdated: 1
+                      versionsNew: 0
+                      versionsUpdated: 1
+                      mediaNew: 1
+                      mediaUpdated: 1
+                      mediaDeactivated: 0
+                      unchanged: 0
+                      errors: 0
+                    items: []
+                parcial:
+                  value:
+                    ingestId: 3b8f1d02-0000-4000-8000-000000000011
+                    batchId: 9a25f56a-0000-4000-8000-000000000002
+                    mode: upsert
+                    status: partial
+                    generatedAt: '2026-09-16T15:00:00Z'
+                    receivedAt: '2026-09-16T15:00:01Z'
+                    finishedAt: '2026-09-16T15:00:06Z'
+                    counts:
+                      productsNew: 2
+                      productsUpdated: 5
+                      versionsNew: 3
+                      versionsUpdated: 9
+                      mediaNew: 14
+                      mediaUpdated: 31
+                      mediaDeactivated: 2
+                      unchanged: 88
+                      errors: 1
+                    items:
+                      - entityType: media
+                        source: Images
+                        sourceId: 7781
+                        operation: error
+                        errorDetail: 'La versión 4102 no existe y no viene en este lote.'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: No existe un lote con ese identificador
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example: { code: INGEST_NOT_FOUND, message: Lote no encontrado. }
+
+  # ────────────────────────────────────────────────────────────────────────────
+
+  /v1/ingest/watermark:
+    get:
+      tags: [Ingest]
+      operationId: getIngestWatermark
+      summary: Devuelve hasta dónde llegó la última ingesta correcta
+      description: |
+        Permite al microservicio de integraciones reanudar sin llevar su propio registro:
+        `lastGeneratedAt` es el `generatedAt` del último lote aplicado con éxito, y es el
+        corte que debe usar para calcular el siguiente incremental.
+
+        Es la defensa contra la pérdida silenciosa de datos: si el emisor y el Portal
+        discrepan sobre hasta dónde se envió, este endpoint lo resuelve.
+      security:
+        - ServiceJWT: [catalog:ingest]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      responses:
+        '200':
+          description: Marca de agua actual
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Watermark' }
+              example:
+                lastGeneratedAt: '2026-09-16T14:30:00Z'
+                lastBatchId: 8f14e45f-ceea-467a-9f4e-2b1c3d4e5f60
+                lastIngestAt: '2026-09-16T14:30:04Z'
+                openSnapshotId: null
+                catalog: { products: 250, versions: 613, media: 1842, activeMedia: 1741 }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+# ══════════════════════════════════════════════════════════════════════════════
+components:
+# ══════════════════════════════════════════════════════════════════════════════
+
+  securitySchemes:
+    ServiceJWT:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT RS256 emitido por `POST /v1/auth/token`. Claims exigidos:
+        `iss` (el propio Portal), `aud: portal-ingest-api`, `sub` (el `clientId`),
+        `scope: catalog:ingest`. Tolerancia de reloj: 30 s.
+
+  parameters:
+    CorrelationId:
+      name: X-Correlation-ID
+      in: header
+      required: false
+      description: Identificador de correlación. Si no se envía, el Portal lo genera.
+      schema: { type: string, format: uuid }
+
+  responses:
+    Unauthorized:
+      description: Token ausente, inválido o expirado
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          example: { code: UNAUTHORIZED, message: Token inválido o expirado. }
+    Forbidden:
+      description: El token no tiene el scope `catalog:ingest`
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          example: { code: FORBIDDEN, message: 'Scope insuficiente: se requiere catalog:ingest.' }
+
+  schemas:
+
+    # ── Autenticación ────────────────────────────────────────────────────────
+
+    TokenRequest:
+      type: object
+      required: [clientId, clientSecret]
+      properties:
+        clientId:
+          type: string
+          example: svc_sinsatools-integraciones
+        clientSecret:
+          type: string
+          format: password
+
+    TokenResponse:
+      type: object
+      required: [accessToken, expiresIn, tokenType]
+      properties:
+        accessToken: { type: string }
+        expiresIn:
+          type: integer
+          description: Segundos hasta la expiración.
+          example: 3600
+        tokenType: { type: string, example: Bearer }
+
+    # ── Envoltorio del lote ──────────────────────────────────────────────────
+
+    CatalogBatch:
+      type: object
+      required: [batchId, mode, generatedAt, products]
+      description: |
+        Un lote de catálogo. `snapshotId`, `sequence` e `isLast` son obligatorios cuando
+        `mode = snapshot` e ignorados cuando `mode = upsert`.
+      properties:
+        batchId:
+          type: string
+          format: uuid
+          description: |
+            Identificador del lote, generado por el emisor. **Es la clave de idempotencia:**
+            reenviar un `batchId` ya procesado devuelve el resultado original sin volver a
+            aplicar nada.
+        mode:
+          type: string
+          enum: [upsert, snapshot]
+          description: |
+            - `upsert` — solo lo que cambió. Lo que no viene, no se toca. Las bajas se
+              comunican con `active: false`.
+            - `snapshot` — foto completa paginada. Al cerrarse con `isLast: true`, todo lo
+              que no apareció en la foto se desactiva.
+        snapshotId:
+          type: string
+          format: uuid
+          description: Agrupa los lotes de una misma foto. Obligatorio si `mode = snapshot`.
+        sequence:
+          type: integer
+          minimum: 1
+          description: Número de lote dentro de la foto, empezando en 1. Obligatorio si `mode = snapshot`.
+        isLast:
+          type: boolean
+          description: |
+            Marca el último lote de la foto. Al recibirlo, el Portal ejecuta la
+            reconciliación y desactiva lo ausente. Obligatorio si `mode = snapshot`.
+        generatedAt:
+          type: string
+          format: date-time
+          description: |
+            **Cuándo SinsaTools extrajo estos datos**, no cuándo se envió el lote. Alimenta
+            el indicador de frescura del panel de administración. Debe ser UTC.
+          example: '2026-09-16T14:30:00Z'
+        products:
+          type: array
+          maxItems: 200
+          items: { $ref: '#/components/schemas/IngestProduct' }
+
+    # ── Entidades ────────────────────────────────────────────────────────────
+
+    IngestProduct:
+      type: object
+      required: [sourceId, name, industry, active]
+      properties:
+        sourceId:
+          type: integer
+          description: '`Products.Id` en SinsaTools. Clave natural: el Portal mantiene su propio identificador interno.'
+          example: 1
+        internalId:
+          type: string
+          maxLength: 64
+          description: Código de negocio visible al usuario.
+          example: PROD-001
+        name: { type: string, maxLength: 255 }
+        tradeName: { type: string, maxLength: 255 }
+        description: { type: string }
+        industry:
+          type: string
+          enum: [automotive, agricultural, marine, forklift, crane, heavy_equipment, generator, controller, other]
+          description: |
+            Sector industrial del software. **Obligatorio.** El catálogo se filtra por este
+            campo y la interfaz asigna un color por sector. Si el valor de SinsaTools no
+            encaja en la lista, enviar `other` — nunca inventar un valor nuevo, se rechazaría
+            el lote entero.
+        brand:
+          type: object
+          properties:
+            sourceId: { type: integer, example: 10 }
+            name: { type: string, example: Vectra Mobility }
+        metatags:
+          type: object
+          nullable: true
+          properties:
+            title: { type: string }
+            keywords: { type: string }
+        active:
+          type: boolean
+          description: '`false` desactiva el producto y, en cascada, oculta sus versiones y medios.'
+        createdAt: { type: string, format: date-time }
+        updatedAt:
+          type: string
+          format: date-time
+          description: Fecha de última modificación en SinsaTools. Decide qué versión del registro gana.
+        versions:
+          type: array
+          items: { $ref: '#/components/schemas/IngestVersion' }
+
+    IngestVersion:
+      type: object
+      required: [sourceId, name, active]
+      properties:
+        sourceId:
+          type: integer
+          description: '`Stock_Keeping_Units.Id` en SinsaTools.'
+          example: 101
+        internalId: { type: string, maxLength: 64, example: SKU-2026-NA }
+        name: { type: string, maxLength: 255 }
+        tradeName: { type: string, maxLength: 255 }
+        description: { type: string }
+        active: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        media:
+          type: array
+          items: { $ref: '#/components/schemas/IngestMedia' }
+
+    IngestMedia:
+      type: object
+      required: [source, sourceId, name, extension, storageUri, visibility, position, active]
+      description: |
+        Un recurso multimedia. La clave natural es **`(source, sourceId)`**: los
+        identificadores de `Images` y `Entity_Files` viven en secuencias distintas y pueden
+        colisionar entre sí.
+      properties:
+        source:
+          type: string
+          enum: [Images, EntityFiles]
+          description: Tabla de origen en SinsaTools.
+        sourceId:
+          type: integer
+          description: '`Images.Id` o `Entity_Files.Id`, según `source`.'
+          example: 902
+        name: { type: string, maxLength: 512, example: manual_tecnico_v2.pdf }
+        extension:
+          type: string
+          maxLength: 16
+          description: 'Sin punto y en minúsculas: `pdf`, `mp4`, `webm`, `png`.'
+          example: pdf
+        mediaKind:
+          type: string
+          enum: [video, image, document]
+          description: |
+            Clase de recurso, que decide con qué visor se abre. **Opcional:** si no viene, el
+            Portal la deduce de `extension`. Enviarla solo cuando la extensión sea ambigua.
+        mediaGroup:
+          type: string
+          enum: [cover, manual, video_demo, other]
+          description: |
+            Agrupación funcional, en minúsculas. Si SinsaTools usa `Image`, mapear a `cover`
+            cuando sea la portada y a `other` en el resto de casos.
+        mimeType:
+          type: string
+          maxLength: 128
+          description: |
+            Tipo MIME. El Portal lo usa como cabecera `Content-Type` al servir el recurso. Si
+            no viene, se deduce de `extension`; enviarlo evita esa deducción.
+          example: application/pdf
+        sizeBytes:
+          type: integer
+          format: int64
+          description: |
+            Tamaño en bytes. El Portal lo necesita para `Content-Length` y `Content-Range` al
+            servir por rangos. Si no viene, lo averigua con un `HEAD` contra el
+            almacenamiento la primera vez y lo cachea.
+          example: 5242880
+        visibility:
+          type: string
+          enum: [public, private]
+          description: |
+            Si el recurso vive en el contenedor público o en el privado de Azure Blob Storage.
+
+            - `public` — accesible sin credencial. **Solo material no sensible**: portadas,
+              miniaturas e imágenes de catálogo.
+            - `private` — requiere credencial. Vídeos, manuales y todo lo que el portal
+              restrinja por grupo o por excepción.
+
+            **Es obligatorio y no tiene valor por defecto.** Un recurso sin `visibility`
+            tumba el lote entero: asumir `public` por omisión convertiría un olvido del
+            emisor en una fuga de contenido restringido, y asumir `private` rompería en
+            silencio las portadas.
+
+            El control de acceso del portal —grupos y excepciones individuales— se aplica
+            **igual en los dos casos**. Este campo dice dónde están los bytes, no quién puede
+            verlos.
+          example: private
+        storageUri:
+          type: string
+          format: uri
+          description: |
+            **URI absoluto del recurso.** Es el campo del que depende todo el servicio de
+            streaming: el Portal lo descompone en proveedor, contenedor y ruta, y nunca lo
+            expone al navegador.
+
+            El proveedor es **Azure Blob Storage**: los recursos se suben allí y SinsaTools
+            guarda el enlace, no el fichero.
+
+            - `https://<cuenta>.blob.core.windows.net/<contenedor>/<ruta>` — forma esperada
+            - `https://<host>/<ruta>` — HTTP genérico, admitido por compatibilidad
+            - `file://<servidor>/<recurso>/<ruta>` — recurso de red, admitido por compatibilidad
+
+            El contenedor del URI debe corresponderse con `visibility`: un recurso `private`
+            en el contenedor público, o al revés, es un error de forma y tumba el lote.
+
+            Una ruta relativa se rechaza: el Portal no puede resolverla sin conocer la
+            configuración de SinsaTools.
+          example: https://sinsacdn.blob.core.windows.net/media/products/1/manual_tecnico_v2.pdf
+        token:
+          type: string
+          nullable: true
+          description: '`Files.Token` cuando `source = EntityFiles`. Nulo para `Images`.'
+        deviceType:
+          type: string
+          maxLength: 32
+          nullable: true
+          example: Desktop
+        webPlatformId:
+          type: integer
+          nullable: true
+        position:
+          type: integer
+          minimum: 0
+          description: Orden de presentación dentro de la versión.
+        active:
+          type: boolean
+          description: '`false` retira el recurso del catálogo sin borrarlo. Nunca hay borrado físico.'
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time, nullable: true }
+
+    # ── Respuestas ───────────────────────────────────────────────────────────
+
+    IngestAccepted:
+      type: object
+      required: [ingestId, batchId, status, duplicate]
+      properties:
+        ingestId:
+          type: string
+          format: uuid
+          description: Identificador con el que consultar el resultado.
+        batchId: { type: string, format: uuid }
+        status:
+          type: string
+          enum: [queued, running, completed, partial, failed]
+        duplicate:
+          type: boolean
+          description: '`true` si este `batchId` ya se había procesado. No se ha aplicado nada nuevo.'
+        received:
+          type: object
+          description: Cuántos elementos traía el lote. No es cuántos se aplicaron.
+          properties:
+            products: { type: integer }
+            versions: { type: integer }
+            media: { type: integer }
+        receivedAt: { type: string, format: date-time }
+
+    IngestResult:
+      type: object
+      required: [ingestId, batchId, mode, status]
+      properties:
+        ingestId: { type: string, format: uuid }
+        batchId: { type: string, format: uuid }
+        mode: { type: string, enum: [upsert, snapshot] }
+        snapshotId: { type: string, format: uuid, nullable: true }
+        status:
+          type: string
+          enum: [queued, running, completed, partial, failed]
+          description: |
+            - `completed` — todo aplicado sin errores.
+            - `partial` — aplicado con ítems fallidos; ver `items`.
+            - `failed` — no se aplicó nada; ver `errorDetail`.
+        generatedAt: { type: string, format: date-time }
+        receivedAt: { type: string, format: date-time }
+        finishedAt: { type: string, format: date-time, nullable: true }
+        durationMs: { type: integer }
+        errorDetail: { type: string, nullable: true }
+        counts: { $ref: '#/components/schemas/IngestCounts' }
+        items:
+          type: array
+          description: Solo los ítems con error. Un lote correcto devuelve una lista vacía.
+          items: { $ref: '#/components/schemas/IngestItemResult' }
+
+    IngestCounts:
+      type: object
+      properties:
+        productsNew: { type: integer }
+        productsUpdated: { type: integer }
+        versionsNew: { type: integer }
+        versionsUpdated: { type: integer }
+        mediaNew: { type: integer }
+        mediaUpdated: { type: integer }
+        mediaDeactivated:
+          type: integer
+          description: 'Recursos desactivados, sea por `active: false` o por ausencia en un snapshot cerrado.'
+        unchanged:
+          type: integer
+          description: Registros idénticos a los que ya había. Sirve para detectar reenvíos inútiles.
+        errors: { type: integer }
+
+    IngestItemResult:
+      type: object
+      properties:
+        entityType: { type: string, enum: [product, version, media] }
+        source:
+          type: string
+          enum: [Images, EntityFiles]
+          nullable: true
+          description: Solo para `entityType = media`; forma parte de la clave natural.
+        sourceId: { type: integer }
+        operation: { type: string, enum: [insert, update, deactivate, skip, error] }
+        errorDetail: { type: string, nullable: true }
+
+    Watermark:
+      type: object
+      properties:
+        lastGeneratedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: '`generatedAt` del último lote aplicado con éxito. Corte para el siguiente incremental.'
+        lastBatchId: { type: string, format: uuid, nullable: true }
+        lastIngestAt: { type: string, format: date-time, nullable: true }
+        openSnapshotId:
+          type: string
+          format: uuid
+          nullable: true
+          description: Snapshot iniciado y no cerrado. Si no es nulo, hay una foto a medias que conviene terminar.
+        catalog:
+          type: object
+          properties:
+            products: { type: integer }
+            versions: { type: integer }
+            media: { type: integer }
+            activeMedia: { type: integer }
+
+    # ── Errores ──────────────────────────────────────────────────────────────
+
+    ErrorResponse:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string, example: UNAUTHORIZED }
+        message: { type: string }
+        correlationId: { type: string, format: uuid }
+
+    ValidationErrorResponse:
+      type: object
+      required: [code, message, errors]
+      properties:
+        code: { type: string, example: VALIDATION_ERROR }
+        message: { type: string }
+        correlationId: { type: string, format: uuid }
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+                description: Ruta JSON del campo, con índices.
+                example: products[0].versions[0].media[1].storageUri
+              message: { type: string }

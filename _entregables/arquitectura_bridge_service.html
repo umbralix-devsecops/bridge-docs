@@ -1,0 +1,840 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Entregable: Arquitectura del Bridge Service - version visual para revision con stakeholders -->
+<!-- Generado: 2026-08-22 - Confidencial, solo uso interno -->
+<title>Arquitectura del Bridge Service</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:ital,wght@0,400;0,500;1,400&display=swap">
+
+<style>
+:root{
+  --paper:#f3f6f7;
+  --surface:#ffffff;
+  --surface-2:#e8edef;
+  --ink:#161c22;
+  --ink-2:#4b5760;
+  --ink-3:#7b8891;
+  --rule:#ccd5da;
+  --rule-2:#dde4e7;
+  --accent:#1c6b87;
+  --accent-soft:rgba(28,107,135,.09);
+  --open:#9d6414;
+  --open-soft:rgba(157,100,20,.10);
+  --risk:#9d3a2b;
+  --risk-soft:rgba(157,58,43,.09);
+  --ok:#2b6a50;
+  --shadow:0 1px 2px rgba(20,30,36,.06),0 8px 24px -16px rgba(20,30,36,.28);
+  --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --serif:"IBM Plex Serif",Georgia,"Times New Roman",serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#0f141a;
+    --surface:#161d25;
+    --surface-2:#1d262f;
+    --ink:#e4ebf0;
+    --ink-2:#a4b1bb;
+    --ink-3:#77848e;
+    --rule:#2b3741;
+    --rule-2:#222c35;
+    --accent:#63b4d2;
+    --accent-soft:rgba(99,180,210,.13);
+    --open:#d8a256;
+    --open-soft:rgba(216,162,86,.13);
+    --risk:#e08a7c;
+    --risk-soft:rgba(224,138,124,.12);
+    --ok:#6cc096;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px -18px rgba(0,0,0,.8);
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0f141a;
+  --surface:#161d25;
+  --surface-2:#1d262f;
+  --ink:#e4ebf0;
+  --ink-2:#a4b1bb;
+  --ink-3:#77848e;
+  --rule:#2b3741;
+  --rule-2:#222c35;
+  --accent:#63b4d2;
+  --accent-soft:rgba(99,180,210,.13);
+  --open:#d8a256;
+  --open-soft:rgba(216,162,86,.13);
+  --risk:#e08a7c;
+  --risk-soft:rgba(224,138,124,.12);
+  --ok:#6cc096;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px -18px rgba(0,0,0,.8);
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0;
+  background:var(--paper);
+  color:var(--ink);
+  font-family:var(--serif);
+  font-size:16px;
+  line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1180px;margin:0 auto;padding:0 28px 96px}
+.col{max-width:660px}
+
+/* ── header ─────────────────────────────── */
+.masthead{
+  border-bottom:1px solid var(--rule);
+  padding:56px 0 30px;
+  margin-bottom:44px;
+}
+.eyebrow{
+  font-family:var(--mono);
+  font-size:11px;
+  letter-spacing:.13em;
+  text-transform:uppercase;
+  color:var(--ink-3);
+  margin:0 0 18px;
+}
+h1{
+  font-family:var(--sans);
+  font-weight:600;
+  font-size:clamp(30px,4.6vw,44px);
+  line-height:1.1;
+  letter-spacing:-.021em;
+  margin:0 0 16px;
+  text-wrap:balance;
+}
+.standfirst{
+  font-size:18px;
+  color:var(--ink-2);
+  margin:0;
+  max-width:56ch;
+}
+.metastrip{
+  display:flex;
+  flex-wrap:wrap;
+  gap:0 34px;
+  margin-top:26px;
+  font-family:var(--mono);
+  font-size:11.5px;
+  color:var(--ink-3);
+}
+.metastrip b{color:var(--ink-2);font-weight:500}
+
+/* ── sections ───────────────────────────── */
+section{margin-bottom:60px}
+h2{
+  font-family:var(--sans);
+  font-weight:600;
+  font-size:23px;
+  letter-spacing:-.012em;
+  margin:0 0 6px;
+  text-wrap:balance;
+}
+h2 .num{
+  font-family:var(--mono);
+  font-size:12px;
+  font-weight:400;
+  color:var(--accent);
+  letter-spacing:.06em;
+  display:block;
+  margin-bottom:9px;
+}
+h3{
+  font-family:var(--sans);
+  font-weight:600;
+  font-size:15px;
+  letter-spacing:.002em;
+  margin:32px 0 8px;
+}
+p{margin:0 0 15px}
+.lede{color:var(--ink-2)}
+a{color:var(--accent)}
+code,.mono{font-family:var(--mono);font-size:.88em}
+code{
+  background:var(--surface-2);
+  padding:1px 5px;
+  border-radius:3px;
+  color:var(--ink);
+}
+
+/* ── ledger ─────────────────────────────── */
+.ledger{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(268px,1fr));
+  gap:14px;
+  margin-top:24px;
+}
+.card{
+  background:var(--surface);
+  border:1px solid var(--rule);
+  border-radius:5px;
+  padding:17px 18px 18px;
+  box-shadow:var(--shadow);
+  display:flex;
+  flex-direction:column;
+  gap:7px;
+}
+.card.open{border-color:var(--open);background:var(--open-soft)}
+.tag{
+  font-family:var(--mono);
+  font-size:10px;
+  letter-spacing:.12em;
+  text-transform:uppercase;
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  color:var(--ink-3);
+}
+.tag::before{
+  content:"";
+  width:7px;height:7px;border-radius:50%;
+  background:var(--ok);
+  flex:none;
+}
+.tag.is-open::before{background:var(--open)}
+.tag.is-open{color:var(--open)}
+.card h4{
+  font-family:var(--sans);
+  font-size:15px;
+  font-weight:600;
+  margin:0;
+  line-height:1.3;
+}
+.card p{
+  margin:0;
+  font-size:13.5px;
+  line-height:1.55;
+  color:var(--ink-2);
+}
+.card .src{
+  font-family:var(--mono);
+  font-size:10.5px;
+  color:var(--ink-3);
+  margin-top:auto;
+  padding-top:8px;
+  border-top:1px solid var(--rule-2);
+}
+
+/* ── figures ────────────────────────────── */
+figure{
+  margin:30px 0 0;
+  background:var(--surface);
+  border:1px solid var(--rule);
+  border-radius:6px;
+  box-shadow:var(--shadow);
+  overflow:hidden;
+}
+.figbody{overflow-x:auto;padding:22px 22px 6px}
+figure svg{display:block;width:100%;min-width:760px;height:auto}
+figcaption{
+  border-top:1px solid var(--rule-2);
+  padding:13px 22px 15px;
+  font-size:13.5px;
+  line-height:1.5;
+  color:var(--ink-2);
+  background:var(--surface-2);
+}
+figcaption b{color:var(--ink);font-weight:500}
+
+/* diagram primitives */
+.d-zone{fill:none;stroke:var(--rule);stroke-width:1;stroke-dasharray:3 4;rx:5}
+.d-zone-fill{fill:var(--surface-2);opacity:.45;rx:5}
+.d-zlabel{font-family:var(--mono);font-size:9.5px;letter-spacing:.11em;fill:var(--ink-3)}
+.d-node{fill:var(--surface);stroke:var(--ink-2);stroke-width:1.2;rx:4}
+.d-node-2{fill:var(--surface-2);stroke:var(--rule);stroke-width:1.2;rx:4}
+.d-node-new{fill:var(--accent-soft);stroke:var(--accent);stroke-width:1.4;rx:4}
+.d-node-out{fill:none;stroke:var(--ink-3);stroke-width:1.2;stroke-dasharray:4 3;rx:4}
+.d-t{font-family:var(--sans);font-size:12px;font-weight:600;fill:var(--ink)}
+.d-s{font-family:var(--mono);font-size:9px;fill:var(--ink-3)}
+.d-s2{font-family:var(--mono);font-size:9px;fill:var(--ink-2)}
+.d-e{stroke:var(--ink-2);stroke-width:1.3;fill:none}
+.d-e-acc{stroke:var(--accent);stroke-width:1.6;fill:none}
+.d-e-open{stroke:var(--open);stroke-width:2;fill:none;stroke-dasharray:7 5}
+.d-l{font-family:var(--mono);font-size:9px;fill:var(--ink-2)}
+.d-l-open{font-family:var(--mono);font-size:9.5px;fill:var(--open);font-weight:500}
+.d-l-acc{font-family:var(--mono);font-size:9px;fill:var(--accent)}
+.mk{fill:var(--ink-2)}
+.mk-acc{fill:var(--accent)}
+.mk-open{fill:var(--open)}
+.d-bound{stroke:var(--open);stroke-width:1.4;stroke-dasharray:2 5}
+
+/* ── table ──────────────────────────────── */
+.tablewrap{overflow-x:auto;margin-top:26px;border:1px solid var(--rule);border-radius:6px;background:var(--surface);box-shadow:var(--shadow)}
+table{border-collapse:collapse;width:100%;min-width:720px;font-family:var(--sans);font-size:13.5px}
+th,td{text-align:left;padding:11px 16px;border-bottom:1px solid var(--rule-2);vertical-align:top}
+thead th{
+  font-family:var(--mono);
+  font-size:10px;
+  letter-spacing:.1em;
+  text-transform:uppercase;
+  color:var(--ink-3);
+  font-weight:400;
+  background:var(--surface-2);
+  border-bottom:1px solid var(--rule);
+}
+tbody tr:last-child td{border-bottom:none}
+th[scope="row"]{font-weight:600;white-space:nowrap}
+td.num{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:12.5px}
+.pill{
+  display:inline-block;
+  font-family:var(--mono);
+  font-size:10px;
+  letter-spacing:.06em;
+  padding:2px 7px;
+  border-radius:3px;
+  border:1px solid currentColor;
+  white-space:nowrap;
+}
+.pill.g{color:var(--ok)}
+.pill.a{color:var(--open)}
+.pill.r{color:var(--risk)}
+
+/* ── callouts ───────────────────────────── */
+.note{
+  border-left:2px solid var(--accent);
+  background:var(--accent-soft);
+  padding:15px 20px;
+  margin:26px 0;
+  border-radius:0 4px 4px 0;
+}
+.note.warn{border-left-color:var(--risk);background:var(--risk-soft)}
+.note.rec{border-left-color:var(--ok);background:transparent;border:1px solid var(--rule);border-left:3px solid var(--ok);border-radius:0 5px 5px 0}
+.note h4{
+  font-family:var(--sans);
+  font-size:12px;
+  font-weight:600;
+  letter-spacing:.07em;
+  text-transform:uppercase;
+  margin:0 0 7px;
+  color:var(--ink-2);
+}
+.note p:last-child{margin-bottom:0}
+.note p{font-size:14.5px}
+
+/* ── lists ──────────────────────────────── */
+ul.clean{list-style:none;padding:0;margin:16px 0 0}
+ul.clean li{
+  display:grid;
+  grid-template-columns:88px 1fr;
+  gap:16px;
+  padding:11px 0;
+  border-top:1px solid var(--rule-2);
+  font-size:14.5px;
+  align-items:baseline;
+}
+ul.clean li:last-child{border-bottom:1px solid var(--rule-2)}
+ul.clean .k{
+  font-family:var(--mono);
+  font-size:11px;
+  color:var(--accent);
+  letter-spacing:.04em;
+}
+ul.clean .k.warn{color:var(--risk)}
+ul.clean .k.open{color:var(--open)}
+
+.steps{list-style:none;counter-reset:s;padding:0;margin:18px 0 0}
+.steps li{
+  counter-increment:s;
+  position:relative;
+  padding:0 0 14px 34px;
+  font-size:14.5px;
+  color:var(--ink-2);
+}
+.steps li::before{
+  content:counter(s);
+  position:absolute;left:0;top:1px;
+  font-family:var(--mono);
+  font-size:10px;
+  width:20px;height:20px;
+  display:grid;place-items:center;
+  border:1px solid var(--rule);
+  border-radius:50%;
+  color:var(--ink-3);
+  background:var(--surface);
+}
+.steps li b{color:var(--ink);font-weight:600;font-family:var(--sans)}
+
+hr.rule{border:none;border-top:1px solid var(--rule);margin:0 0 44px}
+
+footer{
+  border-top:1px solid var(--rule);
+  padding-top:20px;
+  font-family:var(--mono);
+  font-size:11px;
+  color:var(--ink-3);
+  line-height:1.7;
+}
+@media (max-width:640px){
+  .wrap{padding:0 18px 64px}
+  ul.clean li{grid-template-columns:1fr;gap:3px}
+}
+</style>
+</head>
+<body>
+
+
+<div class="wrap">
+
+<header class="masthead">
+  <p class="eyebrow">bridge-docs · 04_arquitectura_tecnica · borrador de decisión</p>
+  <h1>Arquitectura del Bridge Service</h1>
+  <p class="standfirst">Lo que ya está cerrado, lo que se decidió hoy, y el único enlace del sistema que sigue sin definir: cómo llega Azure al SQL&nbsp;Server on-premise.</p>
+  <div class="metastrip">
+    <span><b>Proyecto</b> Bridge Service (bridge-docs)</span>
+    <span><b>Consumidor</b> Portal de Videos</span>
+    <span><b>Equipo</b> 1 desarrollador .NET</span>
+    <span><b>Fecha</b> 2026-08-22</span>
+  </div>
+</header>
+
+<section class="col">
+  <h2><span class="num">§ 01</span>Estado de las decisiones</h2>
+  <p class="lede">Tres decisiones de arquitectura estaban abiertas al empezar esta sesión. Dos quedaron cerradas; la tercera espera este documento.</p>
+</section>
+
+<div class="ledger">
+  <div class="card">
+    <span class="tag">Cerrada · esta sesión</span>
+    <h4>Caché propio en PostgreSQL Azure</h4>
+    <p>El Bridge Service tendrá base de datos propia. Esto <em>revierte</em> la decisión previa de «sin BD propia» y valida el contrato <code>bridge_sync.yaml</code> tal como ya estaba escrito.</p>
+    <span class="src">→ exige ADR-BS-001</span>
+  </div>
+  <div class="card">
+    <span class="tag">Cerrada · esta sesión</span>
+    <h4>EF Core 8 como acceso a datos</h4>
+    <p>DB-First con scaffolding contra el SQL Server on-premise; Code-First con migraciones contra el PostgreSQL propio. Dos <code>DbContext</code>, dos proveedores.</p>
+    <span class="src">→ exige ADR-BS-002</span>
+  </div>
+  <div class="card open">
+    <span class="tag is-open">Abierta · bloquea el despliegue</span>
+    <h4>Conectividad Azure → on-premise</h4>
+    <p>VPN Site-to-Site, IP fija de salida o Hybrid Connections. Es el único tramo del diagrama que sigue en línea punteada.</p>
+    <span class="src">→ §&nbsp;03 de este documento</span>
+  </div>
+</div>
+
+<section style="margin-top:60px">
+  <div class="col">
+    <h2><span class="num">§ 02</span>Dónde encaja el Bridge Service</h2>
+    <p class="lede">El Portal de Videos ya está documentado al 100 %. El Bridge es la única pieza que toca la red corporativa, y por eso concentra todo el riesgo de conectividad del sistema.</p>
+  </div>
+
+  <figure>
+    <div class="figbody">
+      <svg viewBox="0 0 1280 386" role="img" aria-label="Diagrama de contexto: el navegador llega al backend del portal en Azure, este consulta al Bridge Service, y el Bridge alcanza el SQL Server on-premise por un enlace todavía sin definir.">
+        <defs>
+          <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,1 L9,5 L0,9 z" class="mk"/>
+          </marker>
+          <marker id="a1o" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0,1 L9,5 L0,9 z" class="mk-open"/>
+          </marker>
+        </defs>
+
+        <!-- zonas -->
+        <rect x="12" y="56" width="192" height="224" class="d-zone-fill"/>
+        <rect x="12" y="56" width="192" height="224" class="d-zone"/>
+        <text x="24" y="76" class="d-zlabel">NAVEGADOR</text>
+
+        <rect x="232" y="56" width="628" height="284" class="d-zone-fill"/>
+        <rect x="232" y="56" width="628" height="284" class="d-zone"/>
+        <text x="244" y="76" class="d-zlabel">MICROSOFT AZURE</text>
+
+        <rect x="940" y="56" width="324" height="140" class="d-zone-fill"/>
+        <rect x="940" y="56" width="324" height="140" class="d-zone"/>
+        <text x="952" y="76" class="d-zlabel">RED CORPORATIVA · ON-PREMISE</text>
+
+        <!-- frontera -->
+        <line x1="900" y1="34" x2="900" y2="356" class="d-bound"/>
+        <text x="900" y="26" text-anchor="middle" class="d-l-open">frontera de red</text>
+
+        <!-- fila A -->
+        <rect x="24" y="100" width="152" height="68" class="d-node"/>
+        <text x="100" y="128" text-anchor="middle" class="d-t">Angular 17</text>
+        <text x="100" y="146" text-anchor="middle" class="d-s">PWA · portal-frontend</text>
+
+        <rect x="24" y="204" width="152" height="52" class="d-node-2"/>
+        <text x="100" y="226" text-anchor="middle" class="d-t">Service Worker</text>
+        <text x="100" y="243" text-anchor="middle" class="d-s">caché de video</text>
+        <line x1="100" y1="168" x2="100" y2="200" class="d-e" marker-end="url(#a1)"/>
+
+        <rect x="268" y="100" width="168" height="68" class="d-node"/>
+        <text x="352" y="128" text-anchor="middle" class="d-t">Portal Backend</text>
+        <text x="352" y="146" text-anchor="middle" class="d-s">.NET 8 · Clean Arch.</text>
+
+        <rect x="596" y="100" width="168" height="68" class="d-node-new"/>
+        <text x="680" y="128" text-anchor="middle" class="d-t">Bridge Service</text>
+        <text x="680" y="146" text-anchor="middle" class="d-s2">.NET 8 · App Service</text>
+
+        <rect x="990" y="100" width="220" height="68" class="d-node"/>
+        <text x="1100" y="128" text-anchor="middle" class="d-t">SQL Server</text>
+        <text x="1100" y="146" text-anchor="middle" class="d-s">fuente de verdad · solo lectura</text>
+
+        <!-- fila B: stores -->
+        <rect x="252" y="248" width="144" height="60" class="d-node-2"/>
+        <text x="324" y="272" text-anchor="middle" class="d-t">PostgreSQL</text>
+        <text x="324" y="289" text-anchor="middle" class="d-s">portal</text>
+
+        <rect x="412" y="248" width="144" height="60" class="d-node-2"/>
+        <text x="484" y="272" text-anchor="middle" class="d-t">Blob Storage</text>
+        <text x="484" y="289" text-anchor="middle" class="d-s">videos</text>
+
+        <rect x="620" y="248" width="144" height="60" class="d-node-new"/>
+        <text x="692" y="272" text-anchor="middle" class="d-t">PostgreSQL</text>
+        <text x="692" y="289" text-anchor="middle" class="d-s2">bridge · NUEVO</text>
+
+        <!-- aristas -->
+        <line x1="176" y1="134" x2="264" y2="134" class="d-e" marker-end="url(#a1)"/>
+        <text x="220" y="126" text-anchor="middle" class="d-l">HTTPS · JWT</text>
+
+        <line x1="436" y1="134" x2="592" y2="134" class="d-e" marker-end="url(#a1)"/>
+        <text x="514" y="124" text-anchor="middle" class="d-l">Service JWT RS256</text>
+        <text x="514" y="152" text-anchor="middle" class="d-l">/v1/media/updates</text>
+
+        <line x1="764" y1="134" x2="986" y2="134" class="d-e-open" marker-end="url(#a1o)"/>
+        <text x="875" y="118" text-anchor="middle" class="d-l-open">POR DEFINIR</text>
+        <text x="875" y="154" text-anchor="middle" class="d-l-open">TDS · puerto 1433</text>
+
+        <line x1="332" y1="168" x2="326" y2="244" class="d-e" marker-end="url(#a1)"/>
+        <text x="338" y="200" class="d-l">réplica · ADR-006</text>
+
+        <line x1="404" y1="168" x2="470" y2="244" class="d-e" marker-end="url(#a1)"/>
+        <text x="486" y="200" class="d-l">proxy streaming · ADR-003</text>
+
+        <line x1="684" y1="168" x2="690" y2="244" class="d-e-acc" marker-end="url(#a1)"/>
+        <text x="700" y="200" class="d-l-acc">caché EF Core</text>
+      </svg>
+    </div>
+    <figcaption><b>Todo el sistema está en línea sólida menos un tramo.</b> El enlace entre el App Service del Bridge y el SQL Server on-premise es el único que aún no tiene mecanismo definido — y es el que determina si el SQL Server queda expuesto a internet o no.</figcaption>
+  </figure>
+</section>
+
+<section>
+  <div class="col">
+    <h2><span class="num">§ 03</span>Qué cambia por dentro al tener BD propia</h2>
+    <p class="lede">La decisión de hoy no es solo «añadir una base de datos». Cambia quién cruza la frontera de red: con caché propio, <em>ningún request del portal llega a on-premise en caliente</em>. Solo lo hace un proceso en segundo plano.</p>
+  </div>
+
+  <figure>
+    <div class="figbody">
+      <svg viewBox="0 0 1060 420" role="img" aria-label="Interior del Bridge Service: la capa API sirve lecturas desde el PostgreSQL propio vía BridgeDbContext, mientras un SyncWorker en segundo plano es el único componente que consulta el SQL Server on-premise.">
+        <defs>
+          <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,1 L9,5 L0,9 z" class="mk"/>
+          </marker>
+          <marker id="a2a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,1 L9,5 L0,9 z" class="mk-acc"/>
+          </marker>
+        </defs>
+
+        <rect x="168" y="32" width="704" height="360" class="d-zone-fill"/>
+        <rect x="168" y="32" width="704" height="360" class="d-zone"/>
+        <text x="182" y="52" class="d-zlabel">BRIDGE SERVICE · .NET 8 · CLEAN ARCH. SIMPLIFICADA</text>
+
+        <rect x="12" y="170" width="120" height="60" class="d-node-out"/>
+        <text x="72" y="196" text-anchor="middle" class="d-t">Portal</text>
+        <text x="72" y="213" text-anchor="middle" class="d-s">backend</text>
+
+        <!-- API -->
+        <rect x="192" y="90" width="180" height="212" class="d-node"/>
+        <text x="282" y="116" text-anchor="middle" class="d-t">Capa API</text>
+        <text x="206" y="144" class="d-s2">POST /v1/auth/token</text>
+        <text x="206" y="164" class="d-s2">GET&#160; /v1/softwares</text>
+        <text x="206" y="184" class="d-s2">GET&#160; /v1/media/updates</text>
+        <text x="206" y="204" class="d-s2">POST /v1/sync</text>
+        <text x="206" y="224" class="d-s2">GET&#160; /v1/sync/{id}</text>
+        <text x="206" y="244" class="d-s2">GET&#160; /health</text>
+        <line x1="206" y1="258" x2="358" y2="258" stroke="var(--rule)" stroke-width="1"/>
+        <text x="206" y="278" class="d-s">JwtBearer + scopes</text>
+
+        <!-- servicios -->
+        <rect x="412" y="90" width="180" height="80" class="d-node-2"/>
+        <text x="502" y="122" text-anchor="middle" class="d-t">CatalogQueryService</text>
+        <text x="502" y="141" text-anchor="middle" class="d-s">sirve desde caché</text>
+
+        <rect x="412" y="230" width="180" height="80" class="d-node-new"/>
+        <text x="502" y="262" text-anchor="middle" class="d-t">SyncWorker</text>
+        <text x="502" y="281" text-anchor="middle" class="d-s2">BackgroundService</text>
+
+        <!-- contexts -->
+        <rect x="632" y="90" width="220" height="80" class="d-node-2"/>
+        <text x="742" y="118" text-anchor="middle" class="d-t">BridgeDbContext</text>
+        <text x="742" y="136" text-anchor="middle" class="d-s">Npgsql · Code-First</text>
+        <text x="742" y="152" text-anchor="middle" class="d-s">migraciones EF</text>
+
+        <rect x="632" y="230" width="220" height="80" class="d-node-new"/>
+        <text x="742" y="258" text-anchor="middle" class="d-t">OnPremiseDbContext</text>
+        <text x="742" y="276" text-anchor="middle" class="d-s2">SqlServer · DB-First scaffold</text>
+        <text x="742" y="292" text-anchor="middle" class="d-s2">AsNoTracking · WHERE UpdatedAt &gt;</text>
+
+        <!-- externos -->
+        <rect x="898" y="100" width="150" height="60" class="d-node-out"/>
+        <text x="973" y="124" text-anchor="middle" class="d-t">PostgreSQL</text>
+        <text x="973" y="141" text-anchor="middle" class="d-s">Azure</text>
+
+        <rect x="898" y="240" width="150" height="60" class="d-node-out"/>
+        <text x="973" y="264" text-anchor="middle" class="d-t">SQL Server</text>
+        <text x="973" y="281" text-anchor="middle" class="d-s">on-premise</text>
+
+        <!-- aristas -->
+        <line x1="132" y1="200" x2="188" y2="200" class="d-e" marker-end="url(#a2)"/>
+        <text x="160" y="190" text-anchor="middle" class="d-l">JWT</text>
+
+        <line x1="372" y1="130" x2="408" y2="130" class="d-e" marker-end="url(#a2)"/>
+        <line x1="372" y1="270" x2="408" y2="270" class="d-e-acc" marker-end="url(#a2a)"/>
+
+        <line x1="592" y1="130" x2="628" y2="130" class="d-e" marker-end="url(#a2)"/>
+        <line x1="592" y1="270" x2="628" y2="270" class="d-e-acc" marker-end="url(#a2a)"/>
+
+        <line x1="852" y1="130" x2="894" y2="130" class="d-e" marker-end="url(#a2)"/>
+        <line x1="852" y1="270" x2="894" y2="270" class="d-e-acc" marker-end="url(#a2a)"/>
+
+        <polyline points="502,230 502,200 742,200 742,174" class="d-e-acc" marker-end="url(#a2a)"/>
+        <text x="622" y="193" text-anchor="middle" class="d-l-acc">UPSERT del delta</text>
+
+        <!-- leyenda -->
+        <line x1="192" y1="342" x2="228" y2="342" class="d-e"/>
+        <text x="236" y="346" class="d-s2">camino de lectura — nunca sale de Azure</text>
+        <line x1="530" y1="342" x2="566" y2="342" class="d-e-acc"/>
+        <text x="574" y="346" class="d-s2">camino de sincronización — único que cruza la frontera</text>
+      </svg>
+    </div>
+    <figcaption><b>El SyncWorker es el único componente con conexión a on-premise.</b> Eso significa que la latencia y la disponibilidad del enlace de red ya no afectan al tiempo de respuesta de <code>/v1/softwares</code> — solo a la frescura de los datos. Es el argumento fuerte a favor de la BD propia, y también el que introduce el riesgo de §&nbsp;05.</figcaption>
+  </figure>
+
+  <div class="col">
+    <div class="note">
+      <h4>Consecuencia de EF Core con dos proveedores</h4>
+      <p>Un solo proyecto de Infrastructure cargará <code>Npgsql.EntityFrameworkCore.PostgreSQL</code> y <code>Microsoft.EntityFrameworkCore.SqlServer</code> a la vez. Las migraciones deben apuntar explícitamente al contexto correcto (<code>--context BridgeDbContext</code>) o el CLI falla; y el scaffolding del esquema on-premise hay que regenerarlo a mano cada vez que cambie una tabla que no controlamos.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <h2><span class="num">§ 04</span>La decisión abierta: cómo cruzar la frontera</h2>
+    <p class="lede">Las tres opciones conectan exactamente los mismos dos extremos. Lo único que cambia es qué hay en medio — y quién inicia la conexión.</p>
+  </div>
+
+  <figure>
+    <div class="figbody">
+      <svg viewBox="0 0 1080 430" role="img" aria-label="Comparación de tres mecanismos de conectividad entre el App Service del Bridge y el SQL Server on-premise: VPN Site-to-Site, IP fija de salida con firewall, y Azure Hybrid Connections con conexión saliente iniciada desde on-premise.">
+        <defs>
+          <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,1 L9,5 L0,9 z" class="mk"/>
+          </marker>
+          <marker id="a3a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,1 L9,5 L0,9 z" class="mk-acc"/>
+          </marker>
+        </defs>
+
+        <!-- ═══ OPCIÓN A ═══ -->
+        <text x="12" y="22" class="d-zlabel">OPCIÓN A · VPN SITE-TO-SITE</text>
+        <rect x="12" y="34" width="150" height="56" class="d-node"/>
+        <text x="87" y="58" text-anchor="middle" class="d-t">Bridge Service</text>
+        <text x="87" y="75" text-anchor="middle" class="d-s">App Service</text>
+
+        <rect x="196" y="34" width="122" height="56" class="d-node-2"/>
+        <text x="257" y="58" text-anchor="middle" class="d-t">VNet</text>
+        <text x="257" y="75" text-anchor="middle" class="d-s">Integration</text>
+
+        <rect x="352" y="34" width="126" height="56" class="d-node-2"/>
+        <text x="415" y="58" text-anchor="middle" class="d-t">VPN Gateway</text>
+        <text x="415" y="75" text-anchor="middle" class="d-s">Basic SKU</text>
+
+        <rect x="672" y="34" width="180" height="56" class="d-node-2"/>
+        <text x="762" y="58" text-anchor="middle" class="d-t">Router corporativo</text>
+        <text x="762" y="75" text-anchor="middle" class="d-s">endpoint IPsec</text>
+
+        <rect x="912" y="34" width="156" height="56" class="d-node"/>
+        <text x="990" y="58" text-anchor="middle" class="d-t">SQL Server</text>
+        <text x="990" y="75" text-anchor="middle" class="d-s">sin IP pública</text>
+
+        <line x1="162" y1="62" x2="192" y2="62" class="d-e" marker-end="url(#a3)"/>
+        <line x1="318" y1="62" x2="348" y2="62" class="d-e" marker-end="url(#a3)"/>
+        <line x1="478" y1="62" x2="668" y2="62" class="d-e-acc" stroke-dasharray="6 4" marker-end="url(#a3a)"/>
+        <text x="573" y="52" text-anchor="middle" class="d-l-acc">túnel IPsec cifrado</text>
+        <line x1="852" y1="62" x2="908" y2="62" class="d-e" marker-end="url(#a3)"/>
+        <text x="12" y="112" class="d-s2">Tráfico privado extremo a extremo · el SQL Server nunca se publica · requiere coordinación con el equipo de redes</text>
+
+        <line x1="12" y1="136" x2="1068" y2="136" stroke="var(--rule-2)" stroke-width="1"/>
+
+        <!-- ═══ OPCIÓN B ═══ -->
+        <text x="12" y="170" class="d-zlabel">OPCIÓN B · IP FIJA DE SALIDA</text>
+        <rect x="12" y="182" width="150" height="56" class="d-node"/>
+        <text x="87" y="206" text-anchor="middle" class="d-t">Bridge Service</text>
+        <text x="87" y="223" text-anchor="middle" class="d-s">App Service</text>
+
+        <rect x="196" y="182" width="158" height="56" class="d-node-2"/>
+        <text x="275" y="206" text-anchor="middle" class="d-t">IPs de salida</text>
+        <text x="275" y="223" text-anchor="middle" class="d-s">cambian al escalar</text>
+
+        <rect x="640" y="182" width="212" height="56" class="d-node-2"/>
+        <text x="746" y="206" text-anchor="middle" class="d-t">Firewall / NAT :1433</text>
+        <text x="746" y="223" text-anchor="middle" class="d-s">allow-list de IPs</text>
+
+        <rect x="912" y="182" width="156" height="56" class="d-node"/>
+        <text x="990" y="206" text-anchor="middle" class="d-t">SQL Server</text>
+        <text x="990" y="223" text-anchor="middle" class="d-s">alcanzable desde internet</text>
+
+        <line x1="162" y1="210" x2="192" y2="210" class="d-e" marker-end="url(#a3)"/>
+        <line x1="354" y1="210" x2="636" y2="210" stroke="var(--risk)" stroke-width="2" stroke-dasharray="7 5" fill="none" marker-end="url(#a3)"/>
+        <text x="495" y="200" text-anchor="middle" style="font-family:var(--mono);font-size:9.5px;font-weight:500" fill="var(--risk)">internet público · TDS en claro salvo TLS</text>
+        <line x1="852" y1="210" x2="908" y2="210" class="d-e" marker-end="url(#a3)"/>
+        <text x="12" y="260" class="d-s2">Cero infraestructura extra · pero abre el puerto 1433 al exterior y la allow-list se rompe al cambiar de plan de App Service</text>
+
+        <line x1="12" y1="284" x2="1068" y2="284" stroke="var(--rule-2)" stroke-width="1"/>
+
+        <!-- ═══ OPCIÓN C ═══ -->
+        <text x="12" y="318" class="d-zlabel">OPCIÓN C · HYBRID CONNECTIONS</text>
+        <rect x="12" y="330" width="150" height="56" class="d-node"/>
+        <text x="87" y="354" text-anchor="middle" class="d-t">Bridge Service</text>
+        <text x="87" y="371" text-anchor="middle" class="d-s">App Service</text>
+
+        <rect x="196" y="330" width="176" height="56" class="d-node-2"/>
+        <text x="284" y="354" text-anchor="middle" class="d-t">Azure Relay</text>
+        <text x="284" y="371" text-anchor="middle" class="d-s">Hybrid Connection</text>
+
+        <rect x="612" y="330" width="240" height="56" class="d-node-2"/>
+        <text x="732" y="354" text-anchor="middle" class="d-t">Hybrid Connection Manager</text>
+        <text x="732" y="371" text-anchor="middle" class="d-s">agente en servidor on-premise</text>
+
+        <rect x="912" y="330" width="156" height="56" class="d-node"/>
+        <text x="990" y="354" text-anchor="middle" class="d-t">SQL Server</text>
+        <text x="990" y="371" text-anchor="middle" class="d-s">sin puertos entrantes</text>
+
+        <line x1="162" y1="358" x2="192" y2="358" class="d-e" marker-end="url(#a3)"/>
+        <line x1="608" y1="358" x2="376" y2="358" class="d-e-acc" stroke-dasharray="6 4" marker-end="url(#a3a)"/>
+        <text x="492" y="348" text-anchor="middle" class="d-l-acc">sesión iniciada desde on-premise · TCP 443 saliente</text>
+        <line x1="852" y1="358" x2="908" y2="358" class="d-e" marker-end="url(#a3)"/>
+        <text x="12" y="408" class="d-s2">La flecha central va al revés: nadie abre puertos hacia la red corporativa · el HCM es un proceso más que mantener y un punto único de fallo</text>
+      </svg>
+    </div>
+    <figcaption><b>La diferencia real está en la dirección de la flecha central.</b> En A el tráfico va por un túnel privado; en B sale a internet abierto; en C la conexión la <em>inicia</em> el servidor on-premise hacia fuera, que es lo que evita abrir cualquier puerto entrante.</figcaption>
+  </figure>
+
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">Criterio</th>
+          <th scope="col">A · VPN Site-to-Site</th>
+          <th scope="col">B · IP fija + firewall</th>
+          <th scope="col">C · Hybrid Connections</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th scope="row">Exposición del SQL Server</th>
+          <td><span class="pill g">Ninguna</span></td>
+          <td><span class="pill r">Puerto 1433 público</span></td>
+          <td><span class="pill g">Ninguna</span></td>
+        </tr>
+        <tr>
+          <th scope="row">Costo mensual añadido</th>
+          <td class="num">≈ USD 27 (VPN GW Basic)</td>
+          <td class="num">USD 0</td>
+          <td class="num">USD 0 desde plan Standard</td>
+        </tr>
+        <tr>
+          <th scope="row">Puertos entrantes a abrir</th>
+          <td>UDP 500 / 4500 al router</td>
+          <td>TCP 1433 al SQL Server</td>
+          <td><span class="pill g">Ninguno</span></td>
+        </tr>
+        <tr>
+          <th scope="row">Depende del equipo de redes</th>
+          <td><span class="pill a">Sí, bloqueante</span></td>
+          <td><span class="pill a">Sí, regla de NAT</span></td>
+          <td><span class="pill g">Solo instalar el agente</span></td>
+        </tr>
+        <tr>
+          <th scope="row">Latencia añadida por salto</th>
+          <td class="num">baja · ~5–15 ms</td>
+          <td class="num">baja · directa</td>
+          <td class="num">media · relay intermedio</td>
+        </tr>
+        <tr>
+          <th scope="row">Punto único de fallo nuevo</th>
+          <td>VPN Gateway (SLA 99,9 %)</td>
+          <td>—</td>
+          <td><span class="pill a">HCM en un servidor</span></td>
+        </tr>
+        <tr>
+          <th scope="row">Se rompe solo cuando…</th>
+          <td>cae el túnel o cambia el peer</td>
+          <td><span class="pill r">escalas el App Service</span></td>
+          <td>se reinicia el servidor del HCM</td>
+        </tr>
+        <tr>
+          <th scope="row">Encaje con 1 desarrollador</th>
+          <td><span class="pill a">Necesita apoyo externo</span></td>
+          <td><span class="pill g">Inmediato</span></td>
+          <td><span class="pill g">Autónomo</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="col">
+    <div class="note rec">
+      <h4>Recomendación</h4>
+      <p><b>A si existe equipo de redes disponible; C si no lo hay.</b> Ambas cumplen el requisito no negociable de que el SQL Server —fuente de verdad de toda la operación— no quede accesible desde internet. La diferencia entre ellas es organizativa, no técnica: A necesita a alguien que configure el router corporativo, C solo necesita un servidor donde instalar el agente.</p>
+      <p><b>B no es recomendable</b> para producción. No por el costo, sino porque las IPs de salida del App Service cambian al escalar de plan o al hacer ciertos redeploys: la allow-list se rompe sin aviso, el <code>/health</code> pasa a <code>Degraded</code> y la sincronización se cae por una causa que no aparece en ningún log de aplicación. Es viable como configuración temporal de desarrollo, nunca como destino final.</p>
+    </div>
+  </div>
+</section>
+
+<section class="col">
+  <h2><span class="num">§ 05</span>Lo que arrastra la decisión de BD propia</h2>
+  <p class="lede">Aceptar el caché en PostgreSQL cierra la contradicción con el contrato, pero abre cuatro frentes que hay que registrar antes de escribir código.</p>
+
+  <h3>Frescura compuesta: el riesgo principal</h3>
+  <p>Ahora hay <em>cuatro</em> niveles de caché en cadena. Un video subido en on-premise recorre: SQL&nbsp;Server → sync interno del Bridge → PostgreSQL del Bridge → sync horaria del portal (ADR-006) → PostgreSQL del portal → Service Worker del navegador.</p>
+  <p>Si el sync interno del Bridge también corre cada hora, el peor caso de latencia de publicación pasa de ~1&nbsp;h a <b>~2&nbsp;h más el TTL del Service Worker</b>. Dos mitigaciones posibles: correr el sync del Bridge cada 15&nbsp;minutos, o hacer que <code>GET /v1/media/updates</code> consulte on-premise en vivo y deje el caché solo para <code>GET /v1/softwares</code>. Hay que elegir una antes de escribir el SyncWorker.</p>
+
+  <h3>Correcciones pendientes en documentos ya emitidos</h3>
+  <ul class="clean">
+    <li><span class="k warn">contrato</span><span><code>bridge_auth.yaml</code> declara <code>iss: https://portal-api.yourdomain.com</code> en el <code>ServiceJwtPayload</code>. El emisor es el Bridge Service, no el portal: debe ser el issuer propio del Bridge, o la validación de <code>iss</code> nunca podrá activarse.</span></li>
+    <li><span class="k open">RNF</span><span>Con las lecturas servidas desde PostgreSQL, el RNF de <code>p95 &lt; 5.000 ms</code> para <code>GET /v1/softwares</code> queda holgadísimo. Conviene ajustarlo a <code>p95 &lt; 500 ms</code> y reservar los 5&nbsp;s como umbral del sync interno.</span></li>
+    <li><span class="k">contexto</span><span>La ficha del proyecto sigue diciendo «Sin BD propia — acceso directo al SQL Server on-premise». Queda superada por ADR-BS-001 y hay que reescribirla.</span></li>
+    <li><span class="k">health</span><span>El check <code>postgresql-azure</code> de <code>/health</code> ahora sí corresponde. Se mantiene tal cual está en <code>bridge_auth.yaml</code>.</span></li>
+  </ul>
+
+  <h3>Registros nuevos a crear</h3>
+  <ul class="clean">
+    <li><span class="k">ADR-BS-001</span><span>Caché propio en PostgreSQL Azure frente a pass-through directo. Estado: Aceptada. Supera la decisión previa de «sin BD propia».</span></li>
+    <li><span class="k">ADR-BS-002</span><span>EF Core 8 con dos proveedores (DB-First sobre SQL Server, Code-First sobre PostgreSQL) frente a Dapper. Estado: Aceptada.</span></li>
+    <li><span class="k">ADR-BS-003</span><span>Conectividad Azure ↔ on-premise. Estado: <b>Propuesta</b> — se cierra con la respuesta a §&nbsp;04.</span></li>
+    <li><span class="k warn">DT-BS-01</span><span>El scaffolding del esquema on-premise es manual: cualquier cambio en <code>Images</code>, <code>Entity_Files</code> o <code>Files</code> rompe el mapeo en tiempo de ejecución, no de compilación.</span></li>
+    <li><span class="k warn">DT-BS-02</span><span>Los <code>syncId</code> ahora son durables, pero no hay política de purga de la tabla de historial de sincronizaciones.</span></li>
+    <li><span class="k open">DEC-BS-01</span><span>Frecuencia del sync interno del Bridge, o lectura en vivo para el endpoint de novedades. Bloquea el diseño del SyncWorker.</span></li>
+  </ul>
+</section>
+
+<section class="col">
+  <h2><span class="num">§ 06</span>Siguiente paso</h2>
+  <p class="lede">En cuanto se cierre §&nbsp;04, el documento de arquitectura técnica queda listo para escribirse completo y guardarse en su ruta definitiva.</p>
+  <ol class="steps">
+    <li><b>Elegir A o C</b> — es la última entrada que falta para el diagrama de despliegue.</li>
+    <li><b>Emitir <code>04_arquitectura_tecnica/arquitectura_tecnica_bridge_service_v1.0.adoc</code></b> con los tres diagramas de este documento embebidos como bloques Mermaid, y <code>modelo_datos_bridge_v1.mermaid</code> para el esquema del caché.</li>
+    <li><b>Crear ADR-BS-001 al 003</b> en <code>11_gestion_producto/adr/</code>, más <code>adr-000_indice.adoc</code>.</li>
+    <li><b>Actualizar <code>00_Estado_Actual.adoc</code> e <code>index.adoc</code></b> de bridge-docs, cambiando 04 de <span class="mono">[PENDIENTE]</span> a enlace real.</li>
+    <li><b>Corregir <code>bridge_auth.yaml</code></b> (el <code>iss</code>) y mover la versión superada a <code>_historico/</code>.</li>
+  </ol>
+</section>
+
+<hr class="rule">
+<footer>
+  Bridge Service · documento de trabajo previo a 04_arquitectura_tecnica<br>
+  Confidencial — solo uso interno · Equipo de Desarrollo · rev. 2026-08-22
+</footer>
+
+</div>
+
+</body>
+</html>

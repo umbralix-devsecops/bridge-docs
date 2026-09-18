@@ -1,0 +1,186 @@
+= ADR-000 — Índice de decisiones de arquitectura
+:author: Equipo de Desarrollo
+:revnumber: 2.1
+:revdate: 2026-09-17
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:icons: font
+:lang: es
+:root: ../..
+:section-id: gestion-producto
+:section-title: Gestión de Producto
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+== Propósito
+
+Catálogo de todas las decisiones de arquitectura del *Bridge Service*. Una decisión por
+archivo, numeración correlativa, sin reutilizar números.
+
+[NOTE]
+====
+*Prefijo `ADR-BS-`.* El Bridge Service usa un prefijo propio para evitar colisión con los
+ADR-001 a ADR-009 del Portal de Videos, que viven en el repositorio `portal-docs`. Ambos
+conjuntos se leen a menudo juntos.
+====
+
+== Decisiones vigentes
+
+[cols="1,3,1,1",options="header"]
+|===
+| ID | Decisión | Estado | Fecha
+
+| xref:adr-bs-001_cache_postgresql_propio.adoc[ADR-BS-001]
+| Persistencia propia en PostgreSQL Azure frente a pass-through directo
+| ✅ Aceptada · revisada
+| 2026-08-22
+
+| xref:adr-bs-002_efcore_dos_proveedores.adoc[ADR-BS-002]
+| EF Core 8 Code-First sobre PostgreSQL. *Revisada: queda un solo proveedor*
+| ✅ Aceptada · revisada
+| 2026-08-22
+
+| xref:adr-bs-004_ef_core_fuente_unica_esquema.adoc[ADR-BS-004]
+| EF Core como fuente única de verdad del esquema; historial derivado
+| ✅ Aceptada
+| 2026-08-23
+
+| xref:adr-bs-005_servicio_unico.adoc[ADR-BS-005]
+| El Bridge Service es el backend del portal 🆕
+| ✅ Aceptada
+| 2026-09-16
+
+| xref:adr-bs-006_ingesta_por_empuje.adoc[ADR-BS-006]
+| El catálogo entra por una API de ingesta propia, no por lectura del origen 🆕
+| ✅ Aceptada
+| 2026-09-16
+
+| xref:adr-bs-007_acceso_a_los_bytes.adoc[ADR-BS-007]
+| Cómo obtiene el Bridge los bytes de Azure Blob Storage 🆕
+| ✅ Aceptada
+| 2026-09-17
+
+| xref:adr-bs-008_inversion_de_dependencias.adoc[ADR-BS-008]
+| Inversión de dependencias entre capas: los puertos en `Application` 🆕
+| ✅ Aceptada
+| 2026-09-17
+|===
+
+== Decisiones descartadas
+
+[cols="1,3,1",options="header"]
+|===
+| ID | Motivo | Descartada por
+
+| xref:adr-bs-003_conectividad_onpremise.adoc[ADR-BS-003]
+| Evaluaba cómo atravesar la red corporativa para leer el SQL Server de SinsaTools. El Bridge
+  ya no accede a esa base de datos, así que no hay tramo de red que resolver. *El problema
+  desapareció; no es que una opción ganara a las otras.* El documento se conserva íntegro: su
+  análisis de exposición de red sigue siendo válido si algún día hiciera falta alcanzar un
+  recurso corporativo.
+| ADR-BS-006
+|===
+
+NOTE: Una decisión descartada *no se reabre*. Si vuelve a hacer falta conectividad
+corporativa, se emite un ADR nuevo con su propio número.
+
+== Decisiones superadas
+
+[cols="1,3,2",options="header"]
+|===
+| Decisión original | Motivo de la superación | Superada por
+
+| REST-BS-04 y los principios «sin BD propia» / «stateless» de
+  `requerimientos_bridge_service_v1.0.adoc`
+| Contradecían el contrato `bridge_sync.yaml`, que describía un caché interno en PostgreSQL y
+  exigía `syncId` durable. La contradicción era anterior a este registro; el ADR eligió el
+  lado del contrato.
+| ADR-BS-001 → requerimientos v1.1
+
+| «VPN site-to-site o IP fija» (sin cerrar)
+| Ambigua: nunca se eligió una de las dos, y apareció una tercera opción viable
+  (Hybrid Connections).
+| ADR-BS-003 → a su vez descartada
+
+| La arquitectura de *tres servicios* de `requerimientos_v1.1` y
+  `arquitectura_tecnica_v1.1`
+| El backend del portal no existía en ningún repositorio, y el frontend —ya construido— habla
+  con `/api`, no con `/v1`. Mantener dos servicios costaba dos despliegues y hacía imposible
+  la integridad referencial entre permisos y catálogo.
+| ADR-BS-005 → requerimientos v2.0
+
+| La lectura directa del SQL Server on-premise (`RF-BS-03`, `RF-BS-04`, `RF-BS-11`,
+  `REST-BS-05`, `REST-BS-10`)
+| Dependía de una conectividad que llevaba un mes sin resolverse y de unos campos de
+  auditoría que nadie pudo verificar. Se sustituye por un contrato de ingesta donde
+  *especificamos* lo que necesitamos en vez de adivinarlo.
+| ADR-BS-006 → requerimientos v2.0
+|===
+
+== Decisiones heredadas sin ADR propio
+
+Tomadas al definir el proyecto. No se reabren salvo que un ADR las supere.
+
+[cols="1,3",options="header"]
+|===
+| Ámbito | Decisión
+
+| Prefijo de ADR
+| `ADR-BS-NNN`. Sin sufijo, `ADR-001` significaría dos cosas distintas según el repositorio, y
+  ambos conjuntos se leen juntos. Confirmado el 2026-08-22.
+
+| Stack
+| .NET 8 (C#) · REST-BS-01
+
+| Arquitectura
+| Clean Architecture. *Revisada el 2026-09-16:* tres capas —`Api`, `Application`,
+  `Infrastructure`— en vez de dos, porque el servicio dejó de ser un traductor entre esquemas
+  y pasó a contener evaluación de acceso, sesiones, ingesta y streaming
+  (`arquitectura_tecnica_bridge_service_v2.1.adoc` §5). *La dirección de las dependencias
+  deja de ser heredada el 2026-09-17:* tiene ADR propio, `ADR-BS-008`.
+
+| Repositorio
+| `Sin-PortalBridge`, independiente del frontend `Sin-PortalVideos` · REST-BS-03
+
+| Despliegue
+| Azure App Service (Linux), *sin conectividad con ninguna red corporativa*
+
+| Autenticación
+| Service JWT RS256 entre sistemas; User JWT RS256 para las personas del portal · REST-BS-07
+
+| Idioma
+| Artefactos técnicos en inglés; documentación, comentarios y etiquetas de actor en español
+|===
+
+== Numeración quemada
+
+Estos números no se reutilizan (`Glosario_IDs`, regla 1):
+
+* *ADR:* `ADR-BS-003` — descartada, el archivo se conserva.
+* *Estándares:* ninguno quemado todavía (`EST-BS-01..26` emitidos el 2026-09-17).
+* *Requerimientos funcionales:* `RF-BS-03`, `RF-BS-04`, `RF-BS-07`, `RF-BS-09`, `RF-BS-10`,
+  `RF-BS-11`.
+* *No funcionales:* `RNF-BS-05`.
+* *Restricciones:* `REST-BS-02`, `REST-BS-05`, `REST-BS-08`, `REST-BS-09`, `REST-BS-10`.
+* *Reglas:* `SEC-BS-05`, `SEC-BS-07`, `DOM-BS-01`, `DOM-BS-02`, `DOM-BS-03`.
+* *Deuda técnica:* `DT-BS-01`, `DT-BS-03`, `DT-BS-05`.
+* *Decisiones abiertas:* `DEC-BS-01`, `DEC-BS-02`, `DEC-BS-04` — quedan sin objeto.
+
+== Cómo añadir un ADR
+
+. Copiar `_plantillas/Plantilla_ADR.adoc`.
+. Nombrar el archivo `adr-bs-NNN_slug_descriptivo.adoc`, con el siguiente número libre.
+. Rellenar las cinco secciones obligatorias: Contexto, Opciones evaluadas (mínimo 2, con
+  tabla comparativa), Decisión, Justificación, Consecuencias.
+. Añadir la fila a la tabla de <<_decisiones_vigentes,decisiones vigentes>> de este índice.
+. Si supera un ADR anterior, marcar el anterior como `Supersedida por ADR-BS-NNN` y
+  *moverlo a `_historico/`*, sin borrarlo. Si lo deja *sin objeto* —el problema desaparece en
+  vez de resolverse de otro modo— márcalo como `Descartada` y déjalo donde está, con una
+  sección que explique por qué.
+. Actualizar `manifest.yaml` y `00_Estado_Actual.adoc` en el mismo commit.
+
+include::{root}/_nav.adoc[]

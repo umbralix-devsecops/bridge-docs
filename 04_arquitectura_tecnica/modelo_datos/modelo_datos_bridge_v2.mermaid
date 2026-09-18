@@ -1,0 +1,322 @@
+%% Modelo de datos del Bridge Service
+%% Version: 2.0 · Fecha: 2026-09-16
+%% Motor: PostgreSQL 16 (Azure Database for PostgreSQL Flexible Server)
+%% Gobernado por: ADR-BS-001, ADR-BS-002, ADR-BS-004, ADR-BS-005, ADR-BS-006
+%% .
+%% Verificado contra PostgreSQL 16.13: 17 tablas, 13 enums, 0 errores.
+%% .
+%% Supera a modelo_datos_bridge_v1.mermaid (el cache de lectura de un servicio que leia
+%% un SQL Server remoto) y absorbe modelo_datos_v3.mermaid de portal-docs. Es el UNICO
+%% modelo de datos del sistema: con un solo servicio no puede haber dos.
+%% .
+%% NOMENCLATURA: las columnas del catalogo conservan los nombres de portal-docs
+%% (ext_product_id, origin, synced_at) porque son los que espejan los campos del
+%% contrato que el frontend ya consume (extProductId, origin, syncedAt). REST-BS-11.
+%% .
+%% TRES BLOQUES, con naturaleza distinta:
+%%   1. CATALOGO  -> proyeccion de SinsaTools. Solo la ingesta escribe. No es fuente de verdad.
+%%   2. IDENTIDAD -> fuente de verdad. Nace y muere aqui. NO se reconstruye: se restaura.
+%%   3. INGESTA Y AUDITORIA -> historial. Purgable.
+
+erDiagram
+    %% ── 1. CATALOGO ────────────────────────────────────────────────────
+    CATALOG_PRODUCTS ||--o{ CATALOG_VERSIONS : contiene
+    CATALOG_VERSIONS ||--o{ CATALOG_MEDIA    : contiene
+
+    %% ── 2. IDENTIDAD Y PERMISOS ────────────────────────────────────────
+    ROLES  ||--o{ ROLE_PERMISSIONS : define
+    ROLES  ||--o{ USERS            : clasifica
+    USERS  ||--o{ SESSIONS         : abre
+    USERS  ||--o{ USER_GROUPS      : pertenece
+    GROUPS ||--o{ USER_GROUPS      : agrupa
+    GROUPS ||--o{ GROUP_VERSION_ACCESS : concede
+    CATALOG_VERSIONS ||--o{ GROUP_VERSION_ACCESS : "es concedida"
+    USERS         ||--o{ USER_MEDIA_EXCEPTIONS : "tiene excepcion"
+    CATALOG_MEDIA ||--o{ USER_MEDIA_EXCEPTIONS : "es exceptuado"
+
+    %% ── 3. INGESTA Y AUDITORIA ─────────────────────────────────────────
+    INGEST_BATCHES ||--o{ INGEST_ITEMS        : registra
+    INGEST_BATCHES ||--o{ EXT_API_REQUEST_LOG : origina
+    USERS         ||--o{ VIDEO_ACCESS_LOG : genera
+    CATALOG_MEDIA ||--o{ VIDEO_ACCESS_LOG : "es accedido"
+    USERS ||--o{ API_REQUEST_LOG  : genera
+    USERS ||--o{ NOTIFICATION_LOG : recibe
+
+    CATALOG_PRODUCTS {
+        uuid id PK "interno, estable de por vida"
+        varchar ext_product_id UK "Products.Id de SinsaTools: clave de upsert"
+        varchar internal_id "codigo de negocio, ej PROD-001"
+        varchar name
+        varchar trade_name
+        text description
+        integer brand_source_id
+        varchar brand_name "desnormalizado: no hay tabla de marcas"
+        industry industry "enum de 9 valores, OBLIGATORIO"
+        jsonb metatags "title + keywords"
+        boolean active
+        timestamptz created_at_source
+        timestamptz updated_at_source
+        timestamptz synced_at "expuesto como syncedAt en ProductDto"
+        timestamptz last_seen_at "motor de la reconciliacion de foto"
+    }
+
+    CATALOG_VERSIONS {
+        uuid id PK
+        varchar ext_version_id UK "Stock_Keeping_Units.Id de SinsaTools"
+        uuid product_id FK
+        varchar internal_id "ej SKU-2026-NA"
+        varchar name
+        varchar trade_name
+        text description
+        boolean active
+        timestamptz created_at_source
+        timestamptz updated_at_source
+        timestamptz synced_at
+        timestamptz last_seen_at
+    }
+
+    CATALOG_MEDIA {
+        uuid id PK "los permisos apuntan aqui: NUNCA se reasigna"
+        media_origin origin UK "Images | EntityFiles - unico junto a ext_media_id"
+        integer ext_media_id UK "Images.Id o Entity_Files.Id, nunca solo"
+        uuid version_id FK
+        varchar name
+        media_kind media_type "video|image|document, derivado de extension"
+        media_group file_group "cover|manual|video_demo|other"
+        varchar extension "sin punto, minusculas"
+        varchar mime_type "cabecera Content-Type del proxy"
+        bigint size_bytes "Content-Length y Content-Range"
+        varchar device_type
+        integer web_platform_id
+        integer position
+        boolean active
+        media_visibility visibility "public | private - donde estan los bytes, no quien puede verlos"
+        text storage_uri "NUNCA sale al cliente - SEC-BS-10"
+        varchar storage_provider "derivado de storage_uri"
+        varchar storage_container "derivado"
+        text storage_path "derivado"
+        text storage_token "Files.Token; null si origin=Images"
+        timestamptz created_at_source
+        timestamptz updated_at_source
+        timestamptz synced_at
+        timestamptz last_seen_at
+    }
+
+    ROLES {
+        uuid id PK
+        varchar name UK "administrator|content_editor|auditor|viewer"
+        varchar description
+    }
+
+    ROLE_PERMISSIONS {
+        uuid id PK
+        uuid role_id FK
+        varchar resource "users|groups|catalog|logs|videos|config"
+        boolean can_read
+        boolean can_write
+        boolean can_delete
+    }
+
+    USERS {
+        uuid id PK
+        citext email UK
+        text password_hash
+        varchar full_name
+        uuid role_id FK "el claim perms se construye de aqui, una vez, en el login"
+        user_status status "pending|active|suspended"
+        reg_type registration_type "self|admin_created"
+        uuid approved_by FK "autoreferencia"
+        timestamptz approved_at
+        timestamptz suspended_at
+        timestamptz last_login_at
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    SESSIONS {
+        uuid id PK "es el claim sid del JWT"
+        uuid user_id FK
+        text token_hash UK "SHA-256 del refresh token"
+        inet ip_address
+        text user_agent
+        boolean revoked
+        revoke_reason revoked_reason "DEC-BS-13 pendiente"
+        uuid replaced_by_session_id FK "cadena de rotacion; DEC-BS-13 pendiente"
+        timestamptz expires_at
+        timestamptz created_at
+    }
+
+    GROUPS {
+        uuid id PK
+        varchar name UK
+        varchar description
+        boolean active
+        uuid created_by FK
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    USER_GROUPS {
+        uuid user_id PK "FK"
+        uuid group_id PK "FK"
+        uuid assigned_by FK
+        timestamptz assigned_at
+    }
+
+    GROUP_VERSION_ACCESS {
+        uuid group_id PK "FK"
+        uuid version_id PK "FK real contra el catalogo"
+        uuid granted_by FK
+        timestamptz granted_at
+    }
+
+    USER_MEDIA_EXCEPTIONS {
+        uuid user_id PK "FK"
+        uuid media_id PK "FK real contra el catalogo"
+        access_type access_type "grant | revoke"
+        varchar reason "GAP-20: el frontend ya lo envia"
+        timestamptz expires_at "GAP-23: el frontend ya lo dibuja"
+        uuid granted_by FK
+        timestamptz granted_at
+    }
+
+    INGEST_BATCHES {
+        uuid id PK "el syncId que ve el panel de administracion"
+        uuid batch_id UK "del emisor: clave de idempotencia"
+        ingest_mode mode "upsert | snapshot"
+        uuid snapshot_id "agrupa los lotes de una foto"
+        integer sequence
+        boolean is_last "cierra la foto y dispara la reconciliacion"
+        ingest_status status "queued|running|completed|partial|failed"
+        timestamptz generated_at "cuando SinsaTools EXTRAJO el dato: mide la frescura"
+        timestamptz received_at
+        timestamptz finished_at
+        timestamptz heartbeat_at "sin el, un proceso muerto bloquea la ingesta"
+        integer products_new
+        integer products_updated
+        integer versions_new
+        integer versions_updated
+        integer media_new
+        integer media_updated
+        integer media_deactivated
+        integer records_unchanged
+        integer records_error
+        text error_detail
+        uuid correlation_id
+        varchar client_id
+        integer payload_bytes
+        integer duration_ms "generada: finished_at - received_at"
+    }
+
+    INGEST_ITEMS {
+        bigserial id PK
+        uuid batch_id FK
+        varchar entity_type "product | version | media"
+        media_origin entity_origin "solo media: parte de la clave natural"
+        varchar entity_ext_id
+        varchar operation "insert|update|deactivate|skip|error"
+        text error_detail
+    }
+
+    EXT_API_REQUEST_LOG {
+        uuid id PK
+        uuid batch_id FK "nulo si la llamada no llego a crear lote"
+        varchar endpoint "/v1/ingest/catalog, /v1/auth/token..."
+        varchar http_method
+        smallint status_code
+        integer latency_ms
+        integer payload_bytes
+        varchar client_id
+        text error_detail
+        uuid correlation_id
+        inet ip_address
+        timestamptz created_at
+    }
+
+    VIDEO_ACCESS_LOG {
+        uuid id PK "PK compuesta con created_at: tabla particionada"
+        uuid user_id FK
+        uuid media_id FK
+        access_result access_result "granted | denied"
+        access_source access_source "group|individual_exception|denied_revoke|denied_none"
+        boolean range_request
+        bigint bytes_served
+        uuid correlation_id
+        inet ip_address
+        timestamptz created_at PK "clave de particion por rango"
+    }
+
+    API_REQUEST_LOG {
+        uuid id PK
+        uuid user_id FK "nullable: login fallido"
+        varchar endpoint
+        varchar http_method
+        smallint status_code
+        integer latency_ms
+        uuid correlation_id
+        inet ip_address
+        timestamptz created_at PK "clave de particion por rango"
+    }
+
+    NOTIFICATION_LOG {
+        uuid id PK
+        uuid user_id FK
+        varchar notification_type "registration|approval|credentials|suspension"
+        citext email_to
+        varchar status "queued | sent | failed"
+        text error_detail
+        timestamptz created_at
+        timestamptz sent_at
+    }
+
+%% ── INDICES REQUERIDOS ────────────────────────────────────────────────
+%% CATALOG_PRODUCTS (industry) WHERE active              -> filtro del catalogo
+%% CATALOG_PRODUCTS gin(to_tsvector('spanish', name+trade)) -> ?search=
+%% CATALOG_VERSIONS (product_id) WHERE active            -> composicion del arbol
+%% CATALOG_MEDIA (version_id, position) WHERE active     -> listado de una version
+%% CATALOG_MEDIA UNIQUE (origin, ext_media_id)           -> clave de upsert
+%% ROLE_PERMISSIONS (role_id)                            -> construccion del claim perms
+%% SESSIONS (user_id) WHERE NOT revoked                  -> sesiones vivas
+%% GROUP_VERSION_ACCESS (version_id)                     -> quien accede a una version
+%% INGEST_BATCHES (received_at DESC)                     -> /admin/sync/logs
+%% INGEST_BATCHES (generated_at DESC) WHERE status IN ('completed','partial')
+%%                                                       -> calculo de isDataStale
+%% INGEST_BATCHES UNIQUE ((true)) WHERE status='running' -> un solo lote en vuelo
+%% INGEST_BATCHES UNIQUE (snapshot_id) WHERE is_last     -> una foto no se cierra dos veces
+%% INGEST_BATCHES UNIQUE (snapshot_id, sequence) WHERE mode='snapshot'
+%% INGEST_ITEMS (batch_id) WHERE operation='error'       -> solo los fallos se consultan
+%% EXT_API_REQUEST_LOG (created_at DESC)                 -> diagnostico de la ingesta
+%% .
+%% ── REGLAS ────────────────────────────────────────────────────────────
+%% 1. La clave natural de CATALOG_MEDIA es (origin, ext_media_id), NUNCA ext_media_id
+%%    solo: Images.Id y Entity_Files.Id viven en secuencias distintas y pueden
+%%    colisionar. DOM-BS-08.
+%% 2. La ingesta hace UPDATE, jamas DELETE + INSERT. El uuid es estable de por vida
+%%    porque GROUP_VERSION_ACCESS y USER_MEDIA_EXCEPTIONS apuntan a el: un
+%%    delete-and-reinsert vaciaria los permisos de todos los usuarios en silencio.
+%%    REST-BS-13.
+%% 3. Sin borrado fisico. Una baja es active = false. REST-BS-12.
+%% 4. last_seen_at lo refresca cada lote en lo que toca. Al cerrar una foto, lo
+%%    anterior al inicio de esa foto se desactiva. RF-BS-14.
+%% 5. generated_at, no received_at, mide la frescura: un lote viejo reenviado no
+%%    debe parecer dato fresco. RF-BS-20.
+%% 6. El indice unico de status='running' EXIGE heartbeat_at. Sin el, un proceso
+%%    muerto bloquea toda ingesta futura, en silencio. DOM-BS-09.
+%% 7. ROLE_PERMISSIONS se consulta UNA sola vez, en el login, para construir el
+%%    claim perms{}. El backend no la vuelve a consultar en requests posteriores
+%%    (api_auth.yaml:151, guia_roles_permisos_v1.0 §4). La tabla existe: lo que no
+%%    existe es la consulta por request.
+%% 8. access_source guarda cuatro valores; el DTO del contrato solo expone 'denied'
+%%    para los dos de denegacion. Contrato intacto, auditoria util.
+%% 9. VIDEO_ACCESS_LOG y API_REQUEST_LOG estan particionadas por rango de fecha. En
+%%    PostgreSQL la PK de una tabla particionada debe incluir la columna de
+%%    particion: por eso es (id, created_at).
+%% 10. EXT_API_REQUEST_LOG registra TODA llamada entrante a /v1/ingest y /v1/auth,
+%%    incluidas las que fallan antes de crear lote (401, 400, 413). Sin ella, un
+%%    emisor mal autenticado seria invisible. batch_id es nulo en esos casos.
+%% 11. visibility NO es control de acceso. Dice en que contenedor de Azure Blob vive
+%%    el recurso. Los permisos por grupo y las excepciones se aplican igual a los dos.
+%%    En el contenedor publico solo hay material no sensible: portadas y miniaturas.
+%% 12. El catalogo se reconstruye pidiendo una foto completa. La identidad, los
+%%    permisos y la auditoria NO se reconstruyen: se restauran de copia de
+%%    seguridad. Ver la revision de ADR-BS-001.

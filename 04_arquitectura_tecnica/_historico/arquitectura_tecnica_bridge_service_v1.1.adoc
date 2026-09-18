@@ -1,0 +1,1104 @@
+= Arquitectura Técnica — Bridge Service
+:author: Equipo de Desarrollo
+:revnumber: 1.1
+:revdate: 2026-08-22
+:revremark: Corrige el timeout que incumplía RNF-BS-05; alinea con requerimientos v1.1
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:icons: font
+:lang: es
+:root: ../..
+:section-id: arquitectura-tecnica
+:section-title: Arquitectura Técnica
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+[NOTE]
+====
+*Clasificación:* {classification} +
+*Versión:* {revnumber} · *Fecha:* {revdate} +
+*Estado:* Vigente, con una decisión abierta bloqueante (xref:{root}/11_gestion_producto/adr/adr-bs-003_conectividad_onpremise.adoc[ADR-BS-003]). +
+*Supera a:* v1.0 — `_historico/arquitectura_tecnica_bridge_service_v1.0.adoc`
+====
+
+[WARNING]
+====
+*Qué cambia respecto de la v1.0*
+
+La v1.0 se emitió sin haber leído `requerimientos_bridge_service_v1.0.adoc`. Al contrastar
+ambos documentos aparecieron tres desalineaciones, dos de ellas imputables a este documento:
+
+[cols="1,4",options="header"]
+!===
+! Punto ! Corrección
+
+! `CommandTimeout`
+! Era 30 s, lo que *incumplía RNF-BS-05* (detectar el fallo en menos de 10 s). Baja a *8 s*.
+  Formalizado como REST-BS-09 en los requerimientos v1.1.
+
+! Rate limiting
+! La v1.0 lo aplicaba solo por `clientId`, contradiciendo RF-BS-02, que lo exigía por IP.
+  Se implementan *ambos contadores*.
+
+! Token expirado
+! Se confirma `401 UNAUTHORIZED` (contrato) frente a `TOKEN_EXPIRED` (RF-BS-01 v1.0).
+  Corregido el requerimiento, no el contrato: REST-BS-06 exige aprobación del Tech Lead del
+  Portal para tocar los YAML.
+!===
+
+Además, el ajuste de RNF que la v1.0 proponía como sugerencia (`p95 < 500 ms`) queda
+*adoptado* en los requerimientos v1.1, y esta versión lo refleja.
+====
+
+== Propósito y alcance
+
+Este documento define la arquitectura técnica del *Bridge Service*: el servicio que expone
+la información del SQL Server on-premise —fuente de verdad del negocio— al backend del
+Portal de Videos a través de una API REST publicada en Azure.
+
+=== Qué cubre
+
+* Estructura de la solución .NET y responsabilidades por capa.
+* Estrategia de acceso a datos hacia dos motores distintos (SQL Server y PostgreSQL).
+* Modelo de datos del caché propio.
+* Flujos de autenticación, lectura y sincronización.
+* Conectividad entre Azure y la red corporativa.
+* Observabilidad, seguridad y cumplimiento de los RNF.
+
+=== Qué NO cubre
+
+* El contrato de la API — vive en `bridge_master.yaml`, `bridge_auth.yaml`,
+  `bridge_catalog.yaml` y `bridge_sync.yaml`, ya acordados con el equipo del portal.
+* Los requerimientos funcionales — ver
+  xref:{root}/01_requerimientos/_historico/requerimientos_bridge_service_v1.1.adoc[requerimientos_bridge_service_v1.1].
+* El esquema interno de la base de datos on-premise, que es *desconocido* para este equipo:
+  solo conocemos los campos que el contrato obliga a exponer.
+
+=== Restricción de partida
+
+[IMPORTANT]
+====
+*El esquema de la BD on-premise no está documentado y no lo controlamos.* Toda la
+arquitectura de acceso a datos está diseñada asumiendo que ese esquema puede cambiar sin
+aviso previo. Es el condicionante técnico dominante de este documento y el origen de
+xref:#deuda-tecnica[DT-BS-01].
+====
+
+== Contexto: dónde encaja el Bridge Service
+
+El Bridge Service es la *única pieza del sistema completo que toca la red corporativa*.
+El Portal de Videos nunca habla con el SQL Server on-premise directamente: siempre pasa
+por aquí.
+
+[source,mermaid]
+----
+flowchart LR
+    subgraph CLIENTE["Navegador del cliente"]
+        NG["Angular 17 PWA<br/>portal-frontend"]
+        SW["Service Worker<br/>caché de video"]
+        NG --> SW
+    end
+
+    subgraph AZURE["Microsoft Azure"]
+        PB["Portal Backend<br/>.NET 8 · Clean Architecture"]
+        PGP[("PostgreSQL<br/>portal")]
+        BLOB[("Azure Blob Storage<br/>videos")]
+        BS["<b>Bridge Service</b><br/>.NET 8 · App Service"]
+        PGB[("PostgreSQL<br/>bridge · caché propio")]
+
+        PB -->|"réplica catálogo · ADR-006"| PGP
+        PB -->|"proxy streaming · ADR-003"| BLOB
+        PB -->|"Service JWT RS256"| BS
+        BS -->|"EF Core · Npgsql"| PGB
+    end
+
+    subgraph ONPREM["Red corporativa · on-premise"]
+        SQL[("SQL Server<br/>fuente de verdad")]
+    end
+
+    NG -->|"HTTPS · JWT"| PB
+    BS -.->|"CONECTIVIDAD POR DEFINIR<br/>TDS · puerto 1433"| SQL
+
+    style BS stroke-width:3px
+    style PGB stroke-dasharray: 0
+----
+
+.Consumidores del Bridge Service
+[cols="1,2,3",options="header"]
+|===
+| Consumidor | Autenticación | Endpoints que usa
+
+| Portal Backend (.NET 8)
+| Service JWT RS256, `client_credentials`
+| `/v1/auth/token`, `/v1/softwares`, `/v1/media/updates`, `/v1/sync`, `/v1/sync/{id}`
+
+| Monitoreo / Azure Monitor
+| Ninguna (endpoint público)
+| `/health`
+|===
+
+[NOTE]
+====
+*No hay ni habrá otros consumidores en v1.0.* El contrato es bilateral entre el equipo del
+Portal de Videos y el equipo del Bridge Service. Cualquier tercer consumidor futuro exige
+revisar el modelo de scopes descrito en <<seguridad>>.
+====
+
+== Decisiones que gobiernan esta arquitectura
+
+Toda afirmación de este documento se apoya en una de estas decisiones. Ninguna se reabre
+sin un ADR que la supere explícitamente.
+
+.ADRs del Bridge Service
+[cols="1,3,1",options="header"]
+|===
+| ID | Decisión | Estado
+
+| xref:{root}/11_gestion_producto/adr/adr-bs-001_cache_postgresql_propio.adoc[ADR-BS-001]
+| Caché propio en PostgreSQL Azure, frente a pass-through directo a on-premise
+| Aceptada
+
+| xref:{root}/11_gestion_producto/adr/adr-bs-002_efcore_dos_proveedores.adoc[ADR-BS-002]
+| EF Core 8 con dos proveedores (DB-First sobre SQL Server, Code-First sobre PostgreSQL)
+| Aceptada
+
+| xref:{root}/11_gestion_producto/adr/adr-bs-003_conectividad_onpremise.adoc[ADR-BS-003]
+| Mecanismo de conectividad Azure ↔ red corporativa
+| *Propuesta* 🔴
+|===
+
+.Decisiones heredadas del proyecto (no reabrir)
+[cols="1,3",options="header"]
+|===
+| Ámbito | Decisión
+
+| Stack
+| .NET 8 (C#), el mismo que el backend del portal
+
+| Arquitectura
+| Clean Architecture *simplificada*: API + Infrastructure, sin proyectos Domain y Application separados
+
+| Repositorio
+| `bridge-service`, independiente del portal, con su propio workflow de CI/CD
+
+| Despliegue
+| Azure App Service (Linux)
+
+| Acceso a datos on-premise
+| Lectura + escrituras menores (marcar registros como sincronizados)
+
+| Equipo
+| 1 desarrollador .NET
+|===
+
+[WARNING]
+====
+*ADR-BS-001 supera una decisión previa.* La ficha original del proyecto establecía
+«sin BD propia — acceso directo al SQL Server on-premise». Esa decisión queda *superada*:
+el contrato `bridge_sync.yaml`, ya acordado con el equipo del portal, describe
+`POST /v1/sync` como «actualice su caché interno (PostgreSQL en Azure)» y `/health` declara
+un check `postgresql-azure`. Se optó por honrar el contrato en lugar de renegociarlo.
+====
+
+== Stack tecnológico
+
+.Componentes del stack
+[cols="1,2,3",options="header"]
+|===
+| Capa | Tecnología | Justificación
+
+| Runtime
+| .NET 8 (LTS), C# 12
+| Mismo stack que el portal backend; un solo perfil de conocimiento para el equipo
+
+| Framework web
+| ASP.NET Core Minimal API + Controllers
+| Controllers para los endpoints de dominio, Minimal API para `/health`
+
+| Acceso a datos on-premise
+| EF Core 8 + `Microsoft.EntityFrameworkCore.SqlServer` (DB-First)
+| ADR-BS-002
+
+| Acceso a datos propio
+| EF Core 8 + `Npgsql.EntityFrameworkCore.PostgreSQL` (Code-First)
+| ADR-BS-002
+
+| Base de datos propia
+| Azure Database for PostgreSQL Flexible Server
+| ADR-BS-001; mismo motor que el portal, una sola competencia operativa
+
+| Autenticación
+| JWT RS256, `Microsoft.AspNetCore.Authentication.JwtBearer`
+| Contrato `bridge_auth.yaml`
+
+| Gestión de secretos
+| Azure Key Vault + Managed Identity
+| Claves RS256, cadenas de conexión y `client_secret`
+
+| Logging
+| Serilog → JSON estructurado → Azure Monitor
+| RNF de observabilidad
+
+| Resiliencia
+| `Microsoft.Extensions.Http.Resilience` (Polly v8)
+| Reintentos y circuit breaker sobre el acceso a on-premise
+
+| Contenedores
+| Docker Compose (dev / staging / prod)
+| Estándar del proyecto
+
+| CI/CD
+| GitHub Actions → Azure App Service
+| Workflow independiente del portal
+
+| Testing
+| xUnit + NSubstitute + FluentAssertions; Testcontainers para integración
+| Estándar del proyecto
+|===
+
+== Estructura de la solución
+
+Clean Architecture *simplificada*: dos proyectos productivos en vez de cuatro. La
+justificación es proporcionalidad — el Bridge Service no tiene lógica de dominio propia,
+es un traductor entre dos esquemas.
+
+[source,text]
+----
+bridge-service/
+├── src/
+│   ├── BridgeService.Api/                 ← host web, endpoints, DI, middleware
+│   │   ├── Controllers/
+│   │   │   ├── AuthController.cs          ← POST /v1/auth/token
+│   │   │   ├── SoftwaresController.cs     ← GET  /v1/softwares
+│   │   │   ├── NovedadesController.cs     ← GET  /v1/media/updates
+│   │   │   └── SyncController.cs          ← POST /v1/sync · GET /v1/sync/{id}
+│   │   ├── Middleware/
+│   │   │   ├── CorrelationIdMiddleware.cs
+│   │   │   └── ExceptionHandlingMiddleware.cs
+│   │   ├── HealthChecks/
+│   │   │   ├── OnPremiseHealthCheck.cs
+│   │   │   └── PostgreSqlHealthCheck.cs
+│   │   ├── Contracts/                     ← DTOs que espeja el contrato OpenAPI
+│   │   ├── Program.cs
+│   │   └── appsettings.{Development,Staging,Production}.json
+│   │
+│   └── BridgeService.Infrastructure/      ← datos, sync, tokens
+│       ├── OnPremise/
+│       │   ├── OnPremiseDbContext.cs      ← DB-First, scaffolded, AsNoTracking
+│       │   ├── Entities/                  ← generadas por scaffolding
+│       │   └── Queries/                   ← consultas de unificación multimedia
+│       ├── Cache/
+│       │   ├── BridgeDbContext.cs         ← Code-First + migraciones
+│       │   ├── Entities/
+│       │   └── Migrations/
+│       ├── Sync/
+│       │   ├── SyncWorker.cs              ← BackgroundService
+│       │   ├── SyncOrchestrator.cs
+│       │   └── MediaMapper.cs        ← Images + EntityFiles → MediaItem
+│       ├── Auth/
+│       │   ├── ServiceTokenIssuer.cs
+│       │   └── ClientCredentialStore.cs
+│       └── Observability/
+│
+├── tests/
+│   ├── BridgeService.UnitTests/
+│   └── BridgeService.IntegrationTests/    ← Testcontainers (PostgreSQL + SQL Server)
+│
+├── docker-compose.yml
+├── docker-compose.staging.yml
+├── docker-compose.prod.yml
+└── .github/workflows/ci.yml
+----
+
+.Regla de dependencia
+[NOTE]
+====
+`BridgeService.Api` depende de `BridgeService.Infrastructure`. *Nunca al revés.*
+Infrastructure no referencia ASP.NET Core ni conoce los DTOs del contrato: el mapeo
+entidad → DTO ocurre en la capa API, para que un cambio en el contrato no propague
+cambios al acceso a datos.
+====
+
+== Arquitectura interna y flujo de datos
+
+Ésta es la consecuencia estructural de ADR-BS-001, y el punto más importante del documento:
+
+[IMPORTANT]
+====
+*Ningún request del portal alcanza on-premise en caliente.* Las lecturas se sirven desde el
+caché en PostgreSQL. El único componente que cruza la frontera de red es el `SyncWorker`,
+que corre en segundo plano.
+====
+
+[source,mermaid]
+----
+flowchart LR
+    PORTAL["Portal<br/>backend"]
+
+    subgraph BS["Bridge Service · .NET 8"]
+        direction LR
+        API["<b>Capa API</b><br/>JwtBearer + scopes<br/>Controllers<br/>Middleware"]
+        CQS["CatalogQueryService<br/><i>sirve since caché</i>"]
+        SYNC["<b>SyncWorker</b><br/>BackgroundService"]
+        CTXB["BridgeDbContext<br/>Npgsql · Code-First"]
+        CTXO["OnPremiseDbContext<br/>SqlServer · DB-First<br/>AsNoTracking"]
+
+        API -->|lee| CQS
+        API -->|dispara| SYNC
+        CQS --> CTXB
+        SYNC -->|UPSERT del delta| CTXB
+        SYNC --> CTXO
+    end
+
+    PGB[("PostgreSQL<br/>Azure")]
+    SQL[("SQL Server<br/>on-premise")]
+
+    PORTAL -->|Service JWT| API
+    CTXB --> PGB
+    CTXO -.->|única travesía<br/>de la frontera| SQL
+----
+
+=== Implicaciones de este diseño
+
+[cols="1,3",options="header"]
+|===
+| Efecto | Detalle
+
+| ✅ La latencia del enlace de red no afecta al portal
+| `GET /v1/softwares` responde desde PostgreSQL. La latencia de la VPN o del relay solo
+  afecta al `SyncWorker`, que corre desacoplado del request.
+
+| ✅ Una caída de on-premise no tumba el Bridge
+| El servicio sigue respondiendo `200` con datos cacheados. `/health` reporta `Degraded`,
+  no `Unhealthy`.
+
+| ✅ El historial de sincronizaciones es durable
+| Los `syncId` que devuelve `POST /v1/sync` sobreviven a un reinicio del App Service,
+  como exige `GET /v1/sync/{syncId}`.
+
+| ⚠️ La frescura del dato se degrada en cadena
+| Ver <<frescura>>. Es el compromiso principal de ADR-BS-001.
+
+| ⚠️ Hay un esquema más que mantener
+| Migraciones EF, backup y coste operativo del PostgreSQL propio.
+|===
+
+[[frescura]]
+=== Frescura compuesta del dato
+
+Con el caché propio, un recurso multimedia publicado en on-premise atraviesa *cuatro*
+niveles antes de llegar al usuario final:
+
+[source,mermaid]
+----
+flowchart LR
+    A[("SQL Server<br/>on-premise")] -->|"sync interno<br/>del Bridge"| B[("PostgreSQL<br/>bridge")]
+    B -->|"sync horaria<br/>ADR-006"| C[("PostgreSQL<br/>portal")]
+    C -->|"request"| D["Service Worker<br/>del navegador"]
+----
+
+.Latencia de publicación acumulada
+[cols="2,1,1",options="header"]
+|===
+| Escenario | Peor caso | Caso medio
+
+| Sync interno del Bridge cada 60 min
+| ~2 h + TTL del Service Worker
+| ~1 h
+
+| Sync interno del Bridge cada 15 min
+| ~1 h 15 min + TTL del SW
+| ~38 min
+
+| `/v1/media/updates` en vivo contra on-premise
+| ~1 h + TTL del SW
+| ~30 min
+|===
+
+[CAUTION]
+====
+*xref:#decisiones-abiertas[DEC-BS-01] bloquea el diseño del `SyncWorker`.* Hay que elegir
+entre las tres filas de la tabla anterior antes de escribir una línea de ese componente.
+La recomendación técnica es la tercera: mantener el caché para `GET /v1/softwares`
+—que es la consulta cara, con JOINs sobre tres tablas— y servir
+`GET /v1/media/updates` en vivo, que es una consulta acotada por timestamp y barata.
+Así el delta llega con la frescura de on-premise y el catálogo completo sigue siendo rápido.
+====
+
+== Estrategia de acceso a datos
+
+ADR-BS-002 establece EF Core 8 en ambos extremos, pero con estilos *opuestos*, porque los
+dos esquemas tienen dueños distintos.
+
+.Los dos DbContext
+[cols="1,2,2",options="header"]
+|===
+| Aspecto | `OnPremiseDbContext` | `BridgeDbContext`
+
+| Motor
+| SQL Server (on-premise)
+| PostgreSQL 16 (Azure)
+
+| Estilo
+| *DB-First* — scaffolding por ingeniería inversa
+| *Code-First* — migraciones EF
+
+| Dueño del esquema
+| Terceros (aplicación on-premise)
+| Este equipo
+
+| Modo de acceso
+| `AsNoTracking()` por defecto, solo lectura
+| Lectura y escritura con tracking
+
+| Escrituras permitidas
+| Únicamente marcar registros como sincronizados
+| Todas
+
+| Migraciones
+| ❌ Prohibidas
+| ✅ `dotnet ef migrations --context BridgeDbContext`
+|===
+
+=== Reglas de implementación obligatorias
+
+. *Nunca ejecutar migraciones contra `OnPremiseDbContext`.* No controlamos ese esquema.
+  El proyecto debe registrarlo sin `IDesignTimeDbContextFactory` para que el CLI de EF
+  no pueda apuntarle por accidente.
+. *Especificar siempre el contexto en los comandos EF:*
+  `dotnet ef migrations add <nombre> --context BridgeDbContext --project src/BridgeService.Infrastructure`.
+  Con dos proveedores registrados, omitir `--context` hace fallar el CLI.
+. *`AsNoTracking()` global en `OnPremiseDbContext`* vía
+  `optionsBuilder.UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking)`. Las consultas
+  al catálogo devuelven miles de filas y el change tracker no aporta nada.
+. *Timeout explícito en la conexión on-premise.* `CommandTimeout` configurable, por defecto
+  *8 s* (REST-BS-09). Al agotarse debe traducirse a `503 ONPREMISE_UNAVAILABLE`, nunca a
+  `500`. El límite lo impone RNF-BS-05: el fallo debe quedar detectado y registrado en menos
+  de 10 s, y los 2 s de margen cubren el registro en `SYNC_RUN`.
+. *Regenerar el scaffolding es una tarea manual y versionada.* Cada regeneración se
+  documenta en un commit propio y dispara la revisión de `MediaMapper`.
+
+=== Unificación de multimedia
+
+El contrato expone un único tipo `MediaItem`, pero on-premise lo almacena en dos
+lugares distintos. El campo `source` conserva la procedencia.
+
+[cols="1,2,2",options="header"]
+|===
+| Campo del contrato | Si `source = Images` | Si `source = EntityFiles`
+
+| `id`
+| `Images.Id`
+| `Entity_Files.Id`
+
+| `mediaPath`
+| `Images.UrlWeb`
+| `Files.FilePath`
+
+| `mediaType`
+| `null`
+| MIME type del archivo
+
+| `token`
+| `null`
+| `Files.Token`
+
+| `templatePath`
+| `null`
+| Ruta de plantilla, si aplica
+|===
+
+[WARNING]
+====
+`GET /v1/media/updates` filtra por `UpdatedAt`. Eso exige que las tablas `Images` y
+`Entity_Files` de on-premise *tengan campos de auditoría poblados*. Si alguna de las dos
+no los tiene o los deja nulos, el delta será silenciosamente incompleto: no fallará,
+simplemente devolverá menos registros de los que debería. Es un requisito bloqueante que
+hay que verificar contra la base real antes del Sprint 1.
+====
+
+== Modelo de datos del caché
+
+Réplica desnormalizada de lo mínimo que el contrato obliga a exponer, más el historial de
+sincronizaciones que hace durable a `GET /v1/sync/{syncId}`.
+
+Diagrama completo: `modelo_datos/modelo_datos_bridge_v1.mermaid`. Su historial de cambios,
+en xref:{root}/04_arquitectura_tecnica/modelo_datos/changelog_modelo_datos.adoc[changelog_modelo_datos].
+
+[source,mermaid]
+----
+erDiagram
+    PRODUCT ||--o{ VERSION : contiene
+    VERSION ||--o{ MEDIA : contiene
+    SYNC_RUN ||--o{ SYNC_ITEM : registra
+
+    PRODUCT {
+        int product_id PK "ID original on-premise"
+        string internal_id
+        string name
+        string trade_name
+        string description
+        boolean active
+        int brand_id
+        string brand_name "desnormalizado"
+        jsonb metatags
+        timestamptz updated_at_source "UpdatedAt de on-premise"
+        timestamptz synced_at
+    }
+
+    VERSION {
+        int version_id PK
+        int product_id FK
+        string internal_id
+        string name
+        string trade_name
+        string description
+        boolean active
+        timestamptz updated_at_source
+        timestamptz synced_at
+    }
+
+    MEDIA {
+        string source PK "Images | EntityFiles"
+        int id PK "ID en su tabla de origen"
+        int version_id FK
+        string name
+        string media_path
+        string extension
+        string media_type
+        string media_group
+        string token
+        string template_path
+        string device_type
+        int web_platform_id
+        int position
+        boolean active
+        timestamptz created_at_source
+        timestamptz updated_at_source
+        timestamptz synced_at
+    }
+
+    SYNC_RUN {
+        uuid sync_id PK
+        string status "running | completed | failed"
+        int records_processed
+        int records_new
+        int records_updated
+        int records_error
+        string error_detail
+        string correlation_id
+        timestamptz started_at
+        timestamptz finished_at
+    }
+
+    SYNC_ITEM {
+        bigserial id PK
+        uuid sync_id FK
+        string entity_type
+        int entity_id
+        string operation "insert | update | skip | error"
+        string error_detail
+    }
+----
+
+=== Notas de modelado
+
+* *Clave primaria de `MEDIA`:* compuesta por `(source, id)`. Los IDs de `Images` y
+  `Entity_Files` viven en secuencias distintas y pueden colisionar entre sí.
+* *`updated_at_source` frente a `synced_at`:* el primero es el timestamp de on-premise y
+  es el que se compara contra el parámetro `?since=`; el segundo es cuándo lo trajimos
+  nosotros. Confundirlos produce deltas incorrectos.
+* *`brand_name` desnormalizado:* el contrato lo expone dentro de `Product.brand`, y no hay
+  ningún caso de uso que consulte marcas por sí solas. Una tabla `BRAND` sería complejidad
+  sin retorno.
+* *Sin borrado físico:* un recurso desactivado en on-premise se marca `active = false`.
+  Es lo que permite a `?includeInactive=true` funcionar.
+
+.Índices requeridos
+[cols="2,3",options="header"]
+|===
+| Índice | Justificación
+
+| `MEDIA (updated_at_source DESC)`
+| Es el filtro de `GET /v1/media/updates`, el endpoint más caliente del contrato
+
+| `MEDIA (version_id)`
+| Composición del árbol producto → versión → multimedia
+
+| `VERSION (product_id)`
+| Idem
+
+| `SYNC_RUN (started_at DESC)`
+| Consulta del historial reciente
+
+| `PRODUCT (active) WHERE active = true`
+| Índice parcial: el caso normal excluye inactivos
+|===
+
+== Flujos principales
+
+=== Emisión del Service JWT
+
+[source,mermaid]
+----
+sequenceDiagram
+    autonumber
+    participant P as Portal Backend
+    participant A as AuthController
+    participant KV as Azure Key Vault
+    participant T as ServiceTokenIssuer
+
+    P->>A: POST /v1/auth/token<br/>{clientId, clientSecret}
+    A->>KV: leer credenciales esperadas
+    KV-->>A: hash del client_secret
+    alt credenciales inválidas
+        A-->>P: 401 INVALID_CREDENTIALS
+    else superó 10 fallos/minuto
+        A-->>P: 429 RATE_LIMITED
+    else válidas
+        A->>T: emitir JWT
+        T->>KV: clave privada RS256
+        KV-->>T: clave
+        T-->>A: JWT firmado (TTL 1 h)
+        A-->>P: 200 {accessToken, expiresIn: 3600, tokenType: Bearer}
+    end
+----
+
+* La comparación del `clientSecret` usa comparación en tiempo constante.
+* *Rate limiting doble* (RF-BS-02): 10 fallos/minuto por `clientId` y 50 fallos/minuto por
+  IP, evaluados en ese orden y con contadores independientes. El contador por `clientId`
+  identifica la credencial comprometida o mal configurada —el portal sale por IPs
+  compartidas del App Service, así que la IP no distingue al responsable—; el contador por
+  IP, más laxo, contiene el abuso desde un origen hostil.
+* El TTL por defecto es 1 h, configurable. El portal cachea el token y lo renueva cuando
+  faltan menos de 5 minutos.
+
+=== Lectura del catálogo
+
+[source,mermaid]
+----
+sequenceDiagram
+    autonumber
+    participant P as Portal Backend
+    participant M as CorrelationIdMiddleware
+    participant C as SoftwaresController
+    participant Q as CatalogQueryService
+    participant DB as PostgreSQL (caché)
+
+    P->>M: GET /v1/softwares<br/>Bearer + X-Correlation-ID
+    M->>C: contexto con correlationId
+    C->>C: validar JWT y scope catalog:read
+    alt scope ausente
+        C-->>P: 403 FORBIDDEN
+    else autorizado
+        C->>Q: obtener catálogo
+        Q->>DB: SELECT productos + versiones + multimedia
+        DB-->>Q: árbol completo
+        Q-->>C: List<Product>
+        C-->>P: 200 + X-Correlation-ID
+    end
+----
+
+[NOTE]
+====
+Este flujo *no toca on-premise*. Si el SQL Server está caído, este endpoint sigue
+respondiendo `200` con los últimos datos sincronizados. Es el beneficio directo de
+ADR-BS-001.
+====
+
+=== Sincronización interna
+
+[source,mermaid]
+----
+sequenceDiagram
+    autonumber
+    participant T as Timer / POST /v1/sync
+    participant W as SyncWorker
+    participant DBc as BridgeDbContext
+    participant DBo as OnPremiseDbContext
+    participant SQL as SQL Server on-premise
+
+    T->>W: iniciar sincronización
+    W->>DBc: INSERT SYNC_RUN (status=running)
+    DBc-->>W: syncId
+
+    W->>DBo: SELECT ... WHERE UpdatedAt > @ultimoSync
+    DBo->>SQL: consulta vía enlace de red
+
+    alt on-premise no responde
+        SQL-->>DBo: timeout (8 s)
+        W->>DBc: UPDATE SYNC_RUN (status=failed, errorDetail)
+        Note over W: /health pasa a Degraded.<br/>Las lecturas siguen sirviéndose del caché.
+    else responde
+        SQL-->>DBo: filas crudas
+        DBo-->>W: entidades
+        W->>W: MediaMapper: Images + EntityFiles → MediaItem
+        W->>DBc: UPSERT por lotes + SYNC_ITEM por registro
+        W->>DBc: UPDATE SYNC_RUN (status=completed, contadores)
+    end
+----
+
+Reglas del `SyncWorker`:
+
+* *Exclusión mutua.* Un `SYNC_RUN` con `status = running` hace que `POST /v1/sync`
+  devuelva `409 SYNC_ALREADY_RUNNING`, como exige el contrato.
+* *Lotes.* UPSERT en bloques de 500 filas. El catálogo completo puede superar las 50 000
+  filas de multimedia.
+* *Reintentos.* Política Polly: 3 intentos con backoff 2 s / 4 s / 8 s, y circuit breaker
+  que abre tras 5 fallos consecutivos. Esto es lo que
+  xref:#deuda-tecnica[evita repetir DT-02 del portal].
+* *Idempotencia.* Reejecutar un sync con el mismo `?since=` no debe duplicar filas: el
+  UPSERT va por la clave `(source, id)`.
+
+=== Comportamiento ante fallos
+
+.Traducción de errores, según contrato
+[cols="2,1,3",options="header"]
+|===
+| Situación | Código | Cuerpo
+
+| Sin token o token expirado
+| `401`
+| `UNAUTHORIZED`
+
+| Credenciales incorrectas en `/v1/auth/token`
+| `401`
+| `INVALID_CREDENTIALS`
+
+| Scope insuficiente
+| `403`
+| `FORBIDDEN`
+
+| Más de 10 fallos de token por minuto
+| `429`
+| `RATE_LIMITED`
+
+| `?since=` ausente o mal formado
+| `400`
+| `INVALID_PARAMETER`
+
+| `syncId` inexistente
+| `404`
+| —
+
+| Sync ya en curso
+| `409`
+| `SYNC_ALREADY_RUNNING`
+
+| SQL Server inalcanzable o timeout
+| `503`
+| `ONPREMISE_UNAVAILABLE`
+
+| Excepción no controlada
+| `500`
+| Error genérico, *sin* detalle interno
+|===
+
+[IMPORTANT]
+====
+El `ExceptionHandlingMiddleware` nunca debe filtrar el mensaje de una `SqlException` al
+cuerpo de la respuesta: la cadena de conexión, nombres de tabla e IPs internas se filtran
+por ahí. El detalle va al log estructurado, correlacionado por `X-Correlation-ID`; el
+cliente recibe un código y un mensaje neutro.
+====
+
+== Conectividad con la red corporativa
+
+Es el *único tramo de la arquitectura sin definir*, y bloquea el despliegue a producción.
+La decisión completa, con tabla comparativa y consecuencias, está en
+xref:{root}/11_gestion_producto/adr/adr-bs-003_conectividad_onpremise.adoc[ADR-BS-003].
+
+Resumen de las tres opciones:
+
+[cols="1,2,2,2",options="header"]
+|===
+| Criterio | A · VPN Site-to-Site | B · IP fija + firewall | C · Hybrid Connections
+
+| Exposición del SQL Server | Ninguna | *Puerto 1433 público* | Ninguna
+| Costo mensual añadido | ≈ USD 27 | USD 0 | USD 0 desde plan Standard
+| Puertos entrantes | UDP 500 / 4500 al router | TCP 1433 al SQL Server | Ninguno
+| Depende del equipo de redes | Sí, bloqueante | Sí, regla NAT | Solo instalar el agente
+| Punto único de fallo nuevo | VPN Gateway | — | HCM en un servidor
+| Se rompe cuando… | cae el túnel | *escalas el App Service* | se reinicia el HCM
+|===
+
+*Recomendación:* opción A si existe equipo de redes disponible; opción C si no lo hay.
+Ambas cumplen el requisito no negociable de que el SQL Server no quede accesible desde
+internet. La opción B se descarta para producción: las IPs de salida del App Service
+cambian al escalar de plan, la allow-list se rompe sin aviso y el fallo no deja rastro en
+ningún log de aplicación.
+
+[[seguridad]]
+== Seguridad
+
+=== Validación del Service JWT
+
+Parámetros obligatorios de `JwtBearerOptions`:
+
+[cols="1,2",options="header"]
+|===
+| Validación | Valor esperado
+
+| `ValidateIssuerSigningKey` | `true`, clave pública RS256 desde Key Vault
+| `ValidateAudience` | `true`, `aud = bridge-service-api`
+| `ValidateIssuer` | `true`, issuer propio del Bridge Service
+| `ValidateLifetime` | `true`
+| `ClockSkew` | `TimeSpan.FromSeconds(30)` (el defecto de 5 min es demasiado permisivo)
+| Algoritmo | RS256 exclusivamente; rechazar `none` y HS256
+|===
+
+[WARNING]
+====
+*Corrección pendiente en el contrato.* `bridge_auth.yaml` declara
+`iss: https://portal-api.yourdomain.com` en el ejemplo de `ServiceJwtPayload`. El emisor
+del token es el Bridge Service, no el portal. Con ese valor, `ValidateIssuer` no puede
+activarse. Hay que corregir el YAML y mover la versión superada a `_historico/`.
+====
+
+=== Autorización por scope
+
+[cols="2,2",options="header"]
+|===
+| Endpoint | Scope requerido
+
+| `GET /v1/softwares` | `catalog:read`
+| `GET /v1/media/updates` | `catalog:read`
+| `GET /v1/sync/{syncId}` | `catalog:read`
+| `POST /v1/sync` | `sync:trigger`
+| `GET /health` | ninguno (público)
+|===
+
+=== Reglas de seguridad del código
+
+[cols="1,4",options="header"]
+|===
+| ID | Regla
+
+| SEC-BS-01 | Ningún secreto en `appsettings.json`. Todo por Key Vault + Managed Identity.
+| SEC-BS-02 | La comparación de `clientSecret` es en tiempo constante.
+| SEC-BS-03 | Toda consulta a on-premise va parametrizada. Prohibida la interpolación de strings en SQL.
+| SEC-BS-04 | Los logs nunca registran `clientSecret`, `accessToken` ni el campo `token` de multimedia.
+| SEC-BS-05 | TLS obligatorio en la conexión a SQL Server (`Encrypt=True`), también dentro de la VPN.
+| SEC-BS-06 | El cuerpo de un `500` nunca contiene detalle de excepción.
+| SEC-BS-07 | El usuario de BD on-premise tiene permisos mínimos: `SELECT` sobre las tablas del contrato y `UPDATE` únicamente sobre las columnas de marca de sincronización.
+| SEC-BS-08 | `gitleaks` en el pipeline: si detecta un secreto, el build falla de inmediato.
+|===
+
+== Observabilidad
+
+=== Logging estructurado
+
+Serilog con sink a Azure Monitor, salida JSON. Campos obligatorios en todo evento:
+
+[source,json]
+----
+{
+  "timestamp": "2026-08-22T14:32:10.482Z",
+  "level": "Information",
+  "correlationId": "550e8400-e29b-41d4-a716-446655440000",
+  "clientId": "svc_portal-backend",
+  "endpoint": "GET /v1/media/updates",
+  "durationMs": 342,
+  "statusCode": 200,
+  "message": "Delta servido since caché",
+  "properties": { "recordCount": 47, "since": "2026-08-22T13:00:00Z" }
+}
+----
+
+*`X-Correlation-ID` se propaga en el 100 % de los requests* (RNF). El
+`CorrelationIdMiddleware` lo lee del header entrante, genera un UUID si no viene, lo
+inyecta en el `LogContext` de Serilog y lo devuelve en la respuesta.
+
+=== Health check
+
+`GET /health` es público y compone dos checks independientes:
+
+[cols="1,1,3",options="header"]
+|===
+| Check | Nombre | Criterio
+
+| PostgreSQL propio | `postgresql-azure` | `SELECT 1` en menos de 2 s
+| SQL Server on-premise | `sqlserver-onpremise` | `SELECT 1` en menos de 5 s
+|===
+
+.Composición del estado global
+[cols="1,3",options="header"]
+|===
+| Estado | Condición
+
+| `Healthy` | Ambos checks pasan
+| `Degraded` | PostgreSQL sano, on-premise no. *El servicio sigue operativo desde caché.*
+| `Unhealthy` | PostgreSQL caído. El servicio no puede responder.
+|===
+
+[NOTE]
+====
+La distinción entre `Degraded` y `Unhealthy` es deliberada: Azure App Service retira de
+balanceo las instancias `Unhealthy`. Marcar como `Unhealthy` una caída de on-premise
+tumbaría un servicio que todavía puede servir el catálogo completo.
+====
+
+=== Alertas mínimas
+
+[cols="2,2,1",options="header"]
+|===
+| Condición | Canal | Severidad
+
+| `/health` en `Degraded` más de 15 min | Email al equipo técnico | Media
+| `/health` en `Unhealthy` | Email + notificación | Alta
+| 2 sincronizaciones consecutivas con `status = failed` | Email | Alta
+| p95 de `/v1/softwares` por encima del umbral 10 min seguidos | Email | Media
+| Más de 50 respuestas `401` en 5 min | Email | Media (posible credencial rotada sin avisar)
+|===
+
+== Cumplimiento de los RNF
+
+[cols="1,2,3",options="header"]
+|===
+| RNF | Objetivo | Cómo lo cumple esta arquitectura
+
+| Disponibilidad
+| ≥ 99,5 % mensual
+| App Service con SLA 99,95 %. El caché propio desacopla la disponibilidad del Bridge de la de on-premise.
+
+| Latencia `GET /v1/softwares`
+| p95 < 500 ms
+| Servido desde PostgreSQL con índices dedicados. Endurecido en requerimientos v1.1.
+
+| Latencia `GET /v1/media/updates`
+| p95 < 2 000 ms
+| Consulta indexada por `updated_at_source`.
+
+| Logs estructurados
+| JSON hacia Azure Monitor
+| Serilog + sink de Azure Monitor.
+
+| Trazabilidad
+| `X-Correlation-ID` en el 100 % de los requests
+| `CorrelationIdMiddleware` en el pipeline, antes de la autenticación.
+
+| Resiliencia (RNF-BS-05)
+| Fallo de on-premise detectado en < 10 s
+| `CommandTimeout` de 8 s (REST-BS-09) + registro inmediato en `SYNC_RUN`.
+
+| Frescura (RNF-BS-09)
+| Antigüedad del dato observable y acotada
+| ⚠️ *Sin cubrir todavía.* Requiere la métrica de DT-BS-04. Bloqueado por DEC-BS-01.
+|===
+
+[IMPORTANT]
+====
+*El ajuste de RNF-BS-02 está adoptado pero no acordado.* Los requerimientos v1.1 fijan
+`p95 < 500 ms` y reasignan los 5 000 ms como umbral de la consulta del `SyncWorker` contra
+on-premise. Como `bridge_master.yaml` documenta el RNF anterior, el cambio *afecta al
+contrato* y requiere el visto bueno del Tech Lead del Portal (REST-BS-06) antes de darse
+por firme. Registrado en `00_Estado_Actual.adoc` como corrección pendiente.
+====
+
+[[deuda-tecnica]]
+== Deuda técnica registrada
+
+[cols="1,3,1",options="header"]
+|===
+| ID | Descripción | Impacto
+
+| DT-BS-01
+| El scaffolding del esquema on-premise es manual. Un cambio en `Images`, `Entity_Files`
+  o `Files` rompe el mapeo en tiempo de ejecución, no de compilación.
+| Alto
+
+| DT-BS-02
+| No hay política de purga para `SYNC_RUN` y `SYNC_ITEM`. Con sync horaria son ~8 760
+  filas al año en `SYNC_RUN` y potencialmente millones en `SYNC_ITEM`.
+| Medio
+
+| DT-BS-03
+| `GET /v1/softwares` devuelve el catálogo completo sin paginación. Es lo que el contrato
+  exige, pero crecerá sin límite.
+| Medio
+
+| DT-BS-04
+| Sin métrica de deriva entre el caché y on-premise: nada avisa si el sync viene
+  devolviendo cero novedades porque `UpdatedAt` no se está poblando.
+| Alto
+
+| DT-BS-05
+| El `MediaMapper` asume que `Files.FilePath` siempre es una ruta resoluble. No hay
+  validación ni fallback si viene nula o relativa.
+| Bajo
+|===
+
+[[decisiones-abiertas]]
+== Decisiones abiertas
+
+[cols="1,3,1,1",options="header"]
+|===
+| ID | Decisión | Prioridad | Fecha límite
+
+| DEC-BS-01
+| Frecuencia del sync interno, o lectura en vivo para `GET /v1/media/updates`
+| 🔴
+| Antes del Sprint 1 — bloquea el `SyncWorker`
+
+| DEC-BS-02
+| Mecanismo de conectividad (ADR-BS-003: A, B o C)
+| 🔴
+| Antes del primer deploy a staging
+
+| DEC-BS-03
+| Política de purga del historial de sincronizaciones (DT-BS-02)
+| 🟡
+| v1.1
+
+| DEC-BS-04
+| ¿El Bridge marca registros como sincronizados en on-premise, o basta con
+  `updated_at_source`? Hay permiso de escritura menor, pero ningún caso de uso lo exige aún.
+| 🟡
+| v1.1
+
+| DEC-BS-05
+| Estrategia de rotación del `client_secret` sin ventana de indisponibilidad
+| 🟢
+| v1.2
+|===
+
+== Trazabilidad
+
+[cols="1,3",options="header"]
+|===
+| Artefacto | Relación
+
+| Requerimientos
+| xref:{root}/01_requerimientos/_historico/requerimientos_bridge_service_v1.1.adoc[requerimientos_bridge_service_v1.1] — esta arquitectura implementa RF-BS-01 al RF-BS-11 y las restricciones REST-BS-01 al REST-BS-10
+
+| Contrato de API
+| `bridge_master.yaml`, `bridge_auth.yaml`, `bridge_catalog.yaml`, `bridge_sync.yaml`
+
+| ADRs
+| xref:{root}/11_gestion_producto/adr/adr-000_indice.adoc[Índice de ADRs]
+
+| Modelo de datos
+| `modelo_datos/modelo_datos_bridge_v1.mermaid`
+
+| Contraparte
+| `12_integraciones_externas/portal_videos/` (Portal de Videos) — repositorio `portal-docs`
+
+| Estado del proyecto
+| xref:{root}/00_Estado_Actual.adoc[00_Estado_Actual]
+|===
+
+== Historial de versiones
+
+[cols="1,1,3",options="header"]
+|===
+| Versión | Fecha | Cambios
+
+| 1.0 | 2026-08-22 | Versión inicial. Incorpora ADR-BS-001 y ADR-BS-002; deja ADR-BS-003 en estado Propuesta.
+| 1.1 | 2026-08-22 | Alineación con `requerimientos_bridge_service_v1.1`. `CommandTimeout` 30 s → 8 s (incumplía RNF-BS-05). Rate limiting doble por `clientId` + IP. Confirmado `401 UNAUTHORIZED`. RNF-BS-02 endurecido a p95 < 500 ms. Añadidos RF-BS-09/10/11 a la trazabilidad.
+|===
+
+include::{root}/_nav.adoc[]

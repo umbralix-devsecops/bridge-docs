@@ -1,0 +1,636 @@
+= Análisis de arranque del Bridge Service
+:revnumber: 1.0
+:revdate: 2026-09-16
+:revremark: Corregido tras cerrar la arquitectura (ver §2). La redacción previa suponía dos servicios y acceso directo al SQL Server de SinsaTools; ambos supuestos eran falsos.
+:author: Arquitectura
+:toc: left
+:toclevels: 3
+:sectnums:
+:sectnumlevels: 3
+:icons: font
+:root: .
+
+include::{root}/_nav.adoc[]
+
+[abstract]
+== Propósito
+
+Este documento reconcilia tres fuentes que hasta hoy no se habían mirado juntas:
+
+. El **frontend Angular ya construido** (`Sin-PortalVideos`), con su API simulada y sus seis
+  contratos OpenAPI.
+. La **documentación del portal** (`portal-docs`, 83 archivos).
+. La **documentación del Bridge** (`bridge-docs`, 24 archivos).
+
+El frontend cambia el cuadro. Deja de haber especulación sobre qué necesita el portal: hay
+un contrato escrito, tipado en TypeScript, con un mock que lo ejercita y 250 productos de
+prueba.
+
+Y dos decisiones tomadas el 2026-09-16 cambian la arquitectura de raíz: **el Bridge es el
+backend del portal**, y **el dato entra empujado por el microservicio de integraciones de
+SinsaTools a través de una API que nosotros publicamos**. Nunca consultamos su base de datos.
+
+<<<
+
+== Qué hay en disco hoy
+
+[cols="2,1,4",options="header"]
+|===
+| Carpeta | Estado | Contenido
+
+| `Sin-PortalVideos/`
+| ✅ Vivo
+| Frontend Angular 21, 9 commits, ramas `main`/`test`. Zoneless, señales, standalone.
+  Cobertura 94 %. Mock completo, e2e Playwright, Docker + nginx. **Funciona sin backend.**
+
+| `Sin-PortalBridge/`
+| ⬜ Vacío
+| Sólo `.git` y un `README.md` — que es **una copia del README del frontend**.
+  Un único commit, el mismo commit raíz que `Sin-PortalVideos`.
+
+| `portal-docs/`
+| 🟡 83 archivos
+| 0 commits.
+
+| `bridge-docs/`
+| 🟡 24 archivos
+| 0 commits. Requerimientos v1.1 y arquitectura v1.1 cerrados — y ahora, en buena parte,
+  superados por §3.
+
+| `frontend-docs/`
+| ❌ No existe
+| El README del frontend enlaza cuatro veces a `../frontend-docs/`
+  (`arquitectura_frontend_v1.1.adoc`, `catalogo_disenos_figma_v1.0.adoc`,
+  `plan_tareas_frontend_v1.0.adoc`). Ninguno está en disco. **Hay que recuperarlos.**
+|===
+
+<<<
+
+== La arquitectura, cerrada
+
+[source]
+----
+┌──────────────────────┐
+│  SinsaTools          │   SQL Server. Fuente de verdad del negocio.
+│  (equipo externo)    │   NUNCA lo consultamos.
+└──────────┬───────────┘
+           │
+┌──────────▼───────────┐
+│  Microservicio de    │   Suyo. Extrae el catálogo y lo empuja.
+│  integraciones       │
+└──────────┬───────────┘
+           │  POST /v1/ingest/catalog        ← contrato que nosotros publicamos
+           │  Service JWT · scope catalog:ingest
+┌──────────▼────────────────────────────────────────────────┐
+│  Sin-PortalBridge   (.NET 8)                              │
+│                                                            │
+│   ┌─ Ingesta ──────┐   ┌─ PostgreSQL 16 ─┐   ┌─ API ────┐ │
+│   │ validación     │──▶│ catálogo        │◀──│ /api/... │ │
+│   │ upsert         │   │ identidad       │   │ proxy de │ │
+│   │ reconciliación │   │ permisos        │   │ streaming│ │
+│   └────────────────┘   │ auditoría       │   └────┬─────┘ │
+│                        └─────────────────┘        │       │
+└────────────────────────────────────────────────────┼───────┘
+                                                     │
+                                          ┌──────────▼───────────┐
+                                          │  Frontend Angular 21 │
+                                          └──────────────────────┘
+----
+
+Un servicio. Una base de datos. Dos contratos: el de **entrada** (SinsaTools → nosotros,
+nuevo) y el de **salida** (nosotros → frontend, ya fijado por los seis `api_*.yaml`).
+
+=== Lo que esto da de baja
+
+No es un ajuste: desaparece la mitad de la especificación del Bridge, porque estaba
+construida sobre la premisa de que íbamos a leer un SQL Server ajeno a través de la red
+corporativa.
+
+[cols="2,4",options="header"]
+|===
+| Identificador | Por qué deja de aplicar
+
+| `ADR-BS-003`, `DEC-BS-02`, `REST-BS-02`
+| No hay conectividad Azure ↔ red corporativa que resolver. **El bloqueador de despliegue a
+  staging desaparece por completo.**
+
+| `REST-BS-05`, `REST-BS-09`, `REST-BS-10`
+| Reglas sobre un esquema y una conexión que ya no tocamos.
+
+| `DOM-BS-01`, `DOM-BS-02`, `DOM-BS-03`
+| Gobernaban `OnPremiseDbContext`, que no existirá.
+
+| `RF-BS-07`, `DEC-BS-04`
+| No escribimos nada en SinsaTools.
+
+| `DT-BS-01`, `DT-BS-05`
+| No hay scaffolding DB-First que se rompa, ni `Files.FilePath` que interpretar a ciegas:
+  el `storageUri` viene normalizado por contrato.
+
+| `RF-BS-11`, `DEC-BS-01`
+| El `SyncWorker` no existe. La cadencia la fija el emisor, no nosotros.
+
+| Mitad de `ADR-BS-002`
+| Sobrevive `BridgeDbContext` Code-First sobre Npgsql. El proveedor SQL Server y todo el
+  DB-First se caen.
+
+| `RF-BS-05` (check `sqlserver-onpremise`), `RNF-BS-05`
+| El health check pierde una de sus dos comprobaciones.
+
+| `bridge_master/auth/catalog/sync.yaml`
+| Eran la frontera entre dos servicios que ahora son uno. `REST-BS-06` (contrato bilateral
+  con el Tech Lead del Portal) pierde su objeto.
+
+| `RF-BS-03`, `RF-BS-04`, `RF-BS-09`, `RF-BS-10`
+| `GET /v1/softwares`, `GET /v1/media/updates`, `POST /v1/sync`,
+  `GET /v1/sync/{syncId}`. El frontend no los llama; llama a `/api/catalog/*`.
+
+| **Las siete preguntas sobre el esquema de SinsaTools**
+| Se reducen a una sola, y ya no es una pregunta sino un contrato: §4.
+|===
+
+=== Lo que sobrevive, y merece la pena
+
+[cols="2,4",options="header"]
+|===
+| Identificador | Cómo queda
+
+| `RF-BS-01`, `RF-BS-02`
+| La emisión y validación del Service JWT sigue, **con la dirección invertida**: la
+  credencial ahora es de SinsaTools y el scope es `catalog:ingest`.
+
+| `RF-BS-06`, `RNF-BS-06`
+| `X-Correlation-ID` propagado extremo a extremo. Igual que antes.
+
+| `RF-BS-08`, `RNF-BS-08`
+| Logging JSON, nunca secretos. Igual.
+
+| `RNF-BS-09`
+| Frescura del dato. **Mejora**: ahora hay un campo explícito, `generatedAt`, que dice
+  cuándo SinsaTools extrajo el dato. Antes se inferría.
+
+| `ADR-BS-001`
+| La réplica en PostgreSQL sigue siendo la decisión correcta — por otro motivo. Ya no es
+  «caché de una BD remota» sino «la base del sistema».
+
+| `ADR-BS-004`, `DOM-BS-04..07`
+| EF Core Code-First como fuente única del esquema. Sigue, **con una salvedad nueva**: ver
+  el aviso de §6.
+|===
+
+=== El choque con lo ya construido
+
+[WARNING]
+====
+El frontend **ya tiene implementada** la pantalla `/admin/sync`, contra un contrato que
+presupone que el portal mantiene su propia réplica y la sincroniza contra un servicio
+externo: `SYNC_LOG`, `catalogSummary`, `isDataStale`, umbral de 90 minutos,
+`POST /admin/sync` con `scope: full|delta`, sondeo cada 5 segundos, y un historial paginado
+con chips de conteo.
+
+Con la ingesta por empuje, tres de los cuatro endpoints se reinterpretan sin cambiar su
+forma, y **uno se queda sin sentido**.
+====
+
+[cols="2,4",options="header"]
+|===
+| Endpoint | Qué pasa a significar
+
+| `GET /admin/sync/status`
+| ✅ Se mantiene. `lastSync` es el último lote ingerido; `catalogSummary` son cuatro
+  `COUNT`; `isDataStale` pasa a calcularse de verdad —
+  `now() − max(generated_at) > staleThresholdMinutes` — en vez de estar cableado como en el
+  mock. `nextScheduledSync` es una **expectativa configurable**: nosotros no conocemos el
+  calendario de SinsaTools, así que se configura el intervalo esperado y de ahí sale tanto
+  la estimación como el umbral de obsolescencia.
+
+| `GET /admin/sync/logs` y `/{syncId}`
+| ✅ Se mantienen. Un «sync log» es ahora un lote de ingesta. El mapeo es directo:
+  `scope: full|delta` ⇄ `mode: snapshot|upsert`; `triggerType: automatic|manual` ⇄ si el
+  lote vino del calendario del emisor o de una petición puntual; los cuatro contadores salen
+  de `IngestCounts`. **El DTO no cambia.**
+
+| `POST /admin/sync`
+| 🔴 **Se queda sin sentido.** No podemos disparar la sincronización de una base que no
+  leemos. Ver `DEC-08` en §7.
+|===
+
+[NOTE]
+====
+Mientras `DEC-08` no se cierre, el botón se apaga **sin tocar código**: el frontend ya lee
+sus funcionalidades de `public/config.json` → `features{}`. Basta añadir
+`"triggerSync": false` y respetarlo en la pantalla. Es el mismo mecanismo con el que ya están
+apagadas `myVideos`, `notifications` y `help` (`DEC-FE-08`).
+====
+
+Además, el frontend llama a un endpoint que **no existe en ningún contrato**:
+`GET /media/{id}/access`, el pre-flight de acceso (GAP-01). Devuelve 204 / 403 / 404 / 503 y
+se invoca **antes de cada reproducción**, porque un `<video>` que recibe un 403 sólo produce
+un `MediaError` opaco y el visor no sabría qué mensaje mostrar. Si el backend no lo
+implementa, **falla la reproducción de todos los medios**. Hay que añadirlo a
+`api_media.yaml`.
+
+<<<
+
+== El contrato de ingesta
+
+Redactado en `05_contratos_api/ingest_catalog_v1.0.yaml`. Es la pieza crítica del proyecto y
+antes de hoy no existía ni una línea sobre ella. Resumen de las decisiones que incorpora:
+
+[cols="2,4",options="header"]
+|===
+| Decisión | Cómo queda
+
+| **Árbol completo, no entidades sueltas**
+| `producto → versión → medio` llega entero en cada lote. Permite aplicar el lote en una
+  transacción y garantiza que nunca haya una versión huérfana.
+
+| **Dos modos**
+| `upsert` para el día a día (sólo lo que cambió; las bajas con `active: false`) y
+  `snapshot` para la foto completa paginada. Al cerrar la foto con `isLast: true` se
+  desactiva todo lo ausente. Es la red de seguridad contra la deriva silenciosa — que era
+  exactamente el modo de fallo que `DT-BS-04` temía y que nada detectaba.
+
+| **Idempotencia por `batchId`**
+| Lo genera el emisor. Reenviar uno ya procesado devuelve el resultado original con
+  `duplicate: true` sin aplicar nada. Un reintento tras un timeout de red es seguro.
+
+| **`generatedAt` obligatorio**
+| Cuándo SinsaTools **extrajo** el dato, no cuándo nos llegó. Es lo que alimenta
+  `isDataStale`. Sin este campo, reenviar un lote viejo parecería dato fresco.
+
+| **`storageUri` absoluto**
+| Sustituye al `mediaPath` crudo. El emisor entrega un URI resoluble
+  (`https://cuenta.blob.core.windows.net/...` o `file://servidor/...`) y nosotros lo
+  descomponemos en proveedor, contenedor y ruta. **Una ruta relativa se rechaza**: no podemos
+  resolverla sin conocer su configuración.
+
+| **`industry` obligatorio**
+| Con el enum cerrado de nueve valores que el frontend ya filtra y colorea. Si un producto no
+  encaja, `other` — nunca un valor nuevo, que tumbaría el lote entero.
+
+| **Errores en dos clases**
+| De forma → `400` y **no se aplica nada**. De negocio → `202`, se aplica lo correcto y los
+  fallidos se listan con su motivo en `GET /v1/ingest/{ingestId}`.
+
+| **`GET /v1/ingest/watermark`**
+| Devuelve el `generatedAt` del último lote aplicado. Permite al emisor reanudar sin llevar
+  su propio registro, y resuelve la discrepancia si ambos lados creen haber enviado cosas
+  distintas.
+
+| **Límites**
+| 200 productos y 10 MB por lote, `gzip` admitido, 60 lotes por minuto.
+|===
+
+<<<
+
+== Modelo de datos
+
+[IMPORTANT]
+====
+*Este documento ya no contiene el DDL.* Lo contuvo mientras el modelo se estaba diseñando;
+ahora que está cerrado, tenerlo aquí sería una tercera copia del mismo esquema y se
+desincronizaría a la primera migración.
+
+.Dónde vive cada cosa
+[cols="1,3",options="header"]
+!===
+! Artefacto ! Papel
+
+! `04_arquitectura_tecnica/modelo_datos/modelo_datos_bridge_v2.mermaid`
+! *El modelo.* Diagrama ER con las 17 tablas, sus claves, sus índices y las once reglas que
+  lo gobiernan.
+
+! `04_arquitectura_tecnica/modelo_datos/schema_derivado_v2.sql`
+! El DDL *derivado*, verificado contra PostgreSQL 16.13. Sirve para revisar el diseño y para
+  levantar un entorno de pruebas. No se ejecuta a mano contra ningún entorno real.
+
+! Las migraciones de EF Core sobre `AppDbContext`
+! *La fuente de verdad* (ADR-BS-004, DOM-BS-04). Todo lo anterior se deriva de aquí.
+
+! `04_arquitectura_tecnica/modelo_datos/changelog_modelo_datos.adoc`
+! Por qué se hizo cada cambio, si es reversible y qué se pierde al revertir.
+!===
+====
+
+=== Lo que hay que saber sin abrir el diagrama
+
+*17 tablas en tres bloques de naturaleza distinta.* La distinción no es organizativa: decide
+qué pasa cuando algo se pierde.
+
+[cols="1,2,3",options="header"]
+|===
+| Bloque | Tablas | Si se pierde
+
+| Catálogo
+| `catalog_products`, `catalog_versions`, `catalog_media`
+| 🔄 Se recupera pidiendo una foto completa a SinsaTools.
+
+| Identidad y permisos
+| `roles`, `role_permissions`, `users`, `sessions`, `groups`, `user_groups`,
+  `group_version_access`, `user_media_exceptions`
+| ❌ *No se reconstruye desde ningún sitio.* Solo copia de seguridad.
+
+| Ingesta y auditoría
+| `ingest_batches`, `ingest_items`, `ext_api_request_log`, `video_access_log`,
+  `api_request_log`, `notification_log`
+| ❌ Irrecuperable. Es el historial: nadie lo vuelve a generar.
+|===
+
+=== Las cinco decisiones de modelado que no conviene perder
+
+[cols="1,4",options="header"]
+|===
+| Decisión | Motivo
+
+| Identificador interno `uuid` + clave natural aparte
+| El contrato del frontend usa `uuid` en todas partes; SinsaTools usa enteros. `ext_product_id`
+  guarda el de origen y lleva el índice único del upsert. Los nombres son los del contrato
+  (`extProductId`, `origin`, `syncedAt`) para que el mapeo sea trivial.
+
+| `UNIQUE (origin, ext_media_id)`, nunca `ext_media_id` solo
+| `Images.Id` y `Entity_Files.Id` viven en secuencias independientes y pueden colisionar.
+
+| La ingesta hace `UPDATE`, jamás `DELETE` + `INSERT`
+| Los permisos apuntan al identificador interno. Un delete-and-reinsert propagaría el borrado
+  en cascada y **vaciaría los permisos de todos los usuarios en el siguiente lote**, sin
+  error y sin log. Es `REST-BS-13`.
+
+| `last_seen_at` en las tres tablas de catálogo
+| Motor de la reconciliación: al cerrar una foto, lo que no se vio se desactiva.
+
+| `access_source` con cuatro valores
+| El contrato define `denied` a secas, que hace indistinguible una denegación por excepción
+  `revoke` de una por ausencia de permiso. La columna guarda los cuatro; el DTO sigue
+  devolviendo `denied`. Contrato intacto, auditoría útil.
+|===
+
+[NOTE]
+====
+*Corrección del 2026-09-16.* La primera redacción de este documento afirmaba que no debía
+existir una tabla `role_permissions`, citando `api_auth.yaml:151`. Era una lectura
+equivocada: el contrato dice que el backend no la consulta *en cada request*, y la guía de
+roles del portal precisa que sí se consulta **una vez, en el login**, para construir el claim
+`perms{}`. Las tablas `roles` y `role_permissions` existen, y `users.role_id` es una clave
+foránea.
+====
+
+== Reconciliación campo por campo
+
+La tabla que hay que tener delante al escribir el mapeador de ingesta.
+
+=== Producto
+
+[cols="2,2,3",options="header"]
+|===
+| Ingesta | `ProductDto` (frontend) | Nota
+
+| `sourceId` `integer`
+| `extProductId` `string`
+| Se expone como texto. La clave interna es el uuid propio.
+
+| `internalId`, `name`, `tradeName`, `description`
+| idem
+| Directo.
+
+| `brand.name`
+| `brandName`
+| `brand.sourceId` se guarda pero no se expone.
+
+| **`industry`**
+| **`industry`**
+| ✅ Resuelto: viene de SinsaTools como atributo del software.
+
+| `active`
+| `active`
+| Directo.
+
+| `updatedAt`
+| `syncedAt`
+| ⚠️ **Semántica distinta.** El DTO expone cuándo se sincronizó, no cuándo cambió en origen.
+  Es GAP-39 del frontend: _«hoy sólo hay `syncedAt`, que es cuándo se sincronizó, no cuándo
+  se publicó»_. Con `created_at_source` ya en la base, exponerlo es trivial cuando se quiera.
+
+| `metatags`
+| —
+| Se guarda, no se expone.
+
+| —
+| `versionsCount`
+| Derivado: `COUNT(*) FROM versions WHERE product_id = ? AND active`.
+|===
+
+=== Medio — donde está el trabajo
+
+[cols="2,2,3",options="header"]
+|===
+| Ingesta | `MediaDto` | Nota
+
+| `source`
+| `origin`
+| Mismos valores `Images` / `EntityFiles`. Renombrado en la salida.
+
+| `(source, sourceId)`
+| `id` `uuid`
+| Clave natural dentro, uuid fuera.
+
+| `name`, `extension`, `position`, `active`, `deviceType`
+| idem
+| `extension` sin punto y en minúsculas, normalizado en la ingesta.
+
+| `mediaKind`
+| `mediaType`
+| ⚠️ **Ojo con el nombre.** El contrato del Bridge anterior llamaba `mediaType` al MIME. Aquí
+  `mediaKind` es la clase (`video`/`image`/`document`) y el MIME va en `mimeType`. Son dos
+  datos distintos y antes compartían nombre.
+
+| `mediaGroup` (minúsculas)
+| `fileGroup`
+| Ya normalizado por contrato: el emisor envía `cover`/`manual`/`video_demo`/`other`.
+  Desaparece el mapeo de `Image` que quedaba sin definir.
+
+| `mimeType`
+| — (uso interno)
+| Cabecera `Content-Type` del proxy.
+
+| `sizeBytes`
+| — (uso interno)
+| `Content-Length` y `Content-Range`. Si no viene, `HEAD` contra el almacenamiento la primera
+  vez y se cachea.
+
+| `storageUri`
+| — (**prohibido**)
+| `RF-17`, `RF-23`. Se descompone en proveedor/contenedor/ruta y nunca sale.
+
+| `token`
+| —
+| Uso interno para resolver el recurso.
+
+| `webPlatformId`
+| —
+| Se guarda. ⚠️ Nadie ha dicho si debe **filtrar** qué se muestra en el portal. Ver `DEC-09`.
+|===
+
+<<<
+
+== Decisiones a tomar
+
+[cols="1,3,3",options="header"]
+|===
+| ID | Decisión | Estado
+
+| **DEC-08** 🔴
+| `POST /admin/sync` se queda sin sentido. Tres salidas: (a) apagar el botón vía
+  `features.triggerSync` en `config.json`; (b) que llame a un endpoint de *callback* del
+  microservicio de SinsaTools pidiendo una reingesta; (c) que dispare una **reconciliación
+  local** — recontar, revalidar `storageUri`, recalcular derivados — sin pedir datos nuevos.
+| Recomendación: **(a) ahora, (b) cuando haya acuerdo con SinsaTools.** La (c) es útil pero
+  no es lo que el usuario espera del botón.
+
+| **DEC-09** 🟠
+| `webPlatformId` y `deviceType`: ¿filtran qué se muestra en el portal, o son informativos?
+| Si filtran, hay que añadirlo al control de acceso y a la consulta de catálogo. Preguntar a
+  SinsaTools qué significan.
+
+| **DEC-10** 🟠
+| Intervalo esperado de ingesta. De él salen `nextScheduledSync`, `staleThresholdMinutes` y
+  la alerta de `RNF-BS-09`.
+| Requiere saber cada cuánto empuja el microservicio. El contrato del frontend sugiere
+  90 min de umbral contra un ciclo de 60.
+
+| **DEC-11** 🟡
+| ¿Añadimos `GET /media/{id}/access` (GAP-01) al contrato, o cambiamos el frontend?
+| El frontend ya lo llama. **Sin él no se reproduce ningún medio.** Añadirlo es lo barato.
+
+| **DEC-03** 🟠
+| `SESSIONS`: ¿se añaden `replaced_by_session_id` y `revoked_reason`?
+| **Sigue abierta.** El DDL los incluye. Sin ellos `ADR-008` no se sostiene: la detección de
+  reutilización expulsa a la víctima, no al ladrón.
+
+| **DEC-02** 🟠
+| Sesión concurrente: bloquear el nuevo login; desbloqueo forzando el cierre desde la
+  pantalla de login.
+| **Decidida, sin escribir en la documentación.** Contradice lo que presuponen el diagrama de
+  estados y `RF-02`. La pantalla de desbloqueo no está en wireframes ni en el backlog.
+
+| **DEC-12** 🟡
+| ¿Se funden `bridge-docs` y `portal-docs` en un solo repositorio de documentación?
+| Con un solo servicio, dos repositorios de documentación duplican convenciones, glosario e
+  índice. Sobrevive poco de `bridge-docs` fuera de los ADR.
+|===
+
+[IMPORTANT]
+====
+**Propiedad del esquema: una salvedad nueva sobre `ADR-BS-004`.**
+
+La decisión decía que EF Core Code-First es la fuente única de verdad del esquema, y sigue
+siendo cierta — precisamente **porque** elegimos la API de ingesta en vez de dar a SinsaTools
+credenciales de escritura sobre nuestras tablas.
+
+Si esa elección se revirtiera y su microservicio escribiera directamente en PostgreSQL, cada
+`dotnet ef migrations add` pasaría a ser un cambio que puede romperles el código, y el
+esquema se convertiría en un contrato bilateral. La API de ingesta es lo que mantiene
+`ADR-BS-004` en pie.
+====
+
+<<<
+
+== Plan de arranque
+
+Ya no hay nada bloqueado por SinsaTools para empezar: el contrato de ingesta define qué
+esperamos, y un simulador lo ejercita.
+
+=== Bloque 0 · Esta semana
+
+[cols="1,4,1",options="header"]
+|===
+| # | Tarea | Días
+
+| 0.1
+| Sustituir el `README.md` de `Sin-PortalBridge` — hoy describe un frontend Angular — y
+  crear el esqueleto .NET 8 con dos capas (`RNF-BS-07`).
+| 0,5
+
+| 0.2
+| `AppDbContext` con las trece entidades de §5 y la migración inicial. **Ya no está
+  bloqueada por nada.**
+| 1,5
+
+| 0.3
+| `docker-compose` con PostgreSQL 16 y un **simulador del microservicio de integraciones**
+  que empuje lotes contra `/v1/ingest/catalog` a partir de las semillas del mock del
+  frontend — 250 productos, 613 versiones, 1.842 medios ya existen en `fixtures.ts`.
+| 1
+
+| 0.4
+| Ingesta: validación, upsert idempotente, reconciliación de snapshot, contadores.
+| 2
+
+| 0.5
+| Auth: `POST /v1/auth/token` (ingesta) y `/auth/login`, `/refresh`, `/logout` (portal), con
+  el `perms{}` embebido en el JWT.
+| 1,5
+
+| 0.6
+| `GET /catalog/*` contra la base ya poblada. **A partir de aquí el frontend deja de
+  necesitar el mock.**
+| 1
+
+| 0.7
+| Enviar el contrato de ingesta a SinsaTools y acordar credenciales, cadencia y quién opera
+  el simulador.
+| 0,5
+|===
+
+=== Bloque 1 · Después
+
+* Proxy de streaming con `Range`, más `GET /media/{id}/access` (`DEC-11`).
+* `/admin/*`: usuarios, grupos, excepciones, logs.
+* `/admin/sync/*` remapeado sobre `ingest_batches`.
+
+=== Lo que el frontend ya resolvió y no hay que volver a decidir
+
+[cols="2,3",options="header"]
+|===
+| Tema | Resuelto como
+
+| Umbral de datos obsoletos
+| `staleThresholdMinutes`, 90 minutos, configurable. `isDataStale` derivado.
+
+| Cómo autoriza el `<video>` el streaming
+| Cookie `pv_media` `HttpOnly; Secure; SameSite=Strict; Path=/api/media`
+  (`ADR-012` opción C, aprobada en `DEC-FE-02`). URL **estable**, sin firma ni caducidad.
+
+| Caché del navegador
+| Caché HTTP nativa con `Range`, **no** `dataGroups` del Service Worker (`ADR-013`).
+
+| TTL de tokens
+| Access token 15 min en memoria; refresh 7 días en cookie con `Path=/auth/refresh`;
+  rotación en cada refresco.
+
+| Autorización de la interfaz
+| Siempre por `perms{}`, nunca por rol (`H-06`).
+|===
+
+=== Documentos que hay que marcar como superados
+
+* `bridge-docs/01_requerimientos/requerimientos_bridge_service_v1.1.adoc` — emitir v2.0 sin
+  lo que §3 da de baja.
+* `bridge-docs/04_arquitectura_tecnica/arquitectura_tecnica_bridge_service_v1.1.adoc` — ídem.
+* `bridge-docs/11_gestion_producto/adr/adr-bs-003_conectividad_onpremise.adoc` — marcar
+  **Descartada**: no hay conectividad que resolver.
+* `bridge-docs/.../adr-bs-002_efcore_dos_proveedores.adoc` — queda un solo proveedor.
+* `portal-docs/05_contratos_api/bridge_service/bridge_*.yaml` — mover a `_historico/`.
+* `portal-docs/01_requerimientos/requerimientos_api_externa_v1.0.adoc` — superado por el
+  contrato de ingesta y por los seis `api_*.yaml` del frontend.
+* `portal-docs/00_Estado_Actual.adoc` — sigue listando seis documentos como «archivo vacío»
+  cuando tienen contenido; el colofón dice «Versión 1.3 / Abril 2025» contra un
+  `:revnumber: 1.6` en la cabecera.
+* **Recuperar** `arquitectura_frontend_v1.1.adoc`, `catalogo_disenos_figma_v1.0.adoc` y
+  `plan_tareas_frontend_v1.0.adoc`, que el README del frontend cita y no están en disco.
+
+include::{root}/_nav.adoc[]
+
+'''
+
+**Clasificación:** Confidencial — Solo uso interno

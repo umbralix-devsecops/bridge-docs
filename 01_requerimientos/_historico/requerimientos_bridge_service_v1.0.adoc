@@ -1,0 +1,337 @@
+= Requerimientos: Bridge Service
+:author: Equipo de Desarrollo
+:revnumber: 1.0
+:revdate: Abril 2025
+:revremark: Versión inicial
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:sectnumlevels: 3
+:icons: font
+:lang: es
+:classification: Confidencial — Solo uso interno
+
+---
+
+[.lead]
+Requerimientos del *Bridge Service* — API REST intermediaria entre el Portal de Videos y la base de datos SQL Server on-premise. Define qué expone, qué restricciones tiene y cómo se integra con el ecosistema existente.
+
+---
+
+== Contexto y propósito
+
+El Bridge Service es el único punto de acceso controlado al catálogo de software especializado almacenado en la BD SQL Server on-premise de la organización. El Portal de Videos consume este servicio para mantener su réplica local del catálogo sincronizada.
+
+[source,mermaid]
+----
+flowchart LR
+    PV["Portal de Videos\n(consumidor)"]
+    BS["Bridge Service\n(este sistema)"]
+    SQL["SQL Server\nOn-Premise\n(fuente de verdad)"]
+
+    PV -->|"Service JWT\nHTTPS"| BS
+    BS -->|"Solo lectura +\nescrituras menores\nVPN / IP fija"| SQL
+
+    style BS  fill:#EEF2FF,stroke:#4F46E5,color:#312E81
+    style PV  fill:#F0FDF4,stroke:#16A34A,color:#166534
+    style SQL fill:#FFFBEB,stroke:#D97706,color:#92400E
+----
+
+=== Principios fundamentales
+
+* El Bridge Service *no modifica* el esquema de la BD on-premise. Las escrituras menores permitidas (ej. marcar registros como procesados) usan tablas o columnas previamente acordadas con el equipo de la BD on-premise.
+* El Bridge Service *no almacena* datos del catálogo — solo los lee de SQL Server y los expone al portal. No tiene BD propia.
+* El Bridge Service es consumido *exclusivamente* por el backend del Portal de Videos. No es una API pública.
+* El Bridge Service es *stateless* — no mantiene sesiones de usuario. La autenticación es por Service JWT en cada request.
+
+---
+
+== Actores
+
+[cols="2,1,4", options="header"]
+|===
+| Actor | Tipo | Descripción
+
+| *Backend del Portal de Videos*
+| Consumidor (sistema)
+| Único consumidor del Bridge Service. Se autentica con un Service JWT RS256. Llama al Bridge Service durante las sincronizaciones del catálogo (automáticas cada hora y manuales).
+
+| *BD SQL Server On-Premise*
+| Sistema externo (fuente de verdad)
+| Base de datos de la aplicación on-premise de la organización. El Bridge Service la consulta en modo principalmente de lectura via VPN o IP fija.
+
+| *Desarrollador del Bridge Service*
+| Interno
+| Único desarrollador responsable del diseño, implementación, despliegue y mantenimiento del servicio.
+
+| *Tech Lead del Portal*
+| Interno
+| Responsable del contrato de integración. Cualquier cambio en el contrato de la API requiere su aprobación.
+|===
+
+---
+
+== Requerimientos funcionales
+
+=== RF-BS-01 — Autenticación del consumidor
+
+El Bridge Service debe validar en cada request que el consumidor presenta un Service JWT RS256 válido emitido por el backend del Portal de Videos.
+
+*Criterios de aceptación:*
+
+* Todo endpoint (excepto `/health`) retorna `401` si el header `Authorization: Bearer {jwt}` está ausente o el token es inválido.
+* El JWT debe contener los claims: `aud: bridge-service-api`, `scope: catalog:read sync:trigger`, `role: backend`.
+* Un token expirado retorna `401 TOKEN_EXPIRED`.
+* Un token con scope insuficiente retorna `403 FORBIDDEN`.
+
+---
+
+=== RF-BS-02 — Emisión de Service JWT
+
+El Bridge Service debe exponer un endpoint para que el backend del portal obtenga el Service JWT de autenticación.
+
+*Endpoint:* `POST /v1/auth/token`
+
+*Criterios de aceptación:*
+
+* Acepta `clientId` y `clientSecret` en el body (JSON).
+* Valida las credenciales contra el almacén seguro configurado (Azure Key Vault o variable de entorno en desarrollo).
+* Emite un JWT RS256 con TTL de 1 hora y los claims definidos en RF-BS-01.
+* Credenciales inválidas retornan `401 INVALID_CREDENTIALS`.
+* Más de 10 intentos fallidos en 1 minuto desde la misma IP retornan `429 RATE_LIMITED`.
+
+---
+
+=== RF-BS-03 — Catálogo completo de productos
+
+El Bridge Service debe exponer el catálogo completo de productos, versiones y multimedia desde la BD on-premise.
+
+*Endpoint:* `GET /v1/softwares`
+
+*Criterios de aceptación:*
+
+* Retorna un array de productos activos con sus versiones activas y los medios de cada versión.
+* Cada producto incluye: `idProducto`, `name`, `nombreComercial`, `brand` (id + name), `industry`, `active`, `versions[]`.
+* Cada versión incluye: `idVersion`, `name`, `active`, `multimedia[]`.
+* Cada medio unifica los dos orígenes de la BD on-premise (`Images` y `EntityFiles`) en un campo `origen`. Los demás campos son: `id`, `nombre`, `multimediaRuta`, `extension`, `fileGroup`, `position`, `active`.
+* El campo `multimediaRuta` contiene la URL o ruta del archivo tal como está en la BD on-premise. El portal la almacena internamente como `storage_path` y *nunca* la expone al frontend.
+* Si la BD on-premise no está disponible retorna `503 ONPREMISE_UNAVAILABLE`.
+
+---
+
+=== RF-BS-04 — Delta de novedades (sincronización incremental)
+
+El Bridge Service debe exponer un endpoint para que el portal obtenga solo los registros modificados desde la última sincronización exitosa.
+
+*Endpoint:* `GET /v1/media/novedades?desde={timestamp}`
+
+*Criterios de aceptación:*
+
+* El parámetro `desde` es obligatorio. Formato ISO 8601 UTC (`YYYY-MM-DDTHH:MM:SSZ`).
+* Retorna solo los medios cuya fecha de modificación en la BD on-premise sea mayor que `desde`.
+* Cada ítem del delta incluye el contexto completo: `idProducto`, `nombreProducto`, `idVersion`, `nombreVersion`, `multimedia` (objeto con los mismos campos de RF-BS-03).
+* Si no hay novedades: retorna array vacío `[]` con status `200`.
+* Parámetro `desde` con formato inválido retorna `400 INVALID_PARAMETER`.
+* Si la BD on-premise no está disponible retorna `503 ONPREMISE_UNAVAILABLE`.
+
+---
+
+=== RF-BS-05 — Health check
+
+El Bridge Service debe exponer un endpoint de estado operacional para diagnóstico.
+
+*Endpoint:* `GET /health`
+
+*Criterios de aceptación:*
+
+* No requiere autenticación.
+* Retorna `200` con el estado del servicio y sus dependencias.
+* El body incluye: `status` (Healthy / Degraded / Unhealthy), `timestamp`, y el estado de la conexión a la BD on-premise.
+* Si la BD on-premise no responde: `status: Degraded` con detalle del error, HTTP `200` (el servicio está en pie aunque degradado).
+* Si el servicio mismo no puede responder: el orquestador (Azure App Service) detecta el fallo y reinicia.
+
+---
+
+=== RF-BS-06 — Propagación del Correlation ID
+
+El Bridge Service debe propagar el header `X-Correlation-ID` recibido del portal en todas sus respuestas y logs internos.
+
+*Criterios de aceptación:*
+
+* Si el request incluye `X-Correlation-ID`: el mismo valor aparece en la respuesta y en los logs.
+* Si el request no incluye `X-Correlation-ID`: el Bridge Service genera uno (UUID v4) y lo incluye en la respuesta.
+* Cada llamada al SQL Server on-premise loguea el `X-Correlation-ID` para trazabilidad end-to-end.
+
+---
+
+=== RF-BS-07 — Escrituras menores sobre la BD on-premise
+
+El Bridge Service puede ejecutar escrituras menores sobre la BD on-premise cuando el equipo de la BD on-premise habilite los mecanismos necesarios.
+
+*Criterios de aceptación:*
+
+* Las escrituras están restringidas a operaciones previamente acordadas (ej. actualizar un campo `ultima_sincronizacion` en una tabla auxiliar).
+* El Bridge Service nunca modifica registros de negocio (productos, versiones, multimedia).
+* Toda escritura se registra en el log del Bridge Service con el `X-Correlation-ID` y el timestamp.
+* Si una escritura falla, el Bridge Service registra el error pero *no revierte* la lectura que la precedió (las lecturas y escrituras son independientes).
+
+[NOTE]
+====
+Los detalles exactos de las escrituras menores se documentarán en un addendum cuando el equipo de la BD on-premise confirme las tablas y columnas disponibles para ese propósito.
+====
+
+---
+
+=== RF-BS-08 — Logging de requests
+
+El Bridge Service debe registrar cada request recibido con su resultado.
+
+*Criterios de aceptación:*
+
+* Cada request loguea: timestamp, endpoint, método HTTP, status de respuesta, latencia en ms, `X-Correlation-ID` y IP del consumidor.
+* Los logs de errores incluyen el stack trace completo.
+* El nivel de log es configurable via variable de entorno (`LOG_LEVEL`).
+* Los logs se envían a la salida estándar (stdout/stderr) para que Azure App Service los capture en Azure Monitor.
+
+---
+
+== Requerimientos no funcionales
+
+[cols="1,3,2", options="header"]
+|===
+| ID | Requerimiento | Métrica objetivo
+
+| RNF-BS-01 | *Disponibilidad* — El Bridge Service debe estar disponible durante el horario de operación del portal. | ≥ 99.5% mensual
+
+| RNF-BS-02 | *Latencia* — El endpoint `GET /v1/softwares` debe responder en tiempo razonable considerando la consulta al SQL Server on-premise. | p95 < 5,000 ms
+
+| RNF-BS-03 | *Latencia delta* — El endpoint `GET /v1/media/novedades` debe ser más rápido que el catálogo completo. | p95 < 2,000 ms
+
+| RNF-BS-04 | *Seguridad* — Toda comunicación debe usar HTTPS. El Service JWT debe validarse en cada request. | 100% HTTPS · 0 endpoints sin auth (excepto /health)
+
+| RNF-BS-05 | *Resiliencia* — El Bridge Service debe manejar correctamente la indisponibilidad del SQL Server on-premise sin caerse. | Retorna 503 en < 10 seg si SQL Server no responde (timeout configurable)
+
+| RNF-BS-06 | *Trazabilidad* — Cada request debe ser rastreable end-to-end mediante el `X-Correlation-ID`. | 100% de requests con Correlation ID en logs
+
+| RNF-BS-07 | *Mantenibilidad* — El código debe ser comprensible y mantenible por un solo desarrollador .NET. | Clean Architecture simplificada (2 capas: API + Infrastructure)
+
+| RNF-BS-08 | *Observabilidad* — Los logs deben ser estructurados (JSON) para facilitar el análisis en Azure Monitor. | Logs JSON con campos estándar en 100% de eventos
+|===
+
+---
+
+== Restricciones técnicas
+
+[cols="1,3", options="header"]
+|===
+| ID | Restricción
+
+| REST-BS-01 | El stack tecnológico es *.NET 8 (C#)*. No se permite cambiar el runtime.
+
+| REST-BS-02 | El Bridge Service se despliega en *Azure App Service* (Linux). El SQL Server on-premise es accesible via *VPN site-to-site o IP fija* previamente configurada por el equipo de infraestructura.
+
+| REST-BS-03 | El repositorio del Bridge Service es *independiente* del portal. El CI/CD es gestionado por el mismo pipeline de *GitHub Actions* del portal pero en un workflow separado.
+
+| REST-BS-04 | El Bridge Service *no tiene base de datos propia*. Toda la persistencia está en el SQL Server on-premise (lectura) o en el portal (escritura de logs de sync).
+
+| REST-BS-05 | El esquema del SQL Server on-premise es *de solo lectura y no modificable*. Cualquier escritura requiere acuerdo previo con el equipo de la BD on-premise.
+
+| REST-BS-06 | El contrato de la API (endpoints, schemas, códigos de error) está definido en los archivos `bridge_*.yaml` y *no puede cambiar de forma incompatible* sin aprobación del Tech Lead del Portal. Cambios incompatibles requieren versionado (`/v2/`).
+
+| REST-BS-07 | La autenticación entre el portal y el Bridge Service usa *Service JWT RS256*. No se permite otro mecanismo de autenticación.
+
+| REST-BS-08 | El `multimediaRuta` de la BD on-premise se expone *tal como está* en el contrato. El portal es responsable de transformarlo en `storage_path` según su lógica interna.
+|===
+
+---
+
+== Casos de uso de alto nivel
+
+[cols="1,3,2,2", options="header"]
+|===
+| ID | Caso de uso | Actor | RF
+
+| CU-BS-001 | Obtener Service JWT para autenticarse | Backend del Portal | RF-BS-02
+| CU-BS-002 | Sincronizar catálogo completo (full sync) | Backend del Portal | RF-BS-03
+| CU-BS-003 | Obtener novedades del catálogo (delta sync) | Backend del Portal | RF-BS-04
+| CU-BS-004 | Verificar el estado del Bridge Service | Backend del Portal / DevOps | RF-BS-05
+| CU-BS-005 | Rastrear un request de sync por Correlation ID | Desarrollador / DevOps | RF-BS-06, RF-BS-08
+| CU-BS-006 | Registrar escritura menor en BD on-premise | Backend del Portal | RF-BS-07
+|===
+
+---
+
+== Alcance — Qué NO hace el Bridge Service
+
+* No gestiona usuarios ni sesiones del Portal de Videos.
+* No almacena archivos multimedia — solo expone las rutas donde están almacenados.
+* No realiza streaming de video — esa es responsabilidad del backend del Portal.
+* No expone datos a usuarios finales — solo al backend del portal (servicio a servicio).
+* No implementa lógica de control de acceso por usuario — eso es responsabilidad del Portal.
+* No sincroniza en push — el portal es quien dispara la sincronización (pull).
+
+---
+
+== Dependencias e integraciones
+
+[cols="2,1,3,2", options="header"]
+|===
+| Dependencia | Dirección | Descripción | Estado
+
+| SQL Server On-Premise
+| Bridge Service → SQL Server
+| Fuente de verdad del catálogo. Acceso via VPN/IP fija. Solo lectura principal.
+| Existente — requiere configuración de acceso
+
+| Backend del Portal de Videos
+| Portal → Bridge Service
+| Único consumidor. Se autentica con Service JWT.
+| En desarrollo paralelo
+
+| Azure Key Vault
+| Bridge Service → Key Vault
+| Almacena el `clientSecret` del portal y las claves de firma JWT del Bridge Service.
+| Por aprovisionar
+
+| Azure App Service
+| —
+| Plataforma de despliegue del Bridge Service.
+| Por aprovisionar
+
+| VPN / IP fija
+| Bridge Service → SQL Server
+| Conectividad segura entre Azure y la red on-premise.
+| Por configurar con infraestructura
+|===
+
+---
+
+== Glosario
+
+[cols="1,3", options="header"]
+|===
+| Término | Definición
+
+| *Bridge Service* | Este sistema. API REST intermediaria entre el Portal de Videos y el SQL Server on-premise.
+| *Service JWT* | Token JWT RS256 usado para autenticar el backend del portal contra el Bridge Service. Diferente al User JWT que autentica a los usuarios del portal.
+| *Full sync* | Sincronización completa del catálogo — el portal solicita todos los productos, versiones y medios.
+| *Delta sync* | Sincronización incremental — el portal solicita solo los registros modificados desde la última sync exitosa.
+| *On-premise* | La infraestructura física de la organización donde vive el SQL Server con el catálogo de software.
+| *multimediaRuta* | Campo de la BD on-premise que contiene la ruta o URL del archivo multimedia. El portal lo almacena como `storage_path`.
+| *origen* | Campo que identifica la tabla de origen en la BD on-premise: `Images` o `EntityFiles`. Ambos se unifican en el contrato del Bridge Service.
+| *Correlation ID* | UUID que identifica un request a través de todos los sistemas del ecosistema (portal → bridge → logs).
+|===
+
+---
+
+[colophon]
+[cols="1,3"]
+|===
+| Versión | 1.0
+| Fecha | Abril 2025
+| Estado | Borrador para revisión
+| Clasificación | Confidencial — Solo uso interno
+| Documentos relacionados | bridge_master.yaml, bridge_auth.yaml, bridge_catalog.yaml, bridge_sync.yaml, Requerimientos_Portal_Videos_v1.1.adoc
+|===

@@ -1,0 +1,96 @@
+%% Modelo de datos del caché propio del Bridge Service
+%% Versión: 1.0 · Fecha: 2026-08-22
+%% Motor: PostgreSQL 16 (Azure Database for PostgreSQL Flexible Server)
+%% Gobernado por: ADR-BS-001 (caché propio) y ADR-BS-002 (EF Core Code-First)
+%%
+%% NOTA: este esquema es una RÉPLICA DESNORMALIZADA de la BD on-premise.
+%% No es fuente de verdad. Solo contiene lo que el contrato OpenAPI obliga a exponer.
+
+erDiagram
+    PRODUCT ||--o{ VERSION : contiene
+    VERSION ||--o{ MEDIA : contiene
+    SYNC_RUN ||--o{ SYNC_ITEM : registra
+
+    PRODUCT {
+        int product_id PK "Products.Id de on-premise"
+        varchar internal_id "Products.InternalId"
+        varchar name
+        varchar trade_name
+        text description
+        boolean active
+        int brand_id
+        varchar brand_name "desnormalizado: no hay tabla BRAND"
+        jsonb metatags "title + keywords"
+        timestamptz updated_at_source "UpdatedAt de on-premise"
+        timestamptz synced_at "cuando lo trajo el SyncWorker"
+    }
+
+    VERSION {
+        int version_id PK "Stock_Keeping_Units.Id de on-premise"
+        int product_id FK
+        varchar internal_id
+        varchar name
+        varchar trade_name
+        text description
+        boolean active
+        timestamptz updated_at_source
+        timestamptz synced_at
+    }
+
+    MEDIA {
+        varchar source PK "Images | EntityFiles"
+        int id PK "ID en su tabla de origen"
+        int version_id FK
+        varchar name
+        text media_path "Images.UrlWeb o Files.FilePath"
+        varchar extension
+        varchar media_type "MIME; null si source=Images"
+        varchar media_group "Cover|Manual|Video_Demo|Image|Other"
+        text token "Files.Token; null si source=Images"
+        text template_path "solo EntityFiles"
+        varchar device_type
+        int web_platform_id
+        int position "orden de visualizacion"
+        boolean active "false = desactivado en on-premise"
+        timestamptz created_at_source
+        timestamptz updated_at_source
+        timestamptz synced_at
+    }
+
+    SYNC_RUN {
+        uuid sync_id PK "el syncId que devuelve POST /v1/sync"
+        varchar status "running | completed | failed"
+        int records_processed
+        int records_new
+        int records_updated
+        int records_error
+        text error_detail
+        varchar correlation_id
+        timestamptz started_at
+        timestamptz finished_at
+    }
+
+    SYNC_ITEM {
+        bigserial id PK
+        uuid sync_id FK
+        varchar entity_type "product | version | multimedia"
+        int entity_id
+        varchar operation "insert | update | skip | error"
+        text error_detail
+    }
+
+%% ── ÍNDICES REQUERIDOS ────────────────────────────────────────────────
+%% MEDIA (updated_at_source DESC)   → filtro de GET /v1/media/updates
+%% MEDIA (version_id)               → composición del árbol
+%% VERSION    (product_id)              → composición del árbol
+%% SYNC_RUN   (started_at DESC)          → historial reciente
+%% PRODUCT    (active) WHERE active=true → índice parcial
+%%
+%% ── REGLAS ────────────────────────────────────────────────────────────
+%% 1. PK de MEDIA es COMPUESTA (source, id): los IDs de Images y
+%%    Entity_Files viven en secuencias distintas y pueden colisionar.
+%% 2. updated_at_source es el campo que se compara contra ?since=.
+%%    synced_at NUNCA se usa para eso.
+%% 3. Sin borrado físico: desactivado en on-premise => active = false.
+%%    Es lo que permite que ?includeInactive=true funcione.
+%% 4. DT-BS-02: no hay política de purga de SYNC_RUN / SYNC_ITEM.

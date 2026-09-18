@@ -1,0 +1,257 @@
+= Plan de primera entrega — Bridge Service
+:author: Equipo de Desarrollo
+:revnumber: 1.0
+:revdate: 2026-09-17
+:revremark: Emitido tras cerrar el análisis del ER de SinsaTools
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:sectnumlevels: 3
+:icons: font
+:lang: es
+:root: ..
+:section-id: gestion-producto
+:section-title: Gestión de Producto
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+---
+
+[.lead]
+Responde a una sola pregunta: *¿se puede planificar una primera entrega, o queda algún
+bloqueante crítico?*
+
+== Veredicto
+
+[IMPORTANT]
+====
+*No queda ningún bloqueante externo.* Todo lo que sigue abierto es de dos tipos:
+
+. *Decisiones nuestras* que podemos cerrar esta semana sin preguntar a nadie —`DEC-BS-07`,
+  `DEC-BS-11`, `DEC-BS-13`—.
+. *Respuestas de SinsaTools* que no afectan al código que hay que escribir primero. Ninguna
+  toca el esquema, ninguna toca la forma del contrato, y todas caen sobre la *Entrega 2* o
+  la *3*.
+
+Se puede arrancar. Y conviene hacerlo antes de tener sus respuestas, porque el simulador de
+ingesta que hace falta para no depender de ellos es además la mejor prueba del contrato que
+les vamos a pedir que implementen.
+====
+
+== Qué bloquea y qué no
+
+[cols="1,2,1,2",options="header"]
+|===
+| ID | Asunto | ¿Bloquea la Entrega 1? | Por qué
+
+| `DEC-BS-15`
+| Credencial de lectura sobre el almacenamiento
+| *No*
+| En local se usa Azurite con clave de cuenta. La credencial de Azure hace falta el día que se
+  despliega el *streaming*, que es Entrega 2.
+
+| —
+| La consulta excluye los documentos (`FileGroup IN ('Image','Video')`)
+| *No*
+| Es su consulta, y afecta al *contenido* del primer lote real, no a nuestro código. El modelo
+  ya contempla `document` / `manual`.
+
+| `DEC-BS-06+`
+| Valores reales de las categorías raíz
+| *No*
+| `industry` ya es un campo obligatorio del contrato. La equivalencia se escribe en el emisor.
+  El enum de nueve valores está fijado.
+
+| `DEC-BS-08`
+| `Id` del portal en `Web_Platforms`
+| *No*
+| Es un número de configuración. Hasta tenerlo, el simulador emite el suyo.
+
+| —
+| ¿Existe una tabla `Images`?
+| *No*
+| Se mantiene la clave natural compuesta `(origin, ext_media_id)` con un solo valor. No cuesta
+  nada y protege (`DOM-BS-08`).
+
+| `DEC-BS-11`
+| `GET /media/{id}/access` no existe en ningún contrato
+| ⚠️ *Bloquea la Entrega 2*
+| El frontend lo llama antes de cada reproducción. Es *nuestra* decisión: se cierra
+  escribiéndolo.
+
+| `DEC-BS-07`
+| Qué hace `POST /admin/sync`
+| ⚠️ *Bloquea el panel de admin*
+| Nuestra decisión. Sin base ajena que consultar, o desaparece o pasa a ser «consultar el
+  estado del último lote».
+
+| `DEC-BS-13`
+| Cadena de rotación en `sessions`
+| ⚠️ *Bloquea `MIG-BS-001`*
+| Son dos columnas. Hay que decidirlo *antes* de la primera migración, o se paga una segunda.
+|===
+
+== Las tres decisiones a cerrar antes de escribir código
+
+Ninguna necesita a SinsaTools. Son una tarde.
+
+[cols="1,4",options="header"]
+|===
+| ID | Propuesta a ratificar
+
+| `DEC-BS-13`
+| *Sí a las dos columnas.* `replaced_by_session_id` y `revoked_reason` entran en
+  `MIG-BS-001`. Añadir columnas a una tabla de sesiones con tráfico después es una migración
+  con bloqueo; ahora son dos líneas del modelo. El coste de equivocarse por exceso es cero.
+
+| `DEC-BS-11`
+| *Se añade `GET /media/{id}/access` al contrato del portal.* Devuelve metadatos y el veredicto
+  de permiso, nunca una URL de almacenamiento (`SEC-BS-10`, `SEC-BS-11`). El frontend ya lo
+  llama: negarse no lo elimina, solo lo deja roto.
+
+| `DEC-BS-07`
+| *`POST /admin/sync` deja de disparar nada y pasa a ser `GET /admin/ingest/status`.* Con la
+  ingesta por empuje (`ADR-BS-006`) no hay nada que disparar desde aquí; lo que el
+  administrador necesita es ver el último lote, su resultado y su antigüedad. Es un cambio de
+  verbo y de nombre, y hay que acordarlo con el frontend porque tiene el botón.
+|===
+
+== Entrega 1 — «el portal funciona con datos propios»
+
+*Objetivo:* que el frontend Angular apunte al Bridge real, se autentique, navegue el catálogo
+completo y vea sus permisos aplicados. Sin SinsaTools de por medio y sin reproducir vídeo
+privado.
+
+=== Alcance
+
+[cols="1,3,1",options="header"]
+|===
+| Bloque | Contenido | Depende de
+
+| *Esqueleto*
+| Solución .NET 8, tres proyectos (`.Api` / `.Application` / `.Infrastructure`) más pruebas.
+  `docker-compose` con PostgreSQL 16 y Azurite. Pipeline de CI con `gitleaks` (`SEC-BS-08`).
+| —
+
+| *`MIG-BS-001`*
+| Las 17 tablas, 14 enums y 40 índices del modelo v2, generadas por EF Core Code-First
+  (`ADR-BS-004`). Incluye los índices únicos parciales de `ingest_batches`.
+| `DEC-BS-13`
+
+| *Identidad*
+| `/auth/login`, `/register`, `/refresh`, `/logout`. Roles y permisos resueltos una sola vez
+  en el `LoginCommandHandler` contra `ROLE_PERMISSIONS`. Rotación de sesiones.
+| `MIG-BS-001`
+
+| *Administración*
+| Usuarios, grupos, `group_version_access`, `user_media_exceptions`. Es el núcleo del valor del
+  portal y no depende de nada externo.
+| Identidad
+
+| *Catálogo (lectura)*
+| `GET /catalog/products` con paginación, búsqueda y filtro por `industry`;
+  `/catalog/products/{id}`; `/catalog/versions/{id}/media`. Con `mediaCount` resuelto por
+  `JOIN` —la razón de ser de `ADR-BS-005`—.
+| Administración
+
+| *Ingesta*
+| `POST /v1/auth/token` y `POST /v1/ingest/catalog` completos: idempotencia por `batchId`,
+  lote único por índice parcial (`DOM-BS-09`), `heartbeat_at`, reconciliación por
+  `last_seen_at`, y `GET /v1/ingest/{ingestId}` · `/watermark`.
+| `MIG-BS-001`
+
+| *Simulador de ingesta* 🆕
+| Un proyecto de consola que construye lotes conformes al contrato a partir de `fixtures.ts`
+  del frontend: *250 productos, 613 versiones, 1.842 recursos*. Sustituye a SinsaTools por
+  completo para E2E.
+| Ingesta
+|===
+
+=== Fuera de alcance, y dicho explícitamente
+
+* *Reproducción de material privado.* Sin credencial y sin `DEC-BS-11`, no hay proxy. El
+  material público sí se sirve, porque su URL no lleva firma.
+* *Ingesta real desde SinsaTools.* El emisor no existe todavía.
+* *Despliegue a Azure.* Entrega 1 vive en `docker-compose`.
+
+=== Criterio de aceptación
+
+Uno solo, y es binario:
+
+[quote]
+____
+Un usuario de un grupo con acceso a tres softwares inicia sesión en el frontend sin tocar el
+mock, ve exactamente esos tres en el catálogo, entra en una versión, y el `mediaCount` que ve
+coincide con el número de recursos que el `JOIN` de permisos le concede. Un usuario de otro
+grupo ve un catálogo distinto con los mismos datos cargados.
+____
+
+Si eso funciona, el 80 % del valor del portal está construido y probado, y lo que falta es
+tubería.
+
+== Entrega 2 — «los vídeos se reproducen»
+
+[cols="1,3",options="header"]
+|===
+| Bloque | Contenido
+
+| `GET /media/{id}/access`
+| Resuelve el permiso y devuelve metadatos. Nunca una URL de almacenamiento.
+
+| `GET /media/{id}/stream`
+| El proxy. Con propagación de `Range` y respuesta `206` (`DOM-BS-12`), sin bufferizar en
+  memoria, con límite de transferencias concurrentes.
+
+| `VIDEO_ACCESS_LOG`
+| Auditoría de cada entrega.
+
+| Service Worker
+| Caché client-side contra la URL estable del proxy.
+|===
+
+*Precondiciones:* `DEC-BS-11` cerrada (nuestra) y `DEC-BS-15` concedida (suya). La segunda es
+la única fecha de este plan que no controlamos, y por eso la petición del rol debe salir
+*ahora*, no cuando la Entrega 1 termine.
+
+== Entrega 3 — «los datos son reales»
+
+Conectar el emisor de SinsaTools contra la ingesta ya probada. El trabajo aquí es de ellos; el
+nuestro es la primera reconciliación real y la medida de deriva (`DT-BS-04`).
+
+*Precondiciones:* las preguntas 1, 4, 6 y 9 del mapeo respondidas, y el `Id` de
+`Web_Platforms`.
+
+== Camino crítico
+
+[source,text]
+----
+Cerrar DEC-BS-13 ──► MIG-BS-001 ──► Identidad ──► Admin ──► Catálogo ──┐
+                                                                       ├─► ENTREGA 1
+                          Esqueleto ──► Ingesta ──► Simulador ─────────┘
+
+Cerrar DEC-BS-11 ──────────────────────────┐
+Pedir el rol a SinsaTools ─── (su plazo) ──┴─► Proxy ──► ENTREGA 2
+
+Sus respuestas ──► Su emisor ──► ENTREGA 3
+----
+
+Lo único que se puede hacer hoy para acortar el calendario y no depende de escribir código es
+*mandar las dos peticiones a SinsaTools ya*: el rol de lectura y el `Id` de plataforma. Ambas
+tienen plazo ajeno.
+
+== Riesgo principal de este plan
+
+[WARNING]
+====
+*Que SinsaTools no conceda el rol de lectura sobre el almacenamiento.* Es la única dependencia
+externa sin alternativa buena: la salida sería la opción B de `ADR-BS-007`, que reintroduce
+una dependencia en caliente en el momento de la reproducción.
+
+Mitigación: pedirlo pronto, por escrito, y en el orden correcto —rol acotado al contenedor
+antes que clave de cuenta—, que es también lo más fácil de conceder para ellos.
+====
+
+include::{root}/_nav.adoc[]

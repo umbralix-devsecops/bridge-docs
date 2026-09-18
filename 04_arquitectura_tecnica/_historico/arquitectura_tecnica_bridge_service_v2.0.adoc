@@ -1,0 +1,1145 @@
+= Arquitectura Técnica — Bridge Service
+:author: Equipo de Desarrollo
+:revnumber: 2.0
+:revdate: 2026-09-16
+:revremark: Servicio único con ingesta por empuje. Elimina el acceso a on-premise, el SyncWorker y la conectividad corporativa.
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:icons: font
+:lang: es
+:root: ../..
+:section-id: arquitectura-tecnica
+:section-title: Arquitectura Técnica
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+[NOTE]
+====
+*Clasificación:* {classification} +
+*Versión:* {revnumber} · *Fecha:* {revdate} +
+*Estado:* ⛔ *Superada por la v2.1* — `../arquitectura_tecnica_bridge_service_v2.1.adoc` +
+*Supera a:* v1.0 y v1.1, en este mismo `_historico/`
+====
+
+[CAUTION]
+====
+*Este documento ya no es vigente.* Se conserva por trazabilidad.
+
+Contenía una contradicción en su §5: declaraba la regla de dependencia
+`Api → Application → Infrastructure. Nunca al revés` y, dos líneas después, que
+`Infrastructure` no conocía a `Application` y que esta definía las interfaces. Las dos frases
+son incompatibles.
+
+Resuelto el 2026-09-17 por `ADR-BS-008` a favor de la inversión de dependencias real: los
+puertos viven en `Application/Abstractions/` e `Infrastructure` referencia a `Application`.
+Todo lo demás de este documento pasa a la v2.1 sin cambios.
+====
+
+[WARNING]
+====
+*Qué cambia respecto de la v1.1*
+
+La v1.1 describía un servicio que leía el SQL Server de SinsaTools a través de la red
+corporativa y exponía cuatro endpoints `/v1/` a un backend de portal separado. Las
+decisiones del 2026-09-16 (xref:{root}/11_gestion_producto/adr/adr-bs-005_servicio_unico.adoc[ADR-BS-005],
+xref:{root}/11_gestion_producto/adr/adr-bs-006_ingesta_por_empuje.adoc[ADR-BS-006]) invalidan
+las tres premisas.
+
+[cols="1,4",options="header"]
+!===
+! Desaparece ! Motivo
+
+! `OnPremiseDbContext` y todo el acceso DB-First
+! Nunca consultamos su base de datos. Con ello caen `DOM-BS-01..03`, `SEC-BS-05`, `SEC-BS-07`
+  y `DT-BS-01`.
+
+! `SyncWorker`, `SyncOrchestrator`
+! El dato entra por empuje. No hay nada que ir a buscar.
+
+! La sección «Conectividad con la red corporativa»
+! No hay tramo de red que resolver. `ADR-BS-003` queda descartado.
+
+! La «frescura compuesta» y su tabla de latencias
+! Había dos réplicas encadenadas. Ahora hay una sola base y un solo salto.
+
+! `SoftwaresController`, `NovedadesController`, `SyncController`
+! Servían a un backend de portal que no existe.
+!===
+
+[cols="1,4",options="header"]
+!===
+! Aparece ! Qué es
+
+! Módulo de ingesta
+! `IngestController`, `CatalogIngestService`, `MediaNormalizer`, `SnapshotReconciler`.
+
+! Capa `Application`
+! Tercera capa. Ver §4.
+
+! Proxy de streaming
+! `MediaController` con soporte de `Range`, y la evaluación de acceso que lo precede.
+
+! Identidad y autorización
+! Usuarios, sesiones, grupos, excepciones. No existía: era responsabilidad del otro servicio.
+!===
+====
+
+== Propósito y alcance
+
+=== Qué cubre
+
+* La estructura interna del Bridge Service y sus tres capas.
+* El módulo de ingesta: validación, idempotencia, normalización y reconciliación.
+* El modelo de datos completo, que es único para todo el sistema.
+* Los flujos de ingesta, lectura de catálogo, streaming y autenticación.
+* La seguridad, la observabilidad y el cumplimiento de los RNF.
+
+=== Qué NO cubre
+
+* *El esquema interno de SinsaTools.* Sigue siendo desconocido, y ahora también irrelevante:
+  la frontera es el contrato de ingesta, no su base de datos.
+* *La lógica del frontend.* Vive en `Sin-PortalVideos` y su arquitectura propia.
+* *El detalle funcional de los endpoints del portal.* Está en los seis `api_*.yaml` y en
+  `portal-docs/01_requerimientos/`.
+* *La infraestructura Azure.* Corresponde a `09_infraestructura_despliegue/`.
+
+=== Restricción de partida
+
+La v1.1 tenía como condicionante dominante que *el esquema de on-premise era desconocido y
+podía cambiar sin aviso*. Ese condicionante desaparece.
+
+El nuevo condicionante dominante es distinto y más benigno: **no controlamos la cadencia ni
+la completitud de lo que nos llega**. El emisor decide cuándo empuja y qué incluye. Toda la
+arquitectura de ingesta está diseñada alrededor de esa falta de control: idempotencia para
+tolerar reenvíos, marca de agua para detectar desacuerdos, foto completa para corregir
+derivas, y una métrica de frescura para que el silencio sea visible.
+
+---
+
+== Contexto
+
+[source,mermaid]
+----
+flowchart TB
+    subgraph EXT["Dominio de SinsaTools — fuera de nuestro alcance"]
+        ST[("SQL Server<br/>catálogo de software")]
+        MS["Microservicio de<br/>integraciones"]
+        ST --> MS
+    end
+
+    subgraph AZ["Azure — nuestro alcance"]
+        BS["Bridge Service<br/>.NET 8 · App Service Linux"]
+        PG[("PostgreSQL 16<br/>Flexible Server")]
+        KV["Key Vault"]
+        BS <--> PG
+        BS --> KV
+    end
+
+    BLOB[("Almacenamiento<br/>de recursos")]
+    FE["Frontend Angular 21"]
+
+    MS -->|"POST /v1/ingest/catalog<br/>Service JWT · catalog:ingest"| BS
+    BS -->|"lectura de bytes<br/>proxy"| BLOB
+    FE -->|"/api · User JWT<br/>cookie pv_media"| BS
+----
+
+.Los dos consumidores, y por qué no se parecen
+[cols="1,2,2",options="header"]
+|===
+| | Microservicio de integraciones | Frontend Angular
+
+| Qué hace
+| *Escribe* el catálogo
+| *Lee* el catálogo, y escribe identidad y permisos
+
+| Autenticación
+| Service JWT, `aud: portal-ingest-api`, scope `catalog:ingest`
+| User JWT, `aud: portal-api`, claim `perms{}`
+
+| Superficie
+| 3 endpoints bajo `/v1/ingest/`
+| 27 endpoints bajo `/api/`
+
+| Riesgo si se compromete
+| *Alto* — puede alterar el catálogo de todos
+| Acotado al alcance del usuario suplantado
+
+| Volumen
+| Lotes grandes y esporádicos
+| Requests pequeños y continuos
+|===
+
+[IMPORTANT]
+====
+Las dos credenciales son *independientes y no intercambiables* (SEC-BS-09). Un token de
+ingesta no abre ningún endpoint `/api`, y un token de usuario —ni siquiera el de un
+administrador— no abre ningún endpoint `/v1/ingest`. La separación está en el claim `aud`, y
+se valida antes que cualquier otra cosa.
+====
+
+---
+
+== Decisiones que gobiernan esta arquitectura
+
+.ADRs del Bridge Service
+[cols="1,3,1",options="header"]
+|===
+| ID | Decisión | Estado
+
+| xref:{root}/11_gestion_producto/adr/adr-bs-001_cache_postgresql_propio.adoc[ADR-BS-001]
+| Persistencia propia en PostgreSQL en Azure
+| ✅ Aceptada
+
+| xref:{root}/11_gestion_producto/adr/adr-bs-002_efcore_dos_proveedores.adoc[ADR-BS-002]
+| EF Core 8 — ahora con un solo proveedor
+| ✅ Aceptada, revisada
+
+| xref:{root}/11_gestion_producto/adr/adr-bs-003_conectividad_onpremise.adoc[ADR-BS-003]
+| Conectividad Azure ↔ red corporativa
+| ⛔ *Descartada* — sin objeto
+
+| xref:{root}/11_gestion_producto/adr/adr-bs-004_ef_core_fuente_unica_esquema.adoc[ADR-BS-004]
+| EF Core como fuente única del esquema
+| ✅ Aceptada
+
+| xref:{root}/11_gestion_producto/adr/adr-bs-005_servicio_unico.adoc[ADR-BS-005]
+| El Bridge es el backend del portal
+| ✅ Aceptada 🆕
+
+| xref:{root}/11_gestion_producto/adr/adr-bs-006_ingesta_por_empuje.adoc[ADR-BS-006]
+| El catálogo entra por una API de ingesta propia
+| ✅ Aceptada 🆕
+|===
+
+.Decisiones heredadas del frontend (no reabrir)
+[cols="1,3",options="header"]
+|===
+| Referencia | Qué fija
+
+| `ADR-012` / `DEC-FE-02`
+| El `<video>` se autoriza con la cookie `pv_media`
+  (`HttpOnly; Secure; SameSite=Strict; Path=/api/media`). La URL del stream es *estable*: sin
+  firma ni caducidad.
+
+| `ADR-013`
+| La caché del navegador es HTTP nativa con `Range`, no `dataGroups` del Service Worker.
+
+| `H-06`
+| La autorización se resuelve siempre por `perms{}`, nunca por rol.
+
+| Contrato `api_auth`
+| Access token 15 min en memoria; refresh 7 días en cookie con `Path=/auth/refresh`;
+  rotación en cada refresco.
+|===
+
+---
+
+== Stack tecnológico
+
+[cols="1,2,3",options="header"]
+|===
+| Capa | Tecnología | Justificación
+
+| Runtime
+| .NET 8 (LTS), C# 12
+| REST-BS-01
+
+| Framework web
+| ASP.NET Core Controllers + Minimal API para `/health`
+| Estándar del proyecto
+
+| Acceso a datos
+| EF Core 8 + `Npgsql.EntityFrameworkCore.PostgreSQL`, Code-First
+| ADR-BS-002 revisado: *un solo proveedor*
+
+| Base de datos
+| Azure Database for PostgreSQL Flexible Server 16
+| ADR-BS-001, REST-BS-04
+
+| Autenticación
+| JWT RS256, `Microsoft.AspNetCore.Authentication.JwtBearer`, dos esquemas por `aud`
+| RF-BS-01, contrato `api_auth`
+
+| Hash de contraseñas
+| `Microsoft.AspNetCore.Identity.PasswordHasher` (PBKDF2) o Argon2id
+| El portal gestiona credenciales de personas — no existía en la v1.1
+
+| Gestión de secretos
+| Azure Key Vault + Managed Identity
+| SEC-BS-01
+
+| Logging
+| Serilog → JSON → Azure Monitor
+| RNF-BS-08
+
+| Resiliencia
+| `Microsoft.Extensions.Http.Resilience` (Polly v8)
+| Reintentos sobre el *almacenamiento de recursos*, no sobre on-premise
+
+| Almacenamiento
+| `Azure.Storage.Blobs` + `Azure.Identity`
+| Los recursos viven en Azure Blob Storage. El contenedor privado exige credencial de
+  servidor (`DEC-BS-15`)
+
+| Streaming
+| `PhysicalFile` / `Results.Stream` con soporte de `Range` nativo de ASP.NET Core
+| RNF-BS-11
+
+| Contenedores
+| Docker Compose (dev / staging / prod)
+| Estándar del proyecto
+
+| CI/CD
+| GitHub Actions → Azure App Service
+| REST-BS-03
+
+| Testing
+| xUnit + NSubstitute + FluentAssertions; Testcontainers (PostgreSQL)
+| Estándar del proyecto
+|===
+
+NOTE: Desaparecen `Microsoft.EntityFrameworkCore.SqlServer` y el contenedor de SQL Server en
+los tests de integración. Ya no hay un segundo motor que probar.
+
+---
+
+== Estructura de la solución
+
+Clean Architecture simplificada, *tres* proyectos productivos.
+
+[source,text]
+----
+Sin-PortalBridge/
+├── src/
+│   ├── BridgeService.Api/                  ← host web, endpoints, DI, middleware
+│   │   ├── Controllers/
+│   │   │   ├── Ingest/
+│   │   │   │   ├── IngestController.cs     ← POST /v1/ingest/catalog
+│   │   │   │   │                              GET  /v1/ingest/{ingestId}
+│   │   │   │   │                              GET  /v1/ingest/watermark
+│   │   │   │   └── ServiceAuthController.cs ← POST /v1/auth/token
+│   │   │   └── Portal/
+│   │   │       ├── AuthController.cs       ← /auth/login · register · refresh · logout
+│   │   │       ├── CatalogController.cs    ← /catalog/products · versions/{id}/media
+│   │   │       ├── MediaController.cs      ← /media/{id}/stream · /media/{id}/access
+│   │   │       ├── UsersController.cs      ← /admin/users/**
+│   │   │       ├── GroupsController.cs     ← /admin/groups/**
+│   │   │       ├── LogsController.cs       ← /admin/logs/**
+│   │   │       └── SyncController.cs       ← /admin/sync/**  (sobre la ingesta)
+│   │   ├── Middleware/
+│   │   │   ├── CorrelationIdMiddleware.cs
+│   │   │   ├── RequestLoggingMiddleware.cs
+│   │   │   └── ExceptionHandlingMiddleware.cs
+│   │   ├── HealthChecks/
+│   │   │   ├── PostgreSqlHealthCheck.cs
+│   │   │   └── CatalogFreshnessHealthCheck.cs
+│   │   ├── Contracts/                      ← DTOs que espejan los contratos OpenAPI
+│   │   ├── Program.cs
+│   │   └── appsettings.{Development,Staging,Production}.json
+│   │
+│   ├── BridgeService.Application/          ← reglas de negocio · 🆕
+│   │   ├── Ingest/
+│   │   │   ├── CatalogIngestService.cs     ← orquesta un lote
+│   │   │   ├── MediaNormalizer.cs          ← extension, mediaKind, mimeType, storageUri
+│   │   │   ├── SnapshotReconciler.cs       ← cierre de foto y desactivación
+│   │   │   └── IngestValidator.cs          ← errores de forma frente a los de negocio
+│   │   ├── Catalog/
+│   │   │   └── CatalogQueryService.cs      ← paginación, búsqueda, filtro por industria
+│   │   ├── Access/
+│   │   │   └── MediaAccessEvaluator.cs     ← revoke → grupo → grant → denegar
+│   │   ├── Identity/
+│   │   │   ├── SessionService.cs           ← rotación y revocación
+│   │   │   └── PermissionResolver.cs       ← construye el claim perms{}
+│   │   └── Storage/
+│   │       └── StorageUriResolver.cs       ← URI → proveedor + contenedor + ruta
+│   │
+│   └── BridgeService.Infrastructure/       ← persistencia y servicios externos
+│       ├── Persistence/
+│       │   ├── AppDbContext.cs             ← Code-First + migraciones
+│       │   ├── Entities/
+│       │   ├── Configurations/
+│       │   └── Migrations/
+│       ├── Storage/
+│       │   ├── IMediaStorageProvider.cs
+│       │   ├── AzureBlobStorageProvider.cs
+│       │   └── HttpStorageProvider.cs
+│       ├── Auth/
+│       │   ├── JwtIssuer.cs
+│       │   └── ClientCredentialStore.cs
+│       ├── Notifications/
+│       └── Observability/
+│
+├── tests/
+│   ├── BridgeService.UnitTests/
+│   └── BridgeService.IntegrationTests/     ← Testcontainers (PostgreSQL)
+│
+├── tools/
+│   └── IngestSimulator/                    ← 🆕 simula el microservicio de SinsaTools
+│
+├── docker-compose.yml
+└── .github/workflows/ci.yml
+----
+
+.Regla de dependencia
+[NOTE]
+====
+`Api` → `Application` → `Infrastructure`. *Nunca al revés.*
+
+`Application` no referencia ASP.NET Core ni los DTOs del contrato: recibe y devuelve sus
+propios modelos, y el mapeo a DTO ocurre en `Api`. Así un cambio en cualquiera de los dos
+contratos —el de ingesta o el del frontend— no propaga cambios a las reglas de negocio.
+
+`Infrastructure` no conoce a `Application`: expone interfaces que `Application` define.
+`IMediaStorageProvider` es el ejemplo: la evaluación de acceso no sabe si los bytes salen de
+Azure Blob o de un HTTP genérico.
+====
+
+.Por qué tres capas y no dos
+****
+La v1.1 usaba dos, y lo justificaba así: _«el Bridge Service no tiene lógica de dominio
+propia, es un traductor entre dos esquemas»_. Eso era cierto entonces.
+
+Ahora el servicio contiene la evaluación de acceso a recursos —cuatro reglas con precedencia
+estricta—, la rotación de sesiones, la construcción del claim `perms{}`, la normalización de
+la ingesta y la reconciliación de fotos. Nada de eso es traducción. Metido en los
+controladores produce clases de varios cientos de líneas imposibles de probar sin levantar
+un host web.
+
+RNF-BS-07 pide que un solo desarrollador pueda mantener esto. La tercera capa es lo que lo
+hace posible, no lo que lo complica.
+****
+
+---
+
+== Arquitectura interna y flujo de datos
+
+[source,mermaid]
+----
+flowchart TB
+    MS["Microservicio<br/>de integraciones"]
+    FE["Frontend"]
+
+    subgraph API["BridgeService.Api"]
+        IC["IngestController"]
+        PC["Controllers del portal"]
+        MW["Middleware<br/>correlación · logging · errores"]
+    end
+
+    subgraph APP["BridgeService.Application"]
+        CIS["CatalogIngestService"]
+        MAE["MediaAccessEvaluator"]
+        CQS["CatalogQueryService"]
+    end
+
+    subgraph INF["BridgeService.Infrastructure"]
+        CTX["AppDbContext"]
+        SP["IMediaStorageProvider"]
+    end
+
+    PG[("PostgreSQL")]
+    BLOB[("Almacenamiento")]
+
+    MS --> MW --> IC --> CIS --> CTX --> PG
+    FE --> MW --> PC
+    PC --> CQS --> CTX
+    PC --> MAE --> CTX
+    MAE -->|"si concede"| SP --> BLOB
+----
+
+=== Implicaciones de este diseño
+
+. **Ningún request del frontend sale de Azure salvo para traer bytes.** El catálogo, la
+  identidad y los permisos se resuelven contra PostgreSQL. Solo el proxy de streaming
+  alcanza el almacenamiento, y solo después de conceder el acceso.
+
+. **La ingesta y la lectura comparten transaccionalmente la base, no el código.** Un lote se
+  aplica mientras el portal sirve tráfico. El aislamiento lo da PostgreSQL: los lectores ven
+  la versión anterior hasta que el lote confirma. No hay ventana de catálogo a medias.
+
+. **La frescura tiene un solo salto.** `generatedAt` del último lote aplicado contra la hora
+  actual. Eso es todo. La v1.1 tenía que componer la latencia de dos réplicas encadenadas y
+  el TTL del Service Worker; nada de eso queda.
+
+. **El `storage_uri` muere en `Infrastructure`.** `Application` trabaja con un identificador
+  de recurso; solo `StorageUriResolver` y los proveedores ven la ruta real. Es la garantía
+  estructural de SEC-BS-10, más fuerte que confiar en que ningún DTO la incluya.
+
+---
+
+== El módulo de ingesta
+
+Es el componente con más reglas del servicio. Todo lo demás es lectura o CRUD.
+
+=== Anatomía de un lote
+
+[source,mermaid]
+----
+sequenceDiagram
+    participant MS as Microservicio
+    participant IC as IngestController
+    participant V as IngestValidator
+    participant CIS as CatalogIngestService
+    participant N as MediaNormalizer
+    participant DB as PostgreSQL
+
+    MS->>IC: POST /v1/ingest/catalog (batchId, mode, generatedAt, products[])
+    IC->>V: validar forma
+    alt error de forma
+        V-->>MS: 400 VALIDATION_ERROR + errors[] con ruta JSON
+    end
+    IC->>DB: INSERT ingest_batches (status=queued)
+    alt batchId ya existe
+        DB-->>IC: violación de unicidad
+        IC-->>MS: 202 + resultado original + duplicate=true
+    end
+    IC-->>MS: 202 Accepted (ingestId)
+
+    Note over CIS,DB: a partir de aquí, en segundo plano
+    CIS->>DB: UPDATE status=running (índice único: solo uno a la vez)
+    loop por cada producto
+        CIS->>N: normalizar recursos
+        N-->>CIS: extension, mediaKind, mimeType, storage_*
+        CIS->>DB: UPSERT producto → versiones → recursos (una transacción)
+        CIS->>DB: INSERT ingest_items solo si hay error
+    end
+    alt mode=snapshot AND isLast
+        CIS->>DB: desactivar lo no visto en esta foto
+    end
+    CIS->>DB: UPDATE status=completed|partial, contadores, finished_at
+----
+
+=== Las cinco reglas que lo sostienen
+
+[cols="1,4",options="header"]
+|===
+| Regla | Implementación
+
+| *Idempotencia* (RF-BS-13)
+| `UNIQUE (batch_id)`. La comprobación es el `INSERT`, no un `SELECT` previo — dos lotes
+  idénticos en vuelo no pueden colarse ambos por la ventana entre leer y escribir.
+
+| *Un solo lote en ejecución* (DOM-BS-09)
+| `CREATE UNIQUE INDEX ... ON ingest_batches ((true)) WHERE status = 'running'`. Garantiza el
+  orden de las fotos sin bloquear la cola: pueden esperar muchos `queued`, se aplica uno.
+
+| *Clave natural* (DOM-BS-08)
+| El upsert localiza por `ext_product_id` / `ext_version_id` o por `(origin, ext_media_id)`
+  en el caso de un recurso.
+  `Images.Id` y `Entity_Files.Id` viven en secuencias distintas y *pueden colisionar*.
+
+| *Nunca reemplazar filas* (REST-BS-13)
+| `UPDATE`, jamás `DELETE` + `INSERT`. El identificador interno es estable de por vida porque
+  los permisos apuntan a él.
+
+| *Sin borrado físico* (REST-BS-12)
+| `active = false` y `last_seen_at`. La reconciliación desactiva; nunca borra.
+|===
+
+.El latido, y por qué no es opcional
+****
+El índice único de `status = 'running'` admite un solo lote en ejecución. Si el proceso muere
+—un reciclado del App Service en mitad de un lote grande— esa fila queda `running` para
+siempre y **bloquea toda ingesta futura**, en silencio.
+
+`heartbeat_at` es la contrapartida obligatoria: `CatalogIngestService` lo refresca cada 30 s
+mientras trabaja, y un barrido marca `failed` todo lo que lleve más de 5 minutos sin latir.
+
+El índice y el latido van juntos o no van. Implementar el primero sin el segundo cambia un
+problema de concurrencia por un punto de fallo permanente.
+****
+
+=== Normalización
+
+[cols="1,3",options="header"]
+|===
+| Campo | Regla
+
+| `extension`
+| A minúsculas, sin punto inicial. `.PDF` → `pdf`.
+
+| `mediaKind`
+| Tabla por extensión. Si el emisor lo envía, prevalece su valor — conoce casos que la
+  extensión no distingue.
+
+| `mimeType`
+| Se deduce de `extension` si no viene. El emisor puede enviarlo nulo para recursos de
+  `Images`, y la deducción lo cubre.
+
+| `mediaGroup`
+| Ya llega normalizado en minúsculas por contrato. Desaparece el mapeo del valor `Image`, que
+  en la v1.1 quedaba sin definir.
+
+| `storageUri`
+| `StorageUriResolver` lo descompone. Un URI relativo o de esquema no soportado es *error de
+  forma*: tumba el lote entero, no el ítem. Un recurso sin ruta resoluble no es un recurso.
+
+| `sizeBytes`
+| Si no viene, `HEAD` contra el proveedor la primera vez que se sirve, y se persiste
+  (DEC-BS-10).
+|===
+
+---
+
+== Modelo de datos
+
+El modelo completo está en
+`modelo_datos/modelo_datos_bridge_v2.mermaid`, verificado contra
+PostgreSQL 16: 17 tablas, 13 tipos enumerados, 40 índices.
+
+=== Los tres bloques
+
+[cols="1,2,3",options="header"]
+|===
+| Bloque | Tablas | Naturaleza
+
+| Catálogo
+| `catalog_products`, `catalog_versions`, `catalog_media`
+| *Proyección de SinsaTools.* Solo la ingesta escribe aquí. Ante una discrepancia, manda el
+  origen.
+
+| Identidad y permisos
+| `roles`, `role_permissions`, `users`, `sessions`, `groups`, `user_groups`,
+  `group_version_access`, `user_media_exceptions`
+| *Fuente de verdad.* Nace y muere aquí. No se sincroniza con nadie.
+
+| Ingesta y auditoría
+| `ingest_batches`, `ingest_items`, `ext_api_request_log`, `video_access_log`,
+  `api_request_log`, `notification_log`
+| Historial. Purgable según política.
+|===
+
+[NOTE]
+====
+`ext_api_request_log` registra *toda* llamada entrante a `/v1/ingest` y `/v1/auth`, incluidas
+las que fallan antes de crear lote: un `401` por credencial caducada, un `400` por esquema
+inválido, un `413` por exceso de tamaño. `ingest_batches` solo tiene fila cuando el lote llegó
+a encolarse, así que sin esta tabla **un emisor mal autenticado sería completamente
+invisible**: no aparecería en ningún sitio y el catálogo envejecería sin explicación.
+
+La tabla viene del modelo del portal, donde registraba las llamadas del portal *hacia* el
+Bridge. Con un solo servicio esa dirección desaparece, pero el propósito —auditar la frontera
+con el sistema externo— sigue siendo válido, solo que ahora la frontera es de entrada.
+====
+
+=== Decisiones de modelado que conviene no perder
+
+[cols="1,4",options="header"]
+|===
+| Decisión | Motivo
+
+| Identificador interno `uuid` + clave natural aparte
+| El contrato del frontend usa `uuid` en todas partes; SinsaTools usa enteros. La columna
+  `ext_product_id` guarda el de origen y lleva el índice único del upsert. Los nombres son
+  los del contrato (`extProductId`, `origin`, `syncedAt`), para que el mapeo sea trivial.
+  Desacopla los dos mundos
+  sin traducir en cada consulta.
+
+| `UNIQUE (origin, ext_media_id)` en `catalog_media`
+| No `ext_media_id` solo. Las dos tablas de origen tienen secuencias independientes.
+
+| FK reales entre permisos y catálogo
+| `group_version_access.version_id → versions.id` y
+  `user_media_exceptions.media_id → media.id`. Solo es posible con una única base de datos;
+  con dos servicios habrían sido enteros sin integridad referencial.
+
+| `last_seen_at` en las tres tablas de catálogo
+| Motor de la reconciliación. Cada lote lo refresca en lo que toca; al cerrar una foto, lo
+  anterior al inicio de esa foto se desactiva.
+
+| `access_source` con cuatro valores
+| El contrato define `denied` a secas, que hace indistinguible una denegación por excepción
+  `revoke` explícita de una por ausencia de permiso. La columna guarda
+  `denied_revoke` / `denied_none`; el DTO sigue devolviendo `denied`. *Contrato intacto,
+  auditoría útil.*
+
+| `video_access_log` y `api_request_log` particionadas por fecha
+| Son las dos tablas de crecimiento ilimitado: una fila por request. Purgar con `DELETE`
+  bloquea; con particiones es un `DROP`. Decidirlo después obliga a migrar con datos dentro.
+
+| `roles` y `role_permissions` existen como tablas, y `users.role_id` es una FK
+| El contrato dice que el backend _«NO consulta ROLE_PERMISSIONS **en cada request**»_
+  (`api_auth.yaml:151`), no que la tabla no exista. La guía de roles del portal lo precisa:
+  _«el mapa de permisos se construye una sola vez en el `LoginCommandHandler`, consultando
+  `ROLE_PERMISSIONS` para el rol del usuario»_. Lo que se elimina es la consulta por request,
+  no la tabla. Tenerla permite además corregir la matriz sin desplegar — algo que hará falta,
+  porque GAP-09 ya documenta dos entradas en disputa.
+
+| `duration_ms` como columna generada
+| `finished_at − received_at`. El contrato la expone; calcularla en cada lectura es ruido, y
+  guardarla a mano se desincroniza.
+|===
+
+---
+
+== Flujos principales
+
+=== Lectura del catálogo
+
+[source,mermaid]
+----
+sequenceDiagram
+    participant FE as Frontend
+    participant C as CatalogController
+    participant Q as CatalogQueryService
+    participant DB as PostgreSQL
+
+    FE->>C: GET /catalog/products?page=1&industry=agricultural&search=...
+    C->>C: validar User JWT · perms.catalog contiene 'read'
+    C->>Q: consultar(filtros, paginación, userId)
+    Q->>DB: SELECT ... WHERE active AND industry=... AND tsvector @@ ...
+    Q->>DB: COUNT de versiones activas por producto
+    DB-->>Q: filas + total
+    Q-->>C: página
+    C-->>FE: 200 { data[], pagination }
+----
+
+La búsqueda usa un índice GIN sobre `to_tsvector('spanish', name || ' ' || trade_name)`. El
+filtro por industria, un índice parcial sobre `active`.
+
+`mediaCount` de una versión —_«medios accesibles por el usuario autenticado»_— es un `JOIN`
+contra `group_version_access` y `user_media_exceptions`. Con dos bases de datos habría
+exigido traer el catálogo entero y filtrar en memoria.
+
+=== Acceso a un recurso
+
+La evaluación tiene *precedencia estricta* y se aplica igual en el pre-flight (RF-BS-19) y en
+el stream (RF-BS-18):
+
+[source,mermaid]
+----
+flowchart TB
+    A["Petición de recurso"] --> B{"¿Excepción<br/>revoke?"}
+    B -->|sí| D1["403 · denied_revoke"]
+    B -->|no| C{"¿Grupo con acceso<br/>a la versión?"}
+    C -->|sí| G1["conceder · group"]
+    C -->|no| E{"¿Excepción<br/>grant?"}
+    E -->|sí| G2["conceder · individual_exception"]
+    E -->|no| D2["403 · denied_none"]
+
+    G1 --> LOG["video_access_log"]
+    G2 --> LOG
+    D1 --> LOG
+    D2 --> LOG
+----
+
+Una sola consulta con un `CASE` sobre `access_type` resuelve los cuatro caminos.
+`active = false` produce **404, no 403**: no se filtra la existencia de un recurso a quien no
+tiene acceso.
+
+=== Streaming
+
+[cols="1,3",options="header"]
+|===
+| Aspecto | Comportamiento
+
+| Autorización
+| Cookie `pv_media` (`Path=/api/media`), no header `Authorization`: un `<video>` no puede
+  enviar cabeceras. `ADR-012` opción C.
+
+| `Range`
+| Soportado. Sin `Range` → `200` con `Content-Length` y `Accept-Ranges: bytes`. Con `Range` →
+  `206` con `Content-Range: bytes a-b/total`.
+
+| URL
+| *Estable*, sin firma ni caducidad. Es lo que permite que el navegador cachee por URL y
+  pida rangos (`ADR-013`).
+
+| `Content-Type`
+| De `media.mime_type`. Deducido de la extensión cuando el emisor no lo envió.
+
+| `Cache-Control`
+| `public, max-age=604800` en la 200.
+
+| La ruta real
+| Nunca sale. El proveedor lee los bytes y el controlador los reenvía.
+
+| Credencial del contenedor privado
+| Vive en el servidor, en Key Vault. *Nunca viaja al navegador* (SEC-BS-11).
+|===
+
+.Los dos contenedores de Azure Blob
+****
+SinsaTools sube los recursos a Azure Blob Storage y nos manda el enlace: el catálogo guarda
+URLs, nunca bytes. Hay dos contenedores, y `catalog_media.visibility` dice en cuál está cada
+recurso.
+
+[cols="1,2,2",options="header"]
+!===
+! ! `public` ! `private`
+
+! Qué contiene
+! Portadas, miniaturas, imágenes de catálogo
+! Vídeos y manuales
+
+! Acceso a los bytes
+! Sin credencial
+! Con credencial de servidor
+
+! Control de acceso del portal
+! *El mismo* — grupos y excepciones
+! *El mismo* — grupos y excepciones
+!===
+
+*`visibility` no es control de acceso.* Dice dónde están los bytes, no quién puede verlos. Un
+recurso público sigue pasando por `MediaAccessEvaluator` y sigue quedando en
+`video_access_log`: que cualquiera pueda descargarlo si adivina la URL no significa que el
+portal se lo muestre a cualquiera.
+
+La premisa que lo hace seguro, acordada con SinsaTools, es que **en el contenedor público solo
+hay material que daríamos a cualquiera**. Si algún día entra ahí un recurso restringido, el
+control de acceso del portal deja de ser efectivo para él —no por un fallo nuestro, sino
+porque sus bytes son alcanzables sin pasar por nosotros—. Registrado como `DT-BS-09`.
+****
+
+[WARNING]
+====
+`Accept-Ranges: bytes` debe ir en la respuesta **200**, no solo en la 206. El contrato actual
+lo declara al revés (`api_media.yaml`). Es el cliente quien necesita saber, en la respuesta
+completa, que puede pedir rangos. Corregir al implementar.
+====
+
+=== Emisión y validación de tokens
+
+Dos esquemas de autenticación registrados, discriminados por `aud`:
+
+[cols="1,2,2",options="header"]
+|===
+| | `portal-ingest-api` | `portal-api`
+
+| Emisión
+| `POST /v1/auth/token` (client_credentials)
+| `POST /auth/login` (credenciales de persona)
+
+| TTL
+| 1 hora
+| 15 minutos, con refresh de 7 días en cookie
+
+| Claims
+| `sub` (clientId), `scope`, `aud`
+| `sub` (userId), `role`, `perms{}`, `sid`, `reg_type`, `aud`
+
+| Revocación
+| Por rotación del `client_secret`
+| Por `sid`: la sesión revocada invalida el token antes de su expiración
+|===
+
+=== Comportamiento ante fallos
+
+[cols="1,1,3",options="header"]
+|===
+| Situación | Respuesta | Nota
+
+| PostgreSQL no responde
+| `503`
+| `/health` → `Unhealthy`. El App Service retira la instancia.
+
+| El catálogo está obsoleto
+| `200`
+| `/health` → `Degraded`. Se sirve lo que hay y el frontend avisa a los roles internos.
+
+| Lote con error de forma
+| `400 VALIDATION_ERROR`
+| Con la ruta JSON de cada campo. No se aplica nada.
+
+| Lote con ítems fallidos
+| `202` → `partial`
+| Lo correcto se aplica; los fallos se listan en `GET /v1/ingest/{id}`.
+
+| `batchId` repetido
+| `202` + `duplicate: true`
+| No se aplica nada. El reintento es seguro.
+
+| Secuencia de foto rota
+| `409 SNAPSHOT_SEQUENCE_GAP`
+| El emisor reenvía el lote que falta.
+
+| El almacenamiento no responde
+| `500 STORAGE_PROVIDER_UNAVAILABLE`
+| El pre-flight lo devuelve como `503` para que el visor lo distinga de una denegación.
+
+| Proveedor no implementado
+| `500 STORAGE_PROVIDER_UNSUPPORTED`
+| Un `storageUri` con un esquema que ningún proveedor registrado atiende.
+|===
+
+---
+
+== Seguridad
+
+.Reglas de seguridad del código
+[cols="1,4",options="header"]
+|===
+| ID | Regla
+
+| SEC-BS-01 | Ningún secreto en `appsettings.json`. Todo por Key Vault + Managed Identity.
+| SEC-BS-02 | Comparación de `clientSecret` y de hash de contraseña en tiempo constante.
+| SEC-BS-03 | Toda consulta parametrizada. Prohibida la interpolación de cadenas, incluso dentro de `FromSqlRaw`.
+| SEC-BS-04 | Los logs nunca registran `clientSecret`, `accessToken`, `password_hash` ni el `token` de un recurso.
+| SEC-BS-06 | El cuerpo de un `500` nunca contiene detalle de excepción.
+| SEC-BS-08 | `gitleaks` en el pipeline; secreto detectado ⇒ build fallido.
+| SEC-BS-09 | 🆕 Las credenciales de ingesta y las de usuario son independientes. La validación del claim `aud` precede a cualquier otra comprobación.
+| SEC-BS-10 | 🆕 `storage_uri`, `storage_path`, `storage_container` y `storage_token` no aparecen en ninguna respuesta ni en ningún log. El confinamiento es estructural: solo `Infrastructure` los ve.
+| SEC-BS-11 | 🆕 La credencial del contenedor privado de Azure Blob no sale del servidor. No se emite hacia el navegador, ni como SAS, ni como URL firmada, ni como redirección. El navegador solo conoce `/api/media/{id}/stream`.
+|===
+
+[IMPORTANT]
+====
+*SEC-BS-11 es lo que sostiene todo el modelo de acceso.* Si la credencial —o una URL firmada
+derivada de ella— llegara al navegador, cualquiera podría copiarla y compartir el vídeo fuera
+del portal. El control por grupos y excepciones se volvería decorativo, y el proyecto habría
+cambiado la dependencia de YouTube por un problema peor: contenido restringido circulando sin
+registro.
+
+Es también el motivo por el que el proxy no se sustituye por una redirección con SAS, pese a
+que ahorraría egress. Ver §9.3.
+====
+
+Dados de baja: `SEC-BS-05` (TLS hacia SQL Server) y `SEC-BS-07` (usuario de BD on-premise con
+permisos mínimos). Números quemados.
+
+=== Autorización
+
+La UI autoriza por `perms{}` y el servidor **también** (`H-06`, `C-05`). El claim se construye
+en el login a partir de la matriz de roles en configuración, y se valida en cada request sin
+tocar la base de datos.
+
+[IMPORTANT]
+====
+Que el permiso viaje en el token tiene una consecuencia que hay que asumir de forma
+consciente: **un cambio de rol no surte efecto hasta que el token se renueva**, como máximo
+15 minutos después.
+
+Cuando se necesite efecto inmediato —suspender a un usuario, revocarle el acceso— el
+mecanismo correcto es revocar su *sesión* por `sid`, no esperar a que caduque el token. La
+revocación sí se comprueba contra la base.
+====
+
+---
+
+== Observabilidad
+
+=== Health check
+
+[cols="1,3",options="header"]
+|===
+| Estado | Condición
+
+| `Healthy`
+| PostgreSQL responde en < 2 s y el último lote aplicado está dentro del umbral de frescura.
+
+| `Degraded`
+| PostgreSQL sano, catálogo obsoleto. *El servicio atiende con normalidad.*
+
+| `Unhealthy`
+| PostgreSQL caído. El App Service debe retirar la instancia.
+|===
+
+=== Alertas mínimas
+
+[cols="1,3",options="header"]
+|===
+| Alerta | Disparador
+
+| Catálogo obsoleto
+| `now() − max(generated_at de lotes aplicados)` supera el umbral (DEC-BS-09). *Es la alerta
+  más importante del sistema*: el fallo por silencio no produce errores.
+
+| Lote atascado
+| Un `ingest_batches` en `running` con `heartbeat_at` de hace más de 5 minutos.
+
+| Ingesta con errores
+| Cualquier lote que termine en `partial` o `failed`.
+
+| Recursos sin marca temporal
+| Recuento de filas de `catalog_media` sin `created_at_source` ni `updated_at_source`. Si sube, el
+  emisor está mandando datos incompletos.
+
+| Almacenamiento inaccesible
+| Tasa de `STORAGE_PROVIDER_UNAVAILABLE` por encima del 1 % de los accesos.
+
+| Denegaciones anómalas
+| Pico de `denied_none` para un mismo usuario: o falta una asignación de grupo, o alguien
+  está probando identificadores.
+|===
+
+---
+
+== Cumplimiento de los RNF
+
+[cols="1,2,2",options="header"]
+|===
+| ID | Cómo se cumple | Estado
+
+| RNF-BS-01 | App Service con autoescalado; sin dependencias fuera de Azure salvo el almacenamiento | ✅
+| RNF-BS-02 | Índice GIN para la búsqueda, parcial para la industria, paginación obligatoria | ✅
+| RNF-BS-03 | La aceptación de un lote solo valida forma e inserta la cabecera; el trabajo es asíncrono | ✅
+| RNF-BS-04 | HTTPS extremo a extremo; dos esquemas JWT; `/health` es la única excepción | ✅
+| RNF-BS-06 | Middleware de correlación; el ID se persiste en `ingest_batches` y en los dos logs | ✅
+| RNF-BS-07 | Tres capas, un solo motor de base de datos, un solo proveedor de EF Core | ✅
+| RNF-BS-08 | Serilog → JSON → Azure Monitor | ✅
+| RNF-BS-09 | `generatedAt` del contrato de ingesta, expuesto en `/health` y en `/admin/sync/status` | ✅ *Ahora medible* — en la v1.1 estaba sin cubrir
+| RNF-BS-10 | Límites en el validador; `413` por encima | ✅
+| RNF-BS-11 | `Range` nativo de ASP.NET Core; URL estable; caché HTTP | ⚠️ El primer byte depende del almacenamiento — medible solo cuando se conozca el `storageUri` real
+|===
+
+---
+
+== Deuda técnica registrada
+
+[cols="1,3,1",options="header"]
+|===
+| ID | Descripción | Impacto
+
+| DT-BS-02
+| Sin política de purga *implementada*. La política está propuesta (90 días, los fallos un
+  año) pero falta el barrido.
+| Medio
+
+| DT-BS-04
+| Sin métrica de deriva entre el catálogo y SinsaTools. *Mitigado parcialmente* por la foto
+  completa (RF-BS-14): una reconciliación periódica corrige lo que el incremental pierda.
+  Queda pendiente la métrica que lo haga visible antes de la siguiente foto.
+| Medio — *era Alto*
+
+| DT-BS-06
+| El changelog del modelo depende de un gate humano. Mitigación: chequeo en CI que compare
+  `Migrations/` con las entradas `MIG-BS-`.
+| Medio
+
+| DT-BS-07 🆕
+| El `sizeBytes` obtenido por `HEAD` no se revalida. Si el recurso cambia de tamaño en el
+  almacenamiento sin pasar por la ingesta, el `Content-Length` queda desfasado y el navegador
+  aborta la descarga.
+| Bajo
+
+| DT-BS-08 🆕
+| No hay límite de tamaño para el proxy de streaming. Un recurso muy grande ocupa un hilo de
+  trabajo durante toda la transferencia.
+| Medio
+
+| DT-BS-09 🆕
+| Nada impide que un recurso restringido acabe en el contenedor público. La premisa acordada
+  es que allí solo va material no sensible, pero no hay comprobación que lo verifique: los
+  permisos se asignan en el portal *después* de la ingesta, así que la ingesta no puede
+  saberlo. Mitigación posible: una auditoría periódica que cruce `catalog_media.visibility`
+  con `group_version_access` y `user_media_exceptions` y avise de las coincidencias.
+| Alto
+|===
+
+Dados de baja: `DT-BS-01` (scaffolding manual), `DT-BS-03` (catálogo sin paginar) y
+`DT-BS-05` (validación de `Files.FilePath`). Números quemados.
+
+---
+
+== Decisiones abiertas
+
+[cols="1,3,1",options="header"]
+|===
+| ID | Decisión | Prioridad
+
+| DEC-BS-03 | Ratificar la política de purga: 90 días, los fallos un año | 🟡
+| DEC-BS-05 | Rotación del `client_secret` de ingesta sin ventana de indisponibilidad | 🟢
+| DEC-BS-07 | Qué hace `POST /admin/sync` sin una base que consultar | 🔴
+| DEC-BS-08 | `webPlatformId` y `deviceType`: ¿filtran contenido o son informativos? | 🟠
+| DEC-BS-09 | Intervalo esperado de ingesta, del que salen el umbral de frescura y la alerta | 🟠
+| DEC-BS-10 | `sizeBytes`: ¿lo entrega el emisor o lo obtenemos por `HEAD`? | 🟡
+| DEC-BS-11 | Añadir `GET /media/{id}/access` al contrato del portal | 🔴
+| DEC-BS-13 | `sessions`: ¿se añaden `replaced_by_session_id` y `revoked_reason`? | 🟠
+| DEC-BS-14 | ¿Los recursos `public` se sirven también por el proxy, o se entregan directos? | 🟡
+| DEC-BS-15 | Credencial del contenedor privado: Managed Identity con RBAC, o SAS en Key Vault | 🟠
+|===
+
+.DEC-BS-14 — el proxy también para lo público
+****
+Un catálogo muestra decenas de portadas por página. Proxearlas todas carga el App Service sin
+ganar nada: son públicas por definición.
+
+*A favor de entregarlas directas:* menos egress, menos hilos ocupados (`DT-BS-08`), y el
+navegador las cachea igual.
+
+*A favor de proxearlas igual:* `video_access_log` queda completo, `SEC-BS-10` no necesita
+excepción, y el frontend no tiene que distinguir dos tipos de URL — hoy `MediaSourceStrategy`
+devuelve una sola forma.
+
+Se puede aplazar sin coste: empezar proxeando todo y medir. Si las portadas pesan, se cambia
+solo el resolutor de URL.
+****
+
+.DEC-BS-15 — de dónde sale la credencial
+****
+[cols="1,3",options="header"]
+!===
+! Opción ! Cuándo aplica
+
+! *Managed Identity* + rol `Storage Blob Data Reader`
+! La cuenta de almacenamiento está en el mismo tenant de Azure. Sin secretos que rotar, sin
+  nada en Key Vault. Es la opción limpia.
+
+! *SAS de cuenta o clave*, en Key Vault
+! Tenant o suscripción distintos. Obliga a rotar, y eleva la prioridad de `DEC-BS-05`.
+!===
+
+Depende de un dato de infraestructura que todavía no tenemos: de quién es la cuenta de
+almacenamiento.
+****
+
+El detalle de cada una está en xref:{root}/00_Estado_Actual.adoc[00_Estado_Actual].
+
+[NOTE]
+====
+*Cerradas:* `DEC-BS-06` — el origen de `industry`: viene de SinsaTools como atributo del
+software y es campo obligatorio del contrato de ingesta. `DEC-BS-12` — no se funden las dos
+documentaciones; se fija una frontera explícita en `portal-docs/Frontera_Documental.adoc`.
+
+*Sin objeto:* `DEC-BS-01`, `DEC-BS-02` y `DEC-BS-04`. Las dos primeras eran las bloqueantes
+rojas de la v1.1; la tercera gobernaba `RF-BS-07`.
+====
+
+[CAUTION]
+====
+`DEC-BS-13` no es cosmética. `ADR-008` del portal justifica la rotación de refresh tokens
+diciendo que _«la reutilización deja un evento observable»_, pero sin
+`replaced_by_session_id` no hay cadena que recorrer: al detectar un token ya rotado, el
+sistema no puede saber *qué otra sesión* lo sustituyó y acaba expulsando a la víctima en vez
+de al ladrón. El DDL de §8 incluye las dos columnas; falta ratificar el comportamiento.
+====
+
+---
+
+== Trazabilidad
+
+[cols="1,2,2",options="header"]
+|===
+| Requerimiento | Componente | Sección
+
+| RF-BS-01, RF-BS-02 | `ServiceAuthController`, `JwtIssuer` | §9.4
+| RF-BS-05 | `PostgreSqlHealthCheck`, `CatalogFreshnessHealthCheck` | §11.1
+| RF-BS-06, RF-BS-08 | `CorrelationIdMiddleware`, `RequestLoggingMiddleware` | §11
+| RF-BS-12, RF-BS-13 | `IngestController`, `CatalogIngestService` | §7
+| RF-BS-14 | `SnapshotReconciler` | §7.2
+| RF-BS-15, RF-BS-16 | `IngestController` | §7
+| RF-BS-17 | `MediaNormalizer`, `StorageUriResolver` | §7.3
+| RF-BS-18 | Controladores de `Controllers/Portal/` | §9
+| RF-BS-19 | `MediaAccessEvaluator` | §9.2
+| RF-BS-20 | `SyncController` sobre `ingest_batches` | §8.1
+| RNF-BS-11 | `MediaController` | §9.3
+|===
+
+---
+
+== Historial de versiones
+
+[cols="1,1,3",options="header"]
+|===
+| Versión | Fecha | Cambio
+
+| 1.0 | 2026-08-22 | Primera emisión. `_historico/`
+| 1.1 | 2026-08-22 | Corrige el `CommandTimeout` que incumplía RNF-BS-05. `_historico/`
+| 2.0 | 2026-09-16 | Servicio único con ingesta por empuje. Elimina el acceso a on-premise, el `SyncWorker` y la conectividad corporativa. Incorpora la capa `Application`, el módulo de ingesta, la identidad y el proxy de streaming.
+|===
+
+include::{root}/_nav.adoc[]

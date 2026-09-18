@@ -1,0 +1,469 @@
+= Estado Actual — Bridge Service
+:author: Equipo de Desarrollo
+:revnumber: 2.5
+:revdate: 2026-09-17
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:icons: font
+:lang: es
+:root: .
+:section-id: estado-actual
+:section-title: Estado Actual
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+[IMPORTANT]
+====
+*Documento vivo. Es el primero que hay que leer.* Se actualiza cada vez que se emite, supera
+o mueve cualquier documento de `bridge-docs/`. Si algo de aquí contradice a otro documento,
+gana el otro documento y este hay que corregirlo.
+====
+
+== Resumen en una línea
+
+El Bridge Service *es el backend del Portal de Videos* y recibe el catálogo empujado por el
+microservicio de integraciones de SinsaTools. Documentación al ~40 %: requerimientos,
+arquitectura, modelo de datos y contrato de ingesta cerrados y mutuamente coherentes.
+*Sin bloqueantes externos para arrancar:* el plan de primera entrega
+(`11_gestion_producto/plan_primera_entrega_v1.0.adoc`) está emitido y su camino crítico es
+interno. Lo único con plazo ajeno es el rol de lectura sobre el almacenamiento (`DEC-BS-15`),
+que condiciona la Entrega 2, no la 1. Código: sin empezar.
+
+== Semáforo por sección
+
+[cols="1,3,1,2",options="header"]
+|===
+| # | Sección | Estado | Nota
+
+| 01 | Requerimientos | ✅ Completa | `requerimientos_bridge_service_v2.0.adoc` vigente · v1.0 y v1.1 en `_historico/`
+| 02 | Casos de uso | ⬜ Pendiente | `CU-BS-001..010` listados en los requerimientos, sin desarrollar. Siguiente en la ruta documental
+| 03 | Diseño | ⬜ Pendiente | C4 y diagramas de estado de la ingesta. El diseño de interfaz vive en el frontend
+| 04 | Arquitectura técnica | ✅ Completa | `arquitectura_tecnica_bridge_service_v2.1.adoc` vigente · v1.0 y v1.1 en `_historico/` · modelo de datos v2 verificado
+| 05 | Contratos API | 🟡 Parcial | `ingesta/ingest_catalog_v1.0.yaml` emitido. Los seis `api_*.yaml` del portal viven en `Sin-PortalVideos/openapi/sources/`; los `bridge_*.yaml` quedan superados
+| 06 | Seguridad y autorización | ⬜ Pendiente | `SEC-BS-01..12` definidas dentro de 04 y de `ADR-BS-007`; falta el documento propio
+| 07 | Guías de implementación | ⬜ Pendiente | Ingesta, proxy de streaming y evaluación de acceso
+| 08 | Testing | ⬜ Pendiente |
+| 09 | Infraestructura y despliegue | ⬜ Pendiente | *Ya no bloqueada:* no hay conectividad corporativa que resolver
+| 10 | Estándares y procesos | 🟡 Parcial | `estandares_codigo_v1.0.adoc` emitido (`EST-BS-01..26`). Faltan DoD y DoR
+| 11 | Gestión de producto | ✅ Completa | 8 ADR (uno descartado) + plan de primera entrega + plan de tareas `T-BS-001..063`
+| 12 | Integraciones externas | 🟡 Parcial | `sinsatools/mapeo_sinsatools_v1.1.adoc` emitido: mapeo campo a campo del ER contra el contrato, con 9 preguntas abiertas al emisor
+|===
+
+== Qué cambió en esta actualización
+
+=== 2026-09-17 (tarde) — El ER de SinsaTools, el acceso al almacenamiento y el plan de entrega
+
+*Se analizó el ER de SinsaTools y su consulta de extracción* y se emitió
+`12_integraciones_externas/sinsatools/mapeo_sinsatools_v1.1.adoc`: mapeo campo a campo contra
+el contrato de ingesta.
+
+*Se descubrió que el enlace privado es una SAS con dos horas de caducidad*, lo que habría
+convertido `catalog_media.storage_uri` en un enlace muerto a las pocas horas de cada lote. Se
+emitió `ADR-BS-007` tras evaluar cuatro salidas —incluida la *user delegation SAS* con
+redirect, que es mejor en rendimiento y se archiva como `DEC-BS-17` por romper la caché del
+Service Worker y `SEC-BS-10`—. *Decisión: el lote trae la ruta sin firmar y el Bridge lee los
+bytes con credencial propia.* Nuevas reglas: `SEC-BS-11`, `SEC-BS-12`, `DOM-BS-11`,
+`DOM-BS-12`.
+
+*Se cerraron cuatro decisiones:* `DEC-BS-08` (`webPlatformId` es el filtro de alcance, no un
+campo informativo), `DEC-BS-10` (`Files.Size` viaja en el lote; se retira `DT-BS-07`),
+`DEC-BS-14` (por el ADR) y se completó `DEC-BS-06` (`industry` es `Categories` vía
+`Category_Sku`, nivel raíz).
+
+*Se retiró una pregunta al emisor:* la semántica de `Active` / `IsVisible` /
+`IsSynchronizable` no nos concierne — SinsaTools prefiltra el lote con su propia lógica.
+
+*Se emitió `11_gestion_producto/plan_primera_entrega_v1.0.adoc`.* Veredicto: no queda ningún
+bloqueante externo para arrancar. Las tres decisiones que hay que cerrar antes de escribir
+código —`DEC-BS-13`, `DEC-BS-11`, `DEC-BS-07`— son todas nuestras.
+
+=== 2026-09-17 — Frontera documental y corrección del modelo
+
+*Se fijó la frontera con `portal-docs`* (`DEC-BS-12`, cerrada): `portal-docs` documenta el
+producto, `bridge-docs` documenta el servicio que lo implementa. Está escrita en
+`portal-docs/Frontera_Documental.adoc`.
+
+Con un solo servicio había *dos modelos describiendo la misma base de datos*, y ya habían
+divergido. El de `portal-docs` pasa a `_historico/` y su contenido se absorbe aquí.
+
+.Retirado de `portal-docs` a `_historico/`
+[cols="1,3",options="header"]
+|===
+| Artefacto | Motivo
+
+| `modelo_datos_v3.mermaid` y su `changelog_modelo_datos.adoc`
+| Duplicaban este modelo. La numeración `MIG-P-NNN` queda quemada.
+
+| Los cuatro `bridge_*.yaml` y `bridge_mock_guide.adoc`
+| Describían la frontera entre dos servicios que ahora son uno.
+
+| `requerimientos_api_externa_v1.0.adoc`
+| Sus 10 endpoints no los implementará nadie.
+
+| `12_integraciones_externas/bridge_service/requerimientos_bridge_service_v1.1.adoc`
+| Copia que se quedó en la v1.1 mientras el original avanzaba a la v2.0. Es el caso exacto
+  que la regla 1 de la frontera prohíbe.
+|===
+
+Cada carpeta vaciada lleva un `README.adoc` que dice dónde está ahora lo que contenía.
+
+[IMPORTANT]
+====
+*Corrección de un error propio.* La primera redacción del modelo v2 omitía `ROLES` y
+`ROLE_PERMISSIONS`, citando `api_auth.yaml:151` — _«el backend NO consulta ROLE_PERMISSIONS
+en cada request»_. Era una lectura equivocada: la guía de roles del portal precisa que sí se
+consulta **una vez, en el login**, para construir el claim `perms{}`. Lo que no existe es la
+consulta por request, no la tabla.
+
+Al reconciliar los dos modelos aparecieron *seis divergencias* más, y en varias la
+nomenclatura de `portal-docs` era la correcta porque espeja los campos del contrato que el
+frontend ya consume:
+
+[cols="1,2,2",options="header"]
+!===
+! Divergencia ! Qué se adoptó ! Por qué
+
+! `ROLES`, `ROLE_PERMISSIONS`, `users.role_id`
+! Las tablas del portal
+! Error propio. `users.role` como enum impedía cambiar la matriz sin desplegar.
+
+! `source_id` / `source` frente a `ext_*_id` / `origin`
+! Los nombres del portal
+! Espejan `extProductId` y `origin` del contrato. REST-BS-11.
+
+! `ingested_at` frente a `synced_at`
+! `synced_at`
+! Es el nombre que `ProductDto` expone como `syncedAt`.
+
+! `EXT_API_REQUEST_LOG`
+! Recuperada, con propósito invertido
+! Registra las llamadas *entrantes* de ingesta, incluidas las que fallan antes de crear
+  lote. Sin ella un emisor mal autenticado sería invisible.
+
+! `notification_log`: `kind` / `recipient`
+! `notification_type` / `email_to` del portal
+! No había motivo para renombrar lo que ya estaba.
+
+! `groups.updated_at`, `user_media_exceptions.granted_at` / `granted_by`
+! Los del portal
+! Omisiones propias.
+!===
+
+El modelo pasa de 14 a *17 tablas*, reverificado contra PostgreSQL 16.13 con ocho
+invariantes probados.
+====
+
+=== 2026-09-16 — La arquitectura cambia de raíz
+
+Se revisó el repositorio `Sin-PortalVideos` —el frontend Angular 21, ya construido— y
+contrastarlo con la documentación reveló que la arquitectura descrita no existía. De ahí
+salieron dos decisiones que invalidan la mitad de la especificación anterior.
+
+.Las dos decisiones
+[cols="1,4",options="header"]
+|===
+| ADR | Qué establece
+
+| xref:{root}/11_gestion_producto/adr/adr-bs-005_servicio_unico.adoc[ADR-BS-005]
+| *El Bridge Service es el backend del portal.* No hay un tercer servicio. El frontend llama
+  a `/api` y quien responde es este servicio.
+
+| xref:{root}/11_gestion_producto/adr/adr-bs-006_ingesta_por_empuje.adoc[ADR-BS-006]
+| *Nunca consultamos la base de datos de SinsaTools.* Su microservicio de integraciones
+  empuja el catálogo contra una API que publicamos nosotros.
+|===
+
+.Los tres hechos que las provocaron
+. *El backend del portal no existía en ningún sitio.* Ni repositorio, ni carpeta, ni commit.
+  El frontend apunta a `https://localhost:7001` y nadie escucha ahí.
+. *El frontend no conoce al Bridge.* Sus seis contratos OpenAPI describen `/api/...`. Las
+  rutas `/v1/softwares` y `/v1/videos/updates` aparecen una sola vez, en prosa descriptiva, y
+  nunca como operación.
+. *Nadie había visto la base de datos de SinsaTools.* Siete preguntas sobre su esquema
+  seguían abiertas, el acceso de lectura nunca llegó, y el delta incremental dependía de unos
+  campos de auditoría que nadie pudo verificar.
+
+.Documentos emitidos
+[cols="1,3",options="header"]
+|===
+| Documento | Qué es
+
+| `requerimientos_bridge_service_v2.0.adoc` | Da de baja 6 RF, 5 REST, 1 RNF, 3 DOM y 2 SEC; añade la ingesta y la cara del portal
+| `arquitectura_tecnica_bridge_service_v2.0.adoc` | Tres capas, módulo de ingesta, proxy de streaming, identidad
+| `05_contratos_api/ingesta/ingest_catalog_v1.0.yaml` | *Nuevo.* El contrato bilateral con SinsaTools
+| `modelo_datos/modelo_datos_bridge_v2.mermaid` | De 5 a 17 tablas. Verificado contra PostgreSQL 16.13
+| `adr-bs-005_servicio_unico.adoc` · `adr-bs-006_ingesta_por_empuje.adoc` | Las dos decisiones
+| `Analisis_Arranque_Bridge_v1.0.adoc` | La reconciliación entre frontend, portal y bridge que originó todo
+|===
+
+.Documentos corregidos
+* `adr-bs-003` → ⛔ *Descartada.* No superada: el problema desapareció.
+* `adr-bs-002` → revisada. Queda un solo proveedor de EF Core.
+* `adr-bs-001` → revisada. La decisión se sostiene; cambia su naturaleza y, con ella, la
+  reversibilidad de las migraciones.
+* `adr-bs-004` → nota sobre qué sostiene la decisión.
+* `adr-000_indice`, `Glosario_IDs`, `changelog_modelo_datos`, `index`, `manifest.yaml`,
+  `Mapa_Subproyectos`, `Guia_Agentes`, `README.md` → actualizados en el mismo barrido.
+
+=== Lo que se liberó
+
+[cols="1,4",options="header"]
+|===
+| Elemento | Situación anterior
+
+| `DEC-BS-01`
+| 🔴 Bloqueaba el diseño del `SyncWorker` y la migración inicial. *Sin objeto:* no hay sync
+  interno que planificar.
+
+| `DEC-BS-02` / `ADR-BS-003`
+| 🔴 Bloqueaba el despliegue a staging. Llevaba un mes sin cerrarse porque dependía de un
+  equipo de redes nunca identificado. *Sin objeto:* no hay red corporativa que atravesar.
+
+| `DEC-BS-04`
+| 🟡 Gobernaba `RF-BS-07`. *Sin objeto:* no escribimos en SinsaTools.
+
+| `MIG-BS-001`
+| ⬜ Bloqueada por `DEC-BS-01`. *Desbloqueada.* El modelo está verificado y la migración se
+  puede generar.
+
+| Los campos de auditoría de `Images` y `Entity_Files`
+| 🔴 Riesgo bloqueante sin verificar en tres documentos. *Sin objeto:* no filtramos por su
+  `UpdatedAt`; el emisor nos dice qué cambió.
+|===
+
+== Estado de los repositorios
+
+[cols="2,1,3",options="header"]
+|===
+| Repositorio | Estado | Nota
+
+| `Sin-PortalVideos`
+| ✅ Vivo
+| Frontend Angular 21. 9 commits, ramas `main` y `test`. Zoneless, señales, standalone.
+  Cobertura 94 %. Mock completo con 250 productos, e2e Playwright, Docker + nginx.
+  *Funciona sin backend.*
+
+| `Sin-PortalBridge`
+| ⬜ Vacío
+| Un solo commit y un `README.md` que *describe un frontend Angular*. Es el primer archivo
+  que hay que sustituir.
+
+| `bridge-docs`
+| 🟡 Sin commitear
+| 0 commits. Esta documentación.
+
+| `portal-docs`
+| 🟡 Parcialmente corregida
+| 0 commits. Frontera fijada y duplicados retirados. Quedan *seis documentos estructurales*
+  que siguen describiendo dos servicios: los tres C4, `arquitectura_tecnica_portal_v1.0`,
+  `adr-006_bridge_service_cache` y `cu_sync`. Más 21 con menciones tácticas.
+|===
+
+[CAUTION]
+====
+*`frontend-docs` no existe.* El `README.md` de `Sin-PortalVideos` enlaza cuatro veces a
+`../frontend-docs/`: `arquitectura_frontend_v1.1.adoc`,
+`catalogo_disenos_figma_v1.0.adoc` y `plan_tareas_frontend_v1.0.adoc`. Ninguno está en disco.
+
+En `portal-docs` solo hay una `arquitectura_frontend_v1.0.adoc` (192 KB, 2026-09-04), marcada
+como borrador para revisión. *La v1.1 que el README cita se perdió o nunca se copió.*
+Recuperarla es una acción abierta.
+====
+
+== Decisiones tomadas
+
+[cols="1,3,1",options="header"]
+|===
+| ID | Decisión | Fecha
+
+| ADR-BS-001 | Persistencia propia en PostgreSQL Azure | 2026-08-22
+| ADR-BS-002 | EF Core 8 Code-First sobre PostgreSQL (revisada: un solo proveedor) | 2026-08-22
+| ADR-BS-004 | EF Core como fuente única del esquema; historial derivado | 2026-08-23
+| ADR-BS-005 | El Bridge Service es el backend del portal | 2026-09-16
+| ADR-BS-006 | El catálogo entra por una API de ingesta propia | 2026-09-16
+| ADR-BS-007 | El Bridge lee los bytes con credencial propia; el lote trae la ruta sin firmar | 2026-09-17
+| ADR-BS-008 | Inversión de dependencias: los puertos en `Application`, `Infrastructure` la referencia | 2026-09-17
+| DEC-BS-06 | `industry` viene de SinsaTools; confirmado el 2026-09-17 como `Categories` vía `Category_Sku`, nivel raíz | 2026-09-16
+| DEC-BS-08 | `webPlatformId` es el filtro de alcance: el portal es una fila de `Web_Platforms` | 2026-09-17
+| DEC-BS-10 | `Files.Size` viaja en el lote; no hay `HEAD`. Retira `DT-BS-07` | 2026-09-17
+| DEC-BS-14 | Opción A de `ADR-BS-007`: Managed Identity + `Storage Blob Data Reader` | 2026-09-17
+| DEC-BS-13 | `sessions` lleva `replaced_by_session_id` y `revoked_reason` desde `MIG-BS-001` | 2026-09-17
+| DEC-BS-11 | `GET /media/{id}/access` entra en el contrato del portal | 2026-09-17
+| DEC-BS-07 | `POST /admin/sync` pide una reingesta al microservicio de SinsaTools | 2026-09-17
+|===
+
+[WARNING]
+====
+*`DEC-BS-07` cambia de naturaleza al cerrarse.* Deja de ser una decisión nuestra y pasa a ser
+una dependencia externa: el botón no funciona hasta que SinsaTools exponga un endpoint de
+reingesta, que no existe ni está pedido. Se añade como tercera petición a su equipo. Mientras
+tanto, `POST /admin/sync` responde `503` con un mensaje explícito y el frontend apaga el botón
+por configuración (`T-BS-054`). Es un estado transitorio declarado, no un olvido.
+====
+
+== Decisiones abiertas
+
+=== DEC-BS-09 — Intervalo esperado de ingesta 🟠
+
+De él salen `nextScheduledSync`, el umbral de `isDataStale` y la alerta de catálogo obsoleto,
+que es *la alerta más importante del sistema*. Requiere saber cada cuánto empuja el
+microservicio. El contrato del frontend sugiere 90 minutos de umbral contra un ciclo de 60.
+
+=== DEC-BS-15 — Qué credencial nos concede SinsaTools 🔴
+
+Es la *única dependencia externa sin alternativa buena* y la que condiciona la Entrega 2. Se
+pide en este orden: rol `Storage Blob Data Reader` acotado al contenedor privado sobre la
+identidad administrada del Bridge; y solo si los tenants no coinciden, cadena de conexión en
+Key Vault. La segunda concede escritura y borrado sobre toda su cuenta, así que es peor para
+los dos.
+
+Si se niegan, la salida es la opción B de `ADR-BS-007` —pedirles una firma en cada
+reproducción— con el acoplamiento en caliente que `ADR-BS-006` acababa de eliminar.
+
+*La petición debe salir ya, no al terminar la Entrega 1: el plazo no es nuestro.*
+
+=== Las demás
+
+[cols="1,3,1",options="header"]
+|===
+| ID | Decisión | Prioridad
+
+| DEC-BS-03 | Ratificar la política de purga: 90 días, los fallos un año | 🟡
+| DEC-BS-05 | Rotación del `client_secret` de ingesta sin indisponibilidad | 🟢
+| DEC-BS-16 | ¿Contenedor propio del portal o el mismo que usa SinsaTools? Acota el rol | 🟡
+| DEC-BS-17 | Reabrir la opción D2 (redirect con *user delegation SAS*) si el proxy se estrecha | 🟢
+|===
+
+NOTE: `DEC-BS-01`, `DEC-BS-02` y `DEC-BS-04` quedan *sin objeto*. No se resolvieron: el
+problema desapareció. Sus números quedan quemados.
+
+== Deuda técnica registrada
+
+[cols="1,3,1",options="header"]
+|===
+| ID | Descripción | Impacto
+
+| DT-BS-02 | Política de purga definida, barrido sin implementar | Medio
+| DT-BS-04 | Sin métrica de deriva frente a SinsaTools. *Mitigada en parte* por la foto completa de `RF-BS-14` | Medio — era Alto
+| DT-BS-06 | El changelog del modelo depende de un gate humano | Medio
+| DT-BS-07 | 🆕 El `sizeBytes` obtenido por `HEAD` no se revalida | Bajo
+| DT-BS-08 | 🆕 El proxy de streaming ocupa un hilo por transferencia, sin límite de tamaño | Medio
+|===
+
+Dadas de baja: `DT-BS-01`, `DT-BS-03`, `DT-BS-05`.
+
+== Correcciones pendientes en documentos ya emitidos
+
+[cols="1,3,2",options="header"]
+|===
+| Prioridad | Qué | Dónde
+
+| 🔴
+| Falta `GET /media/{id}/access`. El frontend lo llama antes de cada reproducción.
+| `Sin-PortalVideos/openapi/sources/api_media.yaml` · DEC-BS-11
+
+| 🟡
+| `Accept-Ranges: bytes` se declara en la respuesta 206 pero no en la 200. Es al revés: el
+  cliente necesita saber en la respuesta completa que puede pedir rangos.
+| `api_media.yaml`
+
+| 🟡
+| `api_master.yaml` sigue describiendo el modelo de tres servicios y dice que la
+  especificación está «dividida en 5 archivos» cuando son 6.
+| `Sin-PortalVideos/openapi/sources/api_master.yaml`
+
+| 🔴
+| El `README.md` de `Sin-PortalBridge` describe un frontend Angular 21. Es un servicio .NET 8.
+| `Sin-PortalBridge/README.md`
+
+| 🟠
+| Todo `portal-docs` sigue describiendo la arquitectura de tres servicios. Requiere el mismo
+  barrido que se acaba de hacer aquí.
+| `portal-docs/`
+
+| 🟠
+| `requerimientos_api_externa_v1.0.adoc` especifica 10 endpoints del Bridge que nadie va a
+  implementar. Superado por el contrato de ingesta y por los seis `api_*.yaml`.
+| `portal-docs/01_requerimientos/` → `_historico/`
+
+| 🟠
+| Los cuatro `bridge_*.yaml` describen una frontera entre dos servicios que ahora son uno.
+| `portal-docs/05_contratos_api/bridge_service/` → `_historico/`
+
+| 🟡
+| El entregable HTML de la arquitectura refleja la v1.1.
+| `_entregables/arquitectura_bridge_service.html`
+
+| 🟡
+| `portal-docs/00_Estado_Actual.adoc` lista seis documentos como «archivo vacío» cuando
+  tienen contenido, y su colofón dice «Versión 1.3 / Abril 2025» contra un `:revnumber: 1.6`.
+| `portal-docs/`
+|===
+
+== Riesgos abiertos
+
+[cols="1,3,3",options="header"]
+|===
+| Riesgo | Descripción | Mitigación
+
+| *El emisor deja de empujar*
+| Un microservicio que se detiene no produce ningún error: simplemente no llama. El catálogo
+  envejece en silencio. Es el riesgo estructural de ADR-BS-006.
+| `generatedAt` obligatorio en cada lote, `catalog-freshness` como check de `/health`, y la
+  alerta de catálogo obsoleto. *Es la alerta más importante del sistema.*
+
+| *SinsaTools no implementa el contrato*
+| Hasta que lo hagan no entra un dato real.
+| El simulador de `tools/IngestSimulator`, alimentado por las semillas del mock del frontend.
+  El desarrollo no espera.
+
+| *Equipo de una persona*
+| Cualquier ausencia detiene el proyecto por completo.
+| Documentación al día y decisiones registradas. No hay mitigación técnica.
+
+| *La forma real de `storageUri`*
+| El contrato exige un URI absoluto, pero nadie ha visto un `Images.UrlWeb` ni un
+  `Files.FilePath` reales. Si no son resolubles, el proxy de streaming no se puede escribir.
+| Pedir tres filas de ejemplo de cada tabla. Es la pregunta de mayor retorno que queda
+  abierta.
+
+| *Un despliegue fallido tumba las dos caras*
+| Con un solo servicio no hay aislamiento entre la ingesta y el portal.
+| *Deployment slots* de App Service con intercambio, para validar el arranque antes de recibir
+  tráfico.
+|===
+
+== Próximos pasos acordados
+
+. **Casos de uso `CU-BS-001..010`** en `02_casos_de_uso/`. Siguiente paso documental.
+. **Enviar el contrato de ingesta a SinsaTools** y acordar credenciales, cadencia y quién
+  opera el simulador. *Es el camino crítico real.*
+. **Sustituir el `README.md` de `Sin-PortalBridge`** y crear el esqueleto .NET 8 de tres
+  capas.
+. **Generar `MIG-BS-001`** — ya no está bloqueada.
+. **`docker-compose` con PostgreSQL 16 y el simulador de ingesta**, sembrado desde
+  `fixtures.ts` del frontend.
+. **Cerrar `DEC-BS-11`** añadiendo `GET /media/{id}/access` al contrato del portal.
+. **Aplicar a `portal-docs`** el mismo barrido que se acaba de hacer aquí.
+
+[IMPORTANT]
+====
+*Reordenado el 2026-09-17 por `plan_primera_entrega_v1.0.adoc`.* Dos cosas se adelantan a
+todo lo anterior porque tienen plazo ajeno o bloquean la primera migración:
+
+. *Pedir a SinsaTools el rol `Storage Blob Data Reader` y el `Id` de `Web_Platforms`.* Hoy.
+  No depende de escribir una línea de código y condiciona la Entrega 2.
+. *Cerrar `DEC-BS-13`* antes de generar `MIG-BS-001`. ✅ *Hecho el 2026-09-17: entran las dos
+  columnas.*
+
+Las tres decisiones que bloqueaban el arranque —`DEC-BS-07`, `DEC-BS-11`, `DEC-BS-13`— quedan
+cerradas. El desglose ejecutable está en `11_gestion_producto/plan_tareas_bridge_v1.0.adoc`
+(`T-BS-001..063`), y las peticiones a SinsaTools son ahora *tres*: el rol de lectura, el `Id`
+de `Web_Platforms` y el endpoint de reingesta.
+====
+
+include::{root}/_nav.adoc[]

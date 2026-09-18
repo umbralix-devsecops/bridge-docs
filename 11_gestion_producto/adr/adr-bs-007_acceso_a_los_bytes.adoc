@@ -1,0 +1,327 @@
+= ADR-BS-007 — Cómo obtiene el Bridge los bytes de Azure Blob Storage
+:author: Equipo de Desarrollo
+:revnumber: 1.0
+:revdate: 2026-09-17
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:icons: font
+:lang: es
+:root: ../..
+:section-id: gestion-producto
+:section-title: Gestión de Producto
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+[cols="1,3"]
+|===
+| *Estado* | ✅ *Aceptada*
+| *Fecha* | 2026-09-17
+| *Origen* | Análisis del ER de SinsaTools — `12_integraciones_externas/sinsatools/mapeo_sinsatools_v1.1.adoc`, §3
+| *Depende de* | ADR-BS-005 (el Bridge es el backend), ADR-BS-006 (la ingesta entra por empuje)
+| *Cierra* | `DEC-BS-14`
+| *Abre* | `DEC-BS-15` (qué credencial concretamente), `DEC-BS-16` (contenedor propio o compartido)
+|===
+
+== Contexto
+
+El enlace privado que SinsaTools genera hoy para cada recurso es una **SAS de servicio con
+caducidad de unas dos horas**:
+
+[source]
+----
+…/media-local-private/e61da91d-…-20260917173725.mp4
+  ?sv=2024-11-04&se=2026-09-17T19:29:57Z&sr=b&sp=r&sig=I0PKEJ…
+----
+
+Y su interfaz tiene un botón «Regenerar enlace», lo que confirma que se emite bajo demanda.
+
+El catálogo, en cambio, se ingiere por lotes y se sirve durante semanas. Guardar esa cadena en
+`catalog_media.storage_uri` es guardar un enlace que muere esa misma tarde, y el síntoma sería
+el peor posible: vídeos que se reproducen un día y al siguiente devuelven `403`, sin ningún
+error de ingesta que lo delate.
+
+La pregunta que resuelve este ADR no es *cómo protegemos la URL* —eso ya está decidido, el
+proxy de streaming— sino **con qué credencial y bajo qué forma el Bridge llega a los bytes**.
+
+[NOTE]
+====
+*Esto no afecta al material público.* `File_Sync.IsPublic = true` vive en un contenedor con
+acceso anónimo, su URL no lleva firma y no caduca. Todo lo que sigue habla del material
+privado. La frontera está en `File_Sync.IsPublic`, nunca en el nombre del contenedor
+(ver `SEC-BS-10` y el aviso sobre Azurite en el mapeo).
+====
+
+== Opciones evaluadas
+
+=== Opción A — Credencial propia sobre la cuenta, lectura directa
+
+El lote trae la **ruta sin firmar** (`File_Sync.PathPrivate` o `.StoragePath`). El Bridge tiene
+una identidad con permiso de lectura sobre la cuenta de almacenamiento y, en el momento de
+servir, abre el blob con el SDK y reenvía los bytes por el proxy.
+
+[source,csharp]
+----
+// La credencial nunca sale del proceso. El cliente recibe bytes, no una URL.
+var blob = _blobService
+    .GetBlobContainerClient(media.StorageContainer)
+    .GetBlobClient(media.StoragePath);
+
+var stream = await blob.DownloadStreamingAsync(
+    new BlobDownloadOptions { Range = rangeFromRequest },
+    ct);
+----
+
+Dos formas de obtener esa credencial, por orden de preferencia:
+
+[cols="1,3,1",options="header"]
+|===
+| Forma | Qué implica | Rotación
+
+| *Managed Identity + RBAC*
+| La App Service del Bridge recibe una identidad administrada; SinsaTools le asigna el rol
+  `Storage Blob Data Reader` sobre la cuenta o sobre el contenedor. No hay secreto en ninguna
+  parte: el token lo emite Entra ID y el SDK lo renueva solo.
+  *Requisito:* ambas suscripciones en el mismo tenant de Entra ID.
+| Ninguna
+
+| *Cadena de conexión o clave de cuenta*
+| SinsaTools entrega la clave; la guardamos en Key Vault y el Bridge la lee con su Managed
+  Identity al arrancar. Funciona entre tenants distintos.
+  *Coste:* la clave de cuenta da acceso *total* a la cuenta —escritura y borrado incluidos—,
+  no solo lectura. Es un privilegio muy por encima de lo que necesitamos.
+| Manual, y con
+  indisponibilidad si
+  no se hace por pares
+|===
+
+=== Opción B — SinsaTools nos firma una SAS en cada reproducción
+
+Antes de servir un vídeo, el Bridge llama a un endpoint de SinsaTools que devuelve una SAS
+fresca para ese blob.
+
+=== Opción C — SAS de larga duración guardada en el catálogo
+
+Una firma emitida con caducidad de meses, almacenada en `storage_uri`.
+
+=== Opción D — SAS de delegación de usuario, emitida por nosotros al vuelo 🆕
+
+_Esta es la salida que aporta la documentación de Blob Storage y que no estaba en el análisis
+inicial._
+
+Una **user delegation SAS** no se firma con la clave de la cuenta sino con una clave derivada
+de credenciales de Entra ID, que se obtiene con `GetUserDelegationKeyAsync()` y **vale hasta
+7 días**. Con ella, el Bridge puede firmar tokens de vida muy corta —60 segundos— para un
+único blob, sin poseer jamás la clave de la cuenta:
+
+[source,csharp]
+----
+// Se pide una vez cada pocas horas y se cachea en memoria.
+var key = await _blobService.GetUserDelegationKeyAsync(
+    DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(6), ct);
+
+// Se firma una por reproducción, para un solo blob y 60 segundos.
+var builder = new BlobSasBuilder
+{
+    BlobContainerName  = media.StorageContainer,
+    BlobName           = media.StoragePath,
+    Resource           = "b",
+    ExpiresOn          = DateTimeOffset.UtcNow.AddSeconds(60),
+    Protocol           = SasProtocol.Https,          // spr=https
+    ContentDisposition = $"inline; filename=\"{safeName}\"",   // rscd
+};
+builder.SetPermissions(BlobSasPermissions.Read);     // sp=r
+
+var sas = builder.ToSasQueryParameters(key, accountName);
+----
+
+La identidad necesita el rol que incluya la acción
+`Microsoft.Storage/storageAccounts/blobServices/generateUserDelegationKey` —lo trae
+`Storage Blob Delegator`—, además de `Storage Blob Data Reader` para que la SAS tenga algo que
+delegar.
+
+Esa SAS puede usarse de dos maneras muy distintas:
+
+* *D1 — la consumimos nosotros.* El proxy la usa internamente en vez del SDK. No aporta nada
+  sobre A: mismo resultado, más piezas.
+* *D2 — la devolvemos al navegador.* `GET /media/{id}/access` valida permisos y responde un
+  `302` a la URL firmada. **El navegador habla directamente con Azure.** Desaparece el proxy.
+
+D2 es la opción interesante, y también la que **contradice una decisión ya tomada**. Ver el
+aviso al final.
+
+=== Tabla comparativa
+
+[cols="2,1,1,1,1",options="header"]
+|===
+| Criterio | A · Credencial propia | B · SAS de SinsaTools | C · SAS larga | D2 · Delegación + redirect
+
+| Dependencia en caliente de SinsaTools
+| ✅ Ninguna
+| ❌ Su caída = sin vídeo
+| ✅ Ninguna
+| ✅ Ninguna
+
+| Qué se guarda en `storage_uri`
+| ✅ Ruta estable
+| ✅ Ruta estable
+| ❌ Una firma que caduca
+| ✅ Ruta estable
+
+| Vida de la firma expuesta
+| ✅ No hay firma expuesta
+| Minutos–horas
+| ❌ Meses
+| ✅ 60 segundos
+
+| Si la URL se filtra
+| ✅ Inservible: exige sesión
+| ⚠️ Vale lo que dure
+| ❌ Vale meses, para cualquiera
+| ⚠️ Vale 60 s, y es *reenviable* dentro de esa ventana
+
+| Latencia añadida por reproducción
+| ✅ Ninguna
+| ❌ Un salto HTTP a su red
+| ✅ Ninguna
+| ✅ Ninguna (la firma es cómputo local)
+
+| Egress de Azure
+| ⚠️ Doble: Blob → Bridge → cliente
+| Doble
+| ✅ Directo
+| ✅ Directo
+
+| Coste en la instancia del Bridge
+| ❌ Un hilo y ancho de banda por transferencia (`DT-BS-08`)
+| ❌ Igual
+| ✅ Nada
+| ✅ Nada
+
+| `Range` / seek del `<video>`
+| ⚠️ Hay que implementarlo en el proxy
+| ⚠️ Igual
+| ✅ Nativo de Blob Storage
+| ✅ Nativo de Blob Storage
+
+| Caché del Service Worker
+| ✅ Clave de caché estable
+| ✅ Estable
+| ✅ Estable
+| ❌ La URL cambia en cada acceso: el SW no reconoce el recurso
+
+| Revocación de un acceso concedido
+| ✅ Inmediata: es una comprobación en base
+| Depende de ellos
+| ❌ Solo rotando la clave de la cuenta
+| ⚠️ Hasta 60 s de ventana
+
+| Funciona con Azurite en local
+| ✅ Sí, con clave de cuenta
+| n/a
+| ✅ Sí
+| ❌ `GetUserDelegationKey` no es fiable en el emulador
+
+| Contradice decisiones vigentes
+| ✅ No
+| ✅ No
+| ✅ No
+| ❌ Sí: el proxy de streaming y `SEC-BS-10`
+|===
+
+[NOTE]
+====
+*Una quinta pieza que la documentación ofrece y aquí no sirve:* la **stored access policy**.
+Permite revocar del lado del servidor las SAS ya emitidas, cambiando o borrando la política a
+la que están atadas, con efecto en unos 30 segundos. Suena a la cura de la opción C —y lo
+sería— pero tiene dos topes que la descartan: **cinco políticas por contenedor** como máximo,
+y **no es aplicable a una user delegation SAS**. Cinco políticas no dan para 1.842 recursos
+con permisos por grupo y excepciones por usuario. Se descarta por límite duro, no por
+criterio.
+====
+
+== Decisión
+
+*Se elige la opción A, en su forma de Managed Identity + rol `Storage Blob Data Reader`, con
+la cadena de conexión en Key Vault como alternativa si los tenants no coinciden.*
+
+*El lote de ingesta debe traer la ruta sin firmar.* Es la pregunta 1 al equipo de SinsaTools y
+es condición de contrato, no una preferencia: `IngestMedia.storageUri` se define como URI
+**sin componente de consulta**, y un valor que traiga `?sig=` se rechaza con `422`.
+
+== Justificación
+
+. **B introduce una dependencia en caliente que ADR-BS-006 acababa de eliminar.** El sentido
+  de la ingesta por empuje era que la indisponibilidad de SinsaTools no se notara en el portal.
+  Pedirles una firma en cada reproducción reintroduce exactamente ese acoplamiento, y en el
+  punto más visible: el usuario dándole al play.
+
+. **C es el problema del contenedor público con más pasos.** Una firma de meses filtrada es una
+  URL pública de facto, y no hay forma de revocarla sin rotar la clave de la cuenta —lo que
+  invalida *todas* las demás a la vez—. La stored access policy lo arreglaría si cupieran más
+  de cinco.
+
+. **D2 es técnicamente la mejor y estratégicamente la peor ahora mismo.** Elimina `DT-BS-08`
+  entero, resuelve el `Range` gratis, ahorra la mitad del egress y expone una firma de
+  60 segundos, que es menos superficie que el proxy actual. Pero rompe tres cosas vivas: la
+  caché del Service Worker —que es un requisito explícito del proyecto, reducir el tráfico de
+  Blob Storage— depende de una URL estable por recurso; `SEC-BS-10` prohíbe que
+  `storage_uri` o `storage_container` salgan en una respuesta, y un `302` los publica los dos;
+  y el frontend ya está implementado y probado contra un endpoint que devuelve bytes
+  (`REST-BS-11`). No se descarta por mala, se descarta por prematura.
+
+. **A es la única que no exige nada de nadie salvo un rol.** No toca el frontend, no toca el
+  contrato de ingesta más allá de exigir la ruta limpia, no depende de que SinsaTools tenga
+  disponibilidad, y es lo que la arquitectura ya presuponía.
+
+. **Managed Identity por encima de la clave de cuenta, y con distancia.** La clave de cuenta
+  concede escritura y borrado sobre *toda* la cuenta de SinsaTools. Un rol
+  `Storage Blob Data Reader` sobre un contenedor concede leer ese contenedor. Pedir lo segundo
+  es también más fácil de conceder para ellos, que es un argumento práctico y no menor.
+
+== Consecuencias
+
+=== Positivas
+
+* `storage_uri` guarda una ruta estable: la clave de caché del Service Worker es estable y la
+  invalidación sigue siendo gratis (el nombre del blob incluye un *timestamp*).
+* La revocación de un permiso es inmediata y es nuestra: una fila en
+  `group_version_access` o `user_media_exceptions`, no una operación en Azure.
+* Ningún secreto en configuración: `SEC-BS-01` se cumple sin excepciones.
+* La auditoría de `VIDEO_ACCESS_LOG` es completa por construcción — todo byte servido pasa por
+  nosotros. Con D2 solo veríamos la concesión, no el consumo.
+
+=== Negativas y compromisos
+
+* **`DT-BS-08` se confirma y se agrava.** El proxy ocupa un hilo y ancho de banda por
+  transferencia. Con vídeos de demostración y una instancia compartida con la ingesta
+  (ADR-BS-005), es el primer sitio donde el servicio se va a estrechar.
+  *Mitigación obligatoria:* `sendfile` asíncrono sin bufferizar en memoria, límite de
+  transferencias concurrentes por usuario, y `SEC-BS-12` abajo.
+* **El `Range` hay que implementarlo.** El `<video>` de HTML5 hace *seek* con
+  `Range: bytes=…`, y el proxy debe propagarlo al `BlobDownloadOptions` y devolver `206` con
+  `Content-Range`. No es opcional: sin él la barra de progreso no funciona.
+* **Doble egress.** Los bytes salen de Blob Storage hacia el Bridge y del Bridge hacia el
+  cliente. Es el precio de proteger la URL, y la caché del navegador lo amortiza.
+* **Dependemos de que SinsaTools nos conceda el rol.** Si se niegan, la única salida que queda
+  es B, con su acoplamiento. Es el riesgo real de esta decisión.
+* **D2 queda archivada, no muerta.** Si el proxy se convierte en el cuello de botella, se
+  reabre: exigiría cambiar el Service Worker a una clave de caché por `mediaId` en vez de por
+  URL, y relajar `SEC-BS-10` para el caso del `302`. Se registra como `DEC-BS-17`.
+
+=== Reglas derivadas, de cumplimiento obligatorio
+
+[cols="1,4",options="header"]
+|===
+| ID | Regla
+
+| SEC-BS-11 | La credencial de almacenamiento no sale del proceso del Bridge bajo ninguna forma: ni en una respuesta, ni en un log, ni en un mensaje de error, ni en un `302`. El cliente recibe bytes.
+| SEC-BS-12 | El proxy solo sirve un recurso tras resolver el permiso en la base de datos en esa misma petición. Ningún resultado de autorización se cachea entre peticiones.
+| DOM-BS-11 | `IngestMedia.storageUri` es un URI *sin componente de consulta*. Un valor con `?` se rechaza con `422` y el lote entero falla. Una firma no es una ruta.
+| DOM-BS-12 | El proxy propaga la cabecera `Range` del cliente al blob y responde `206` con `Content-Range`. Una respuesta `200` completa a una petición con `Range` es un fallo.
+|===
+
+include::{root}/_nav.adoc[]

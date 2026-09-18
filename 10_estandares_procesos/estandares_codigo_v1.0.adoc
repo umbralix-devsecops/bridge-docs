@@ -1,0 +1,340 @@
+= Estándares de código — Bridge Service
+:author: Equipo de Desarrollo
+:revnumber: 1.0
+:revdate: 2026-09-17
+:revremark: Primera emisión. Cierra el hueco de la sección 10 antes de escribir la primera línea.
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:sectnumlevels: 3
+:icons: font
+:lang: es
+:root: ..
+:section-id: estandares-procesos
+:section-title: 10 — Estándares y procesos
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+---
+
+[.lead]
+Convenciones de C# del Bridge Service. Todas las que se pueden comprobar, se comprueban: el
+`.editorconfig` y los analizadores *son* el estándar, y este documento explica el porqué.
+Una regla que solo vive aquí y no falla el build es una sugerencia, no una norma.
+
+[IMPORTANT]
+====
+*Principio rector.* Lo escrito y lo que falla el build son lo mismo. Si al leer una regla de
+aquí no sabes qué comando la detecta, falta trabajo: o se automatiza, o se marca
+explícitamente como convención de revisión humana. Las tres que no se pueden automatizar
+están señaladas como tales.
+====
+
+== Convención de identificadores
+
+`EST-BS-NN` — regla de estándar de código. Se declara aquí; `EST-BS-01` y `EST-BS-02` vienen
+de `ADR-BS-008` y se repiten abajo para que la lista esté completa.
+
+== Base ejecutable
+
+Cuatro archivos, en la raíz de la solución, que hacen cumplir casi todo lo demás.
+
+[cols="1,3",options="header"]
+|===
+| Archivo | Qué fija
+
+| `.editorconfig`
+| Formato, nomenclatura y severidad de los analizadores. `dotnet format --verify-no-changes`
+  falla si el código se aparta.
+
+| `Directory.Build.props`
+| `<Nullable>enable</Nullable>`, `<TreatWarningsAsErrors>true</TreatWarningsAsErrors>`,
+  `<AnalysisLevel>latest-all</AnalysisLevel>`, `<EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>`,
+  `<LangVersion>12.0</LangVersion>`.
+
+| `Directory.Packages.props`
+| Versiones centralizadas. Ninguna versión de paquete se escribe en un `.csproj`.
+
+| `.globalconfig`
+| Ajustes por proyecto cuando una regla debe ser más estricta en `Application` que en `Api`.
+|===
+
+[NOTE]
+====
+*`TreatWarningsAsErrors` es la decisión que sostiene el resto.* Sin ella, los analizadores
+producen ruido que se acumula y se ignora; con ella, la única forma de convivir con un aviso
+es suprimirlo con `#pragma` y una justificación escrita, que es exactamente la conversación
+que queremos tener.
+====
+
+== Las reglas
+
+=== Arquitectura
+
+[cols="1,4,1",options="header"]
+|===
+| ID | Regla | Cómo se comprueba
+
+| `EST-BS-01`
+| `BridgeService.Application` no lleva referencias de proyecto ni paquetes de infraestructura
+  (`ADR-BS-008`).
+| Analizador de dependencias + prueba de arquitectura
+
+| `EST-BS-02`
+| Ningún puerto de `Application/Abstractions/` expone `IQueryable`, `DbSet`, `DbContext` ni
+  tipos de los SDK de Azure (`ADR-BS-008`).
+| Prueba de arquitectura sobre las firmas públicas
+
+| `EST-BS-03`
+| Los controladores no contienen lógica de negocio: validan la forma, llaman a un servicio de
+  `Application` y mapean el resultado a DTO. *Sin `DbContext` ni `HttpClient` en un
+  controlador.*
+| Analizador + revisión
+
+| `EST-BS-04`
+| Un tipo de `Application` nunca devuelve un DTO del contrato. El mapeo ocurre en `Api`.
+| Prueba de arquitectura
+|===
+
+=== Seguridad
+
+Estas no son negociables: cada una proviene de una `SEC-BS` ya vigente.
+
+[cols="1,4,1",options="header"]
+|===
+| ID | Regla | Cómo se comprueba
+
+| `EST-BS-05`
+| Ninguna concatenación ni interpolación de cadenas en SQL, tampoco en `FromSqlRaw`
+  (`SEC-BS-03`).
+| Analizador CA2100 + `FromSqlInterpolated` obligatorio
+
+| `EST-BS-06`
+| Ningún secreto en `appsettings*.json` ni en código (`SEC-BS-01`).
+| `gitleaks` en el pipeline (`SEC-BS-08`)
+
+| `EST-BS-07`
+| Los campos sensibles —`clientSecret`, `accessToken`, `password_hash`, `token`,
+  `storage_uri`, `storage_path`, `storage_container`, `storage_token`— no se registran nunca
+  (`SEC-BS-04`, `SEC-BS-10`, `SEC-BS-11`).
+| `[LogMasked]` sobre esos miembros + una prueba que recorre las plantillas de log
+|===
+
+=== Pruebas
+
+[cols="1,4,1",options="header"]
+|===
+| ID | Regla | Cómo se comprueba
+
+| `EST-BS-08`
+| *Cobertura mínima global del 80 %, y del 100 % en `MediaAccessEvaluator`, `SessionService`
+  y `PermissionResolver`.* Un fallo en esos tres es una fuga de contenido o una sesión
+  secuestrada; en el resto es un bug.
+| Umbral en el pipeline, por ensamblado y por clase
+
+| `EST-BS-09`
+| Las pruebas de integración usan *PostgreSQL real con Testcontainers*. **Prohibido
+  `InMemoryDatabase`.**
+| Analizador que prohíbe el paquete + revisión
+
+| `EST-BS-10`
+| Una prueba por comportamiento, con nombre que describe el caso y el resultado esperado.
+  Nada de `Test1`. Estructura *arrange / act / assert* visible.
+| ⚠️ Revisión humana
+
+| `EST-BS-11`
+| Toda regla de negocio con precedencia —la evaluación de acceso, sobre todo— se prueba con
+  una *matriz de casos* que cubre cada combinación, no con ejemplos sueltos.
+| ⚠️ Revisión humana
+|===
+
+[WARNING]
+====
+*`EST-BS-09` corrige a la guía de onboarding.* `portal-docs/10_estandares_procesos/guia_onboarding_v1.0.adoc`
+dice: _«Los tests usan InMemoryDatabase — no requieren Docker»_. Eso era cierto para la
+arquitectura de tres servicios; hoy es inviable.
+
+`InMemoryDatabase` no implementa índices únicos parciales, ni particionamiento, ni `citext`,
+ni búsqueda por GIN — que es justo lo que `T-BS-013` tiene que verificar. Una suite en memoria
+pasaría en verde sobre un esquema que PostgreSQL rechaza.
+
+Ver §6 para el resto de correcciones a ese documento.
+====
+
+=== Errores y resultados
+
+[cols="1,4,1",options="header"]
+|===
+| ID | Regla | Cómo se comprueba
+
+| `EST-BS-12`
+| Las excepciones se reservan para lo excepcional. Un fallo esperado —credencial inválida,
+  recurso sin permiso, lote mal formado— se devuelve como resultado tipado, no se lanza.
+| ⚠️ Revisión humana
+
+| `EST-BS-13`
+| El cuerpo de un `500` nunca contiene detalle de excepción; sí un `traceId` que permita
+  encontrarlo en el log (`SEC-BS-06`).
+| Prueba del middleware
+
+| `EST-BS-14`
+| Toda respuesta de error usa `ProblemDetails` (RFC 7807), con el mismo `type` para el mismo
+  tipo de fallo en todos los endpoints.
+| Prueba de contrato contra los `api_*.yaml`
+|===
+
+=== Asincronía y recursos
+
+[cols="1,4,1",options="header"]
+|===
+| ID | Regla | Cómo se comprueba
+
+| `EST-BS-15`
+| Todo método `async` acepta y propaga un `CancellationToken`. Ninguno se ignora.
+| Analizador CA2016 como error
+
+| `EST-BS-16`
+| Prohibidos `.Result`, `.Wait()` y `async void` fuera de manejadores de eventos.
+| Analizadores + revisión
+
+| `EST-BS-17`
+| El proxy de streaming no bufferiza el recurso en memoria: se copia por flujo, con `Range`
+  propagado (`DOM-BS-12`, `DT-BS-08`).
+| Prueba con un recurso grande, midiendo memoria
+|===
+
+=== Nomenclatura y forma
+
+[cols="1,4",options="header"]
+|===
+| ID | Regla
+
+| `EST-BS-18`
+| Nomenclatura estándar de .NET: `PascalCase` para tipos y miembros públicos, `camelCase` para
+  parámetros y locales, `_camelCase` para campos privados, `I` para interfaces. Fijado en
+  `.editorconfig`; no se discute en revisión.
+
+| `EST-BS-19`
+| *El código en inglés, los comentarios y la documentación en español.* Es la convención del
+  proyecto y aplica también a nombres de tabla, columna y migración.
+
+| `EST-BS-20`
+| Un archivo, un tipo público. El nombre del archivo es el del tipo.
+
+| `EST-BS-21`
+| Sin regiones. Una clase que necesita `#region` para leerse necesita partirse.
+
+| `EST-BS-22`
+| Un comentario explica *por qué*, nunca *qué*. Un comentario que parafrasea la línea
+  siguiente se borra en revisión.
+|===
+
+=== Base de datos
+
+[cols="1,4",options="header"]
+|===
+| ID | Regla
+
+| `EST-BS-23`
+| El esquema se modifica solo por migraciones de EF Core sobre `AppDbContext` (`DOM-BS-04`).
+  Ningún cambio manual sobre una base desplegada.
+
+| `EST-BS-24`
+| Toda migración lleva su entrada `MIG-BS-NNN` en el changelog, **en el mismo commit**
+  (`DOM-BS-05`).
+
+| `EST-BS-25`
+| El SQL de vistas, índices especiales y permisos va en archivos `.sql` incrustados, no en
+  literales de C# (`DOM-BS-07`). Dentro de la migración de EF Core que lo aplica, para no
+  romper `ADR-BS-004`.
+
+| `EST-BS-26`
+| La configuración de cada entidad vive en su propia `IEntityTypeConfiguration<T>`, no en
+  `OnModelCreating`.
+|===
+
+== Proceso
+
+Lo que ya estaba acordado en la guía de onboarding y sigue vigente.
+
+[cols="1,3",options="header"]
+|===
+| Asunto | Convención
+
+| Ramas
+| `feature/{descripcion-corta}`, `fix/{descripcion-corta}`, `chore/{descripcion-corta}`.
+
+| Antes del commit
+| `./verify.sh` — los mismos comandos que ejecuta la CI. Si falla en local, falla en CI.
+
+| Pull request
+| Hacia `main`. El pipeline ejecuta build, pruebas con cobertura, formato y `gitleaks`.
+
+| Commits
+| Mensaje en español, imperativo, con el `T-BS-NNN` que implementa. Ejemplo:
+  `T-BS-013: generar MIG-BS-001 con los índices parciales`.
+|===
+
+[CAUTION]
+====
+*La revisión por un segundo par de ojos no existe.* La guía de onboarding exige _«al menos 1
+aprobación del tech lead»_, y con un equipo de una persona (`RNF-BS-07`) el autor y el
+revisor son el mismo. Es el mismo problema que `ADR-BS-005` ya detectó en `REST-BS-06` con el
+contrato bilateral.
+
+*No se finge el control.* Mientras el equipo sea de una persona, la puerta real es el
+pipeline, y por eso este documento insiste en automatizar todo lo automatizable. Las cuatro
+reglas marcadas como «revisión humana» —`EST-BS-10`, `EST-BS-11`, `EST-BS-12`, y el criterio
+de `EST-BS-03`— son *deuda consciente*: `DT-BS-09`.
+====
+
+== Correcciones a la guía de onboarding del portal
+
+`portal-docs/10_estandares_procesos/guia_onboarding_v1.0.adoc` es anterior a `ADR-BS-005` y
+describe la arquitectura de tres servicios. Sus partes de proceso siguen siendo válidas; sus
+partes de backend no.
+
+[cols="2,3",options="header"]
+|===
+| Lo que dice | Lo que vale
+
+| `portal-backend`, `src/Portal.API/Portal.API.csproj`
+| No existe. El backend es `Sin-PortalBridge`, con `src/BridgeService.Api/`
+  (`ADR-BS-005`).
+
+| «Levantar el mock del Bridge Service» con `json-server` en el puerto 4000
+| No hay mock intermedio: el Bridge *es* el backend. Lo que se levanta es el
+  `IngestSimulator`, que empuja lotes reales contra `/v1/ingest/catalog` (`T-BS-061`).
+
+| «Los tests usan InMemoryDatabase — no requieren Docker»
+| Testcontainers con PostgreSQL real (`EST-BS-09`).
+
+| «La sincronización retorna 503 — el Bridge mock puede estar caído»
+| En la Entrega 1 el `503` de `/admin/sync` es *el comportamiento correcto*: el endpoint de
+  reingesta de SinsaTools aún no existe (`DEC-BS-07`, `T-BS-054`).
+
+| «Cobertura mínima 80 %»
+| ✅ Sigue vigente como suelo, con el 100 % añadido en las tres clases de `EST-BS-08`.
+
+| Ramas, flujo de PR, «el CI ejecuta los mismos comandos»
+| ✅ Vigente sin cambios.
+|===
+
+NOTE: Actualizar esa guía es trabajo de `portal-docs` y queda anotado en su lista de
+correcciones pendientes. Aquí se registra la divergencia para que nadie siga instrucciones
+muertas mientras tanto.
+
+== Lo que este estándar deliberadamente no fija
+
+* *Un patrón de mediación* (MediatR o similar). Con un solo desarrollador y servicios de
+  aplicación explícitos, añade indirección sin resolver nada. Si el número de casos de uso
+  crece hasta hacerlo útil, se reabre con un ADR.
+* *Un mapeador automático* (AutoMapper o similar). El mapeo DTO ↔ modelo se escribe a mano:
+  es explícito, se depura y no se rompe en silencio al renombrar una propiedad.
+* *Longitud máxima de método o clase.* Un número arbitrario produce troceado artificial. Lo
+  que se exige es que cada pieza se pueda probar aislada, y eso ya acota el tamaño por sí solo.
+
+include::{root}/_nav.adoc[]
