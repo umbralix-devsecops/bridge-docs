@@ -1,7 +1,7 @@
 = Estado Actual — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 2.5
-:revdate: 2026-09-17
+:revnumber: 2.9
+:revdate: 2026-09-18
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -39,17 +39,17 @@ que condiciona la Entrega 2, no la 1. Código: sin empezar.
 |===
 | # | Sección | Estado | Nota
 
-| 01 | Requerimientos | ✅ Completa | `requerimientos_bridge_service_v2.0.adoc` vigente · v1.0 y v1.1 en `_historico/`
+| 01 | Requerimientos | ✅ Completa | `requerimientos_bridge_service_v2.1.adoc` vigente · v1.0 y v1.1 en `_historico/`
 | 02 | Casos de uso | ⬜ Pendiente | `CU-BS-001..010` listados en los requerimientos, sin desarrollar. Siguiente en la ruta documental
 | 03 | Diseño | ⬜ Pendiente | C4 y diagramas de estado de la ingesta. El diseño de interfaz vive en el frontend
-| 04 | Arquitectura técnica | ✅ Completa | `arquitectura_tecnica_bridge_service_v2.1.adoc` vigente · v1.0 y v1.1 en `_historico/` · modelo de datos v2 verificado
+| 04 | Arquitectura técnica | ✅ Completa | `arquitectura_tecnica_bridge_service_v2.3.adoc` vigente · `DOM-BS-05` reescrita: el identificador viaja en el nombre de la migración · v1.0 y v1.1 en `_historico/` · modelo de datos v2 verificado
 | 05 | Contratos API | 🟡 Parcial | `ingesta/ingest_catalog_v1.0.yaml` emitido. Los seis `api_*.yaml` del portal viven en `Sin-PortalVideos/openapi/sources/`; los `bridge_*.yaml` quedan superados
 | 06 | Seguridad y autorización | ⬜ Pendiente | `SEC-BS-01..12` definidas dentro de 04 y de `ADR-BS-007`; falta el documento propio
 | 07 | Guías de implementación | ⬜ Pendiente | Ingesta, proxy de streaming y evaluación de acceso
 | 08 | Testing | ⬜ Pendiente |
 | 09 | Infraestructura y despliegue | ⬜ Pendiente | *Ya no bloqueada:* no hay conectividad corporativa que resolver
-| 10 | Estándares y procesos | 🟡 Parcial | `estandares_codigo_v1.0.adoc` emitido (`EST-BS-01..26`). Faltan DoD y DoR
-| 11 | Gestión de producto | ✅ Completa | 8 ADR (uno descartado) + plan de primera entrega + plan de tareas `T-BS-001..063`
+| 10 | Estándares y procesos | 🟡 Parcial | `estandares_codigo_v1.0.adoc` emitido (`EST-BS-01..27`). Faltan DoD y DoR
+| 11 | Gestión de producto | ✅ Completa | 9 ADR (uno descartado) + plan de primera entrega + plan de tareas `T-BS-001..063`
 | 12 | Integraciones externas | 🟡 Parcial | `sinsatools/mapeo_sinsatools_v1.1.adoc` emitido: mapeo campo a campo del ER contra el contrato, con 9 preguntas abiertas al emisor
 |===
 
@@ -227,8 +227,8 @@ salieron dos decisiones que invalidan la mitad de la especificación anterior.
 | 🟡 Gobernaba `RF-BS-07`. *Sin objeto:* no escribimos en SinsaTools.
 
 | `MIG-BS-001`
-| ⬜ Bloqueada por `DEC-BS-01`. *Desbloqueada.* El modelo está verificado y la migración se
-  puede generar.
+| ⬜ Bloqueada por `DEC-BS-01`. ✅ *Generada y aplicada el 2026-09-18.* 17 tablas, 14 enums,
+  64 índices y la semilla de roles, verificado por `dotnet test` contra PostgreSQL real.
 
 | Los campos de auditoría de `Images` y `Entity_Files`
 | 🔴 Riesgo bloqueante sin verificar en tres documentos. *Sin objeto:* no filtramos por su
@@ -287,6 +287,7 @@ Recuperarla es una acción abierta.
 | ADR-BS-006 | El catálogo entra por una API de ingesta propia | 2026-09-16
 | ADR-BS-007 | El Bridge lee los bytes con credencial propia; el lote trae la ruta sin firmar | 2026-09-17
 | ADR-BS-008 | Inversión de dependencias: los puertos en `Application`, `Infrastructure` la referencia | 2026-09-17
+| ADR-BS-009 | El runtime es .NET 10 LTS. `REST-BS-01` reescrita: .NET 8 muere el 10-11-2026 | 2026-09-17
 | DEC-BS-06 | `industry` viene de SinsaTools; confirmado el 2026-09-17 como `Categories` vía `Category_Sku`, nivel raíz | 2026-09-16
 | DEC-BS-08 | `webPlatformId` es el filtro de alcance: el portal es una fila de `Web_Platforms` | 2026-09-17
 | DEC-BS-10 | `Files.Size` viaja en el lote; no hay `HEAD`. Retira `DT-BS-07` | 2026-09-17
@@ -336,6 +337,7 @@ reproducción— con el acoplamiento en caliente que `ADR-BS-006` acababa de eli
 | DEC-BS-05 | Rotación del `client_secret` de ingesta sin indisponibilidad | 🟢
 | DEC-BS-16 | ¿Contenedor propio del portal o el mismo que usa SinsaTools? Acota el rol | 🟡
 | DEC-BS-17 | Reabrir la opción D2 (redirect con *user delegation SAS*) si el proxy se estrecha | 🟢
+| DEC-BS-18 | Confirmar que App Service Linux sirve .NET 10 antes de desplegar (`ADR-BS-009`) | 🟠
 |===
 
 NOTE: `DEC-BS-01`, `DEC-BS-02` y `DEC-BS-04` quedan *sin objeto*. No se resolvieron: el
@@ -437,14 +439,31 @@ Dadas de baja: `DT-BS-01`, `DT-BS-03`, `DT-BS-05`.
   tráfico.
 |===
 
+[IMPORTANT]
+====
+*Fase 1 cerrada el 2026-09-18.* La solución compila con `TreatWarningsAsErrors` y
+`AnalysisMode=All`, `MIG-BS-001` está aplicada y las 16 pruebas pasan: reglas de dependencia
+(`ADR-BS-008`), nomenclatura de migraciones (`DOM-BS-05`), paridad de esquema, particionado,
+índices de expresión, orden de los tipos enumerados y semilla de roles.
+
+Tres correcciones de fondo salieron de ahí y están detalladas en el changelog del modelo de
+datos: faltaba `media_visibility` —obligatoria en el contrato de ingesta y necesaria para
+`ADR-BS-007`—, los enums se scaffoldeaban como `integer` porque la fábrica de diseño no
+compartía las opciones del proveedor, y `HasPostgresEnum` llamado sin `name:` creaba catorce
+esquemas fantasma con los tipos duplicados dentro.
+
+`schema_derivado_v2.sql` deja de escribirse a mano: lo genera
+`Sin-PortalBridge/tools/regenerar_ddl_derivado.sh` (`ADR-BS-004`, nota del 2026-09-18).
+====
+
 == Próximos pasos acordados
 
 . **Casos de uso `CU-BS-001..010`** en `02_casos_de_uso/`. Siguiente paso documental.
 . **Enviar el contrato de ingesta a SinsaTools** y acordar credenciales, cadencia y quién
   opera el simulador. *Es el camino crítico real.*
-. **Sustituir el `README.md` de `Sin-PortalBridge`** y crear el esqueleto .NET 8 de tres
-  capas.
-. **Generar `MIG-BS-001`** — ya no está bloqueada.
+. **Sustituir el `README.md` de `Sin-PortalBridge`** y crear el esqueleto de tres capas
+  sobre la LTS vigente (`ADR-BS-009`: hoy .NET 10). ✅ *Hecho el 2026-09-18.*
+. **Generar `MIG-BS-001`** — ✅ *Hecha y aplicada el 2026-09-18.*
 . **`docker-compose` con PostgreSQL 16 y el simulador de ingesta**, sembrado desde
   `fixtures.ts` del frontend.
 . **Cerrar `DEC-BS-11`** añadiendo `GET /media/{id}/access` al contrato del portal.

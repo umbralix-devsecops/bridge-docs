@@ -1,6 +1,6 @@
 = Glosario de IDs y trazabilidad — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 2.4
+:revnumber: 2.7
 :revdate: 2026-09-17
 :doctype: article
 :toc: left
@@ -128,6 +128,7 @@ Cada eslabón debe poder recorrerse en ambos sentidos:
 | ADR-BS-006 | El catálogo entra por una API de ingesta propia | ✅ Aceptada 🆕
 | ADR-BS-007 | Cómo obtiene el Bridge los bytes de Azure Blob Storage | ✅ Aceptada 🆕
 | ADR-BS-008 | Inversión de dependencias entre capas | ✅ Aceptada 🆕
+| ADR-BS-009 | El runtime es .NET 10 LTS, no .NET 8 | ✅ Aceptada 🆕
 |===
 
 .Reglas de seguridad
@@ -153,7 +154,7 @@ Cada eslabón debe poder recorrerse en ambos sentidos:
 | ID | Regla
 
 | DOM-BS-04 | El esquema se modifica solo mediante migraciones de EF Core sobre `AppDbContext`
-| DOM-BS-05 | Toda migración lleva su entrada `MIG-BS-NNN` en el changelog, en el mismo commit
+| DOM-BS-05 | *(reescrita el 2026-09-18)* Toda migración lleva su identificador `MIG_BS_NNN` *en el nombre del archivo*, único y correlativo — verificado por `MigrationChangelogTests`, falla el build— y su entrada `MIG-BS-NNN` en `changelog_modelo_datos.adoc`. El documento se queda en `bridge-docs`: la versión anterior exigía «el mismo commit», incumplible entre dos repositorios
 | DOM-BS-06 | Si cambia la forma del modelo, se emite `modelo_datos_bridge_vN.mermaid` nuevo
 | DOM-BS-07 | El SQL de vistas y permisos va en archivos `.sql` incrustados, no en literales C#
 | DOM-BS-08 | 🆕 La clave natural de un recurso es el par *origen + identificador de origen* — `(source, sourceId)` en el contrato de ingesta, `(origin, ext_media_id)` en la base—, nunca el identificador solo: `Images.Id` y `Entity_Files.Id` viven en secuencias distintas y pueden colisionar.
@@ -171,10 +172,11 @@ Cada eslabón debe poder recorrerse en ambos sentidos:
 
 | DT-BS-02 | Política de purga definida pero sin implementar el barrido | Medio
 | DT-BS-04 | Sin métrica de deriva frente a SinsaTools. Mitigada en parte por la foto completa | Medio
-| DT-BS-06 | El changelog del modelo depende de un gate humano | Medio
+| DT-BS-06 | Escribir la entrada del changelog sigue siendo humano. Reducido el 2026-09-18: el *identificador* ya lo exige el build, así que el olvido es visible en el nombre del archivo | Bajo
 | DT-BS-07 | ⬜ *Retirada el 2026-09-17.* `Files.Size` viaja en el lote; no hay `HEAD` que revalidar | —
 | DT-BS-08 | 🆕 El proxy de streaming ocupa un hilo por transferencia, sin límite de tamaño | Medio
 | DT-BS-09 | 🆕 Cuatro reglas del estándar de código dependen de revisión humana, y el equipo es de una persona: no hay segundo par de ojos | Medio
+| DT-BS-10 | 🆕 EF Core crea un índice por cada clave foránea: 17 que el diseño no pidió, incluidos los de columnas de auditoría que nadie filtra (`granted_by`, `assigned_by`, `approved_by`, `created_by`). Se revisan en la Fase 2, cuando existan las consultas reales de catálogo y permisos y se pueda medir en vez de suponer | Bajo
 |===
 
 .Decisiones abiertas
@@ -188,6 +190,7 @@ Cada eslabón debe poder recorrerse en ambos sentidos:
 | DEC-BS-15 | 🆕 Qué credencial concede SinsaTools: rol `Storage Blob Data Reader` o cadena de conexión | 🔴 *Plazo ajeno*
 | DEC-BS-16 | 🆕 ¿Contenedor propio del portal o el mismo que usa SinsaTools? Determina el alcance del rol | 🟡
 | DEC-BS-17 | 🆕 Reabrir la opción D2 (redirect con *user delegation SAS*) si el proxy se estrecha | 🟢
+| DEC-BS-18 | 🆕 Confirmar que Azure App Service Linux sirve .NET 10 antes de desplegar | 🟠
 |===
 
 .Decisiones cerradas

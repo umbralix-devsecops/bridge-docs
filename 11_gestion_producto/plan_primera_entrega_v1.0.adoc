@@ -132,12 +132,12 @@ privado.
 | Bloque | Contenido | Depende de
 
 | *Esqueleto*
-| Solución .NET 8, tres proyectos (`.Api` / `.Application` / `.Infrastructure`) más pruebas.
-  `docker-compose` con PostgreSQL 16 y Azurite. Pipeline de CI con `gitleaks` (`SEC-BS-08`).
+| Solución .NET 10, tres proyectos (`.Api` / `.Application` / `.Infrastructure`) más pruebas.
+  `docker-compose` con PostgreSQL 16 — sin Azurite: nada de la Entrega 1 toca el almacenamiento. Pipeline de CI con `gitleaks` (`SEC-BS-08`).
 | —
 
 | *`MIG-BS-001`*
-| Las 17 tablas, 14 enums y 40 índices del modelo v2, generadas por EF Core Code-First
+| Las 17 tablas, 13 enums y 40 índices del modelo v2, generadas por EF Core Code-First
   (`ADR-BS-004`). Incluye los índices únicos parciales de `ingest_batches`.
 | `DEC-BS-13`
 

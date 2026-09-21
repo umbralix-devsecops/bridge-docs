@@ -157,17 +157,36 @@ sections:
         status: vigente
         version: "2"
         type: mermaid-er
-        note: "Base única PostgreSQL 16: 14 tablas, 13 tipos enumerados, 33 índices."
+        note: "Base unica PostgreSQL 16: 17 tablas, 14 tipos enumerados, 40 indices sobre las tablas padre."
         supersedes: 04_arquitectura_tecnica/modelo_datos/_historico/modelo_datos_bridge_v1.mermaid
       - path: 04_arquitectura_tecnica/modelo_datos/_historico/modelo_datos_bridge_v1.mermaid
         status: historico
         version: "1"
         type: mermaid-er
+      - path: 04_arquitectura_tecnica/modelo_datos/schema_derivado_v2.sql
+        status: vigente
+        type: sql-ddl
+        generated: true
+        generated_by: Sin-PortalBridge/tools/regenerar_ddl_derivado.sh
+        derived_from: migraciones EF Core sobre AppDbContext
+        governed_by: [ADR-BS-004]
+        note: >
+          ARTEFACTO GENERADO, no se edita a mano. Volcado con pg_dump de la base que deja la
+          migracion. SchemaParityTests compara la migracion contra este archivo, asi que
+          editarlo a mano hace fallar el build en el commit siguiente. Hasta el 2026-09-18
+          estaba escrito a mano y la comparacion no podia cuadrar nunca: EF Core nombra los
+          indices y las restricciones de otra forma, crea un indice por clave foranea
+          (DT-BS-10) y las particiones solo existian del lado de la migracion.
       - path: 04_arquitectura_tecnica/modelo_datos/changelog_modelo_datos.adoc
         status: vigente
         living_document: true
         derived_from: migraciones EF Core sobre AppDbContext
-        governed_by: [ADR-BS-004]
+        governed_by: [ADR-BS-004, DOM-BS-05]
+        note: >
+          DOM-BS-05 se reescribio el 2026-09-18. El identificador MIG_BS_NNN viaja en el
+          nombre del archivo de migracion y lo exige MigrationChangelogTests; la entrada
+          narrativa se escribe aqui. Se evaluo mudar este documento al repo del codigo y se
+          descarto: saldria del arbol de bridge-docs, de inject-nav.ps1 y de _entregables.
 
   - id: "05"
     slug: contratos_api
@@ -282,7 +301,7 @@ sections:
           exposición de red sigue siendo válido. No se reabre.
       - path: 11_gestion_producto/adr/adr-bs-004_ef_core_fuente_unica_esquema.adoc
         status: aceptada
-        version: "1.1"
+        version: "1.2"
         depends_on: [ADR-BS-001, ADR-BS-002]
       - path: 11_gestion_producto/adr/adr-bs-005_servicio_unico.adoc
         status: aceptada
@@ -426,8 +445,12 @@ technical_debt:
       Sin métrica de deriva frente a SinsaTools. Mitigada en parte por la foto completa
       (RF-BS-14); era impacto alto
   - id: DT-BS-06
-    impact: medium
-    summary: El changelog del modelo depende de un gate humano; falta el chequeo en CI
+    impact: low
+    reduced_on: "2026-09-18"
+    summary: >
+      Escribir la entrada del changelog sigue siendo humano. El identificador MIG_BS_NNN ya
+      lo exige el build por el nombre del archivo, asi que el olvido de la entrada es visible
+      en cualquier diff. Antes el gate humano era todo; ahora es el ultimo eslabon.
   - id: DT-BS-07
     impact: low
     summary: El sizeBytes obtenido por HEAD no se revalida; el Content-Length puede desfasarse

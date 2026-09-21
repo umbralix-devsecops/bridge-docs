@@ -1,7 +1,8 @@
 = Historial de cambios del modelo de datos — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 2.1
-:revdate: 2026-09-17
+:revnumber: 2.3
+:revdate: 2026-09-18
+:revremark: MIG-BS-001 generada y aplicada. 14 enums: aparece media_visibility. El DDL derivado pasa a generarse por script.
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -15,6 +16,7 @@
 :classification: Confidencial — Solo uso interno
 
 include::{root}/_nav.adoc[]
+
 
 [IMPORTANT]
 ====
@@ -141,9 +143,9 @@ que rehacerlos, el servicio se detiene primero.
 
 [cols="1,3"]
 |===
-| *Migración EF* | `InitialCreate`
+| *Migración EF* | `MIG_BS_001_InitialSchema`
 | *Contexto* | `AppDbContext`
-| *Fecha* | 🟡 Modelo escrito el 2026-09-17; migración pendiente de generar
+| *Fecha* | ✅ Generada y aplicada el 2026-09-18 · `20260918211950`
 | *Versión del ER* | `modelo_datos_bridge_v2.mermaid`
 | *Reversibilidad* | ✅ Total (esquema vacío)
 | *Impacto en datos* | Ninguno
@@ -151,9 +153,13 @@ que rehacerlos, el servicio se detiene primero.
 | *Motivada por* | xref:{root}/11_gestion_producto/adr/adr-bs-001_cache_postgresql_propio.adoc[ADR-BS-001] · xref:{root}/11_gestion_producto/adr/adr-bs-005_servicio_unico.adoc[ADR-BS-005] · RF-BS-12 · RF-BS-18
 |===
 
-*Qué hace:* crea el esquema completo según `modelo_datos_bridge_v2.mermaid` — 17 tablas,
-13 tipos enumerados y 40 índices, en tres bloques: catálogo, identidad y permisos, e ingesta
-y auditoría.
+*Qué hace:* crea el esquema completo — 17 tablas, *14* tipos enumerados y 64 índices, en
+tres bloques: catálogo, identidad y permisos, e ingesta y auditoría. Más las cuatro primeras
+particiones de las dos tablas de auditoría.
+
+Los índices se cuentan con los de las particiones: cada índice de una tabla particionada se
+materializa en cada partición, y son objetos reales que ocupan y se mantienen. Sobre las
+tablas padre son 40.
 
 *Por qué:* es la base del sistema entero. Sin ella no hay catálogo, ni usuarios, ni permisos,
 ni portal.
@@ -168,27 +174,55 @@ ni portal.
   partición creada en la misma migración, o el primer `INSERT` falla. Conviene crear también
   la del periodo siguiente y automatizar el resto.
 * Debe aplicarse antes de aceptar el primer lote de ingesta.
+* *El nombre de la migración lleva su identificador* (`DOM-BS-05`):
+  `dotnet ef migrations add MIG_BS_001_InitialSchema`.
 
 [NOTE]
 ====
-*Entrada anticipada: la migración aún no se ha generado, pero ya no está bloqueada.*
+*El modelo tenía 13 enums y el diseño 14.* El que faltaba era `media_visibility`, y con él la
+columna `catalog_media.visibility`. No es un detalle: es obligatoria en
+`ingest_catalog_v1.0.yaml` —sin valor por defecto—, el emisor la deriva de `File_Sync.IsPublic`
+y es lo que decide si los bytes se entregan por el proxy o por su URL directa. Sin ella,
+xref:{root}/11_gestion_producto/adr/adr-bs-007_acceso_a_los_bytes.adoc[ADR-BS-007] no se puede
+implementar.
 
-La v1.0 de esta entrada estaba detenida por `DEC-BS-01` —frecuencia del sync interno frente a
-lectura en vivo del delta—, porque esa decisión podía alterar el esquema. `DEC-BS-01` quedó
-sin objeto con ADR-BS-006: no hay sync interno que planificar.
-
-*El modelo está verificado.* El DDL derivado de `modelo_datos_bridge_v2.mermaid` se ejecutó
-contra PostgreSQL 16.13 —17 tablas, 13 enums, 40 índices, cero errores— y se probaron sus
-invariantes: la colisión de identificadores entre `Images` y `Entity_Files` se admite, el
-duplicado de clave natural se rechaza, un segundo lote en ejecución se rechaza, una foto no se
-cierra dos veces, y los permisos sobreviven al `UPDATE` de la ingesta.
+Lo encontró `SchemaParityTests` comparando contra el DDL derivado, en la primera ejecución
+real de la prueba. Es exactamente para lo que existe.
 ====
 
-==== Estado al 2026-09-17
+==== DOM-BS-05, reescrita el 2026-09-18
+
+La regla decía que la migración y su entrada en este documento van *en el mismo commit*. Con
+el código en `Sin-PortalBridge` y este documento en `bridge-docs`, eso era **incumplible**: no
+existe un commit que abarque dos repositorios. Se violaba por construcción desde el primer
+día, y nadie lo notó porque todavía no había ninguna migración.
+
+*Se probó mudar este documento al repositorio del código* y se revirtió el mismo día. Salía
+del árbol de `bridge-docs` y con ello dejaba de recibir el `_nav.adoc` de `inject-nav.ps1`, de
+entrar en `_entregables/` y de encajar en `manifest.yaml`. La integridad del corpus pesa más
+que el cumplimiento literal de una regla.
+
+*La salida es mover el identificador, no el documento:* **cada migración lleva su
+`MIG_BS_NNN` en el nombre del archivo.**
+
+[source,text]
+----
+20260918120000_MIG_BS_001_InitialSchema.cs
+----
+
+`MigrationChangelogTests` exige ese patrón, la unicidad y la correlatividad, y falla el build
+si faltan. Así es imposible añadir una migración sin asignarle identificador, y el
+identificador queda visible en el nombre — de modo que olvidar la entrada de aquí salta a la
+vista en cualquier diff.
+
+Lo que sigue siendo humano es escribir la entrada. `DT-BS-06` se mantiene por eso, con impacto
+rebajado a bajo: antes el gate humano era todo, ahora es solo el último eslabón.
+
+==== Estado al 2026-09-18
 
 *El modelo de EF Core está escrito* en `Sin-PortalBridge/src/BridgeService.Infrastructure/Persistence/`:
 las 17 entidades en tres archivos, una `IEntityTypeConfiguration<T>` por entidad
-(`EST-BS-26`), los 13 tipos enumerados y `AppDbContext`. Los nombres de tabla y columna los
+(`EST-BS-26`), los 14 tipos enumerados y `AppDbContext`. Los nombres de tabla y columna los
 deriva la convención `snake_case`, no se escriben a mano.
 
 *Lo que EF Core no genera va en tres archivos `.sql` incrustados* (`EST-BS-25`, `DOM-BS-07`),
@@ -226,16 +260,50 @@ sobre una base limpia:
 
 [CAUTION]
 ====
-*Lo que falta, y no es poco:* la migración en sí. `dotnet ef migrations add` necesita acceso a
-NuGet, que no estaba disponible en el entorno donde se escribió el modelo, así que
-`Persistence/Migrations/` está vacía y el modelo *no se ha compilado nunca*.
+*Tres fallos que solo aparecieron al generar la migración de verdad.* Se dejan escritos porque
+los tres eran silenciosos —el build pasaba— y los tres se pueden repetir.
 
-Los pasos están en `Persistence/Migrations/README.md`. Hasta que se ejecuten, `MIG-BS-001`
-sigue siendo una entrada anticipada.
+*1. Las columnas de enum salieron `integer`.* La migración se generaba con
+`access_result integer`, y al aplicarla reventaba el `CHECK ck_access` con
+`22P02: invalid input syntax for type integer: "denied"`. Los enums hay que declararlos *dos
+veces*: `HasPostgresEnum` en el modelo, que es lo que emite el `CREATE TYPE`, y `MapEnum` en el
+proveedor, que es lo que enseña a Npgsql que la propiedad es de ese tipo. `AddInfrastructure`
+tenía los `MapEnum`; la fábrica de diseño que usa `dotnet ef` no, y scaffoldeaba sin saberlo.
+Corregido centralizando las opciones en `NpgsqlBridgeOptionsExtensions.UseBridgeNpgsql(...)`,
+que usan la DI, la fábrica y las pruebas.
 
-Y una consecuencia de esto: `SchemaParityTests` —la prueba que compara la migración contra
-este DDL derivado— tampoco se ha ejecutado. Es la primera que hay que mirar tras el
-`dotnet restore`.
+*2. Se crearon 14 esquemas basura.* La firma genérica es
+`HasPostgresEnum<TEnum>(string? schema = null, string? name = null, ...)`: el primer parámetro
+posicional es el *esquema*. Escrito `HasPostgresEnum<Industry>("industry")` se declaraba un
+esquema `industry` con el tipo dentro, EF emitía el `CREATE SCHEMA` sin protestar, y la base
+acababa con 28 tipos —14 buenos en `public` y 14 duplicados—. No falló nada porque el tipo que
+usaban las columnas lo registraba `MapEnum` por su cuenta.
+
+Y con él se colaba un cambio de semántica: los de `public` llevaban las etiquetas en orden
+*alfabético*, porque `MapEnum` las ordena así. El orden de un enum en PostgreSQL define `<`,
+`>` y el `ORDER BY`, e `industry` tiene un orden de negocio que no es el alfabético. Corregido
+pasando las catorce llamadas a `HasPostgresEnum<T>(name: "...")`, y vigilado por
+`Los_enums_viven_en_public_y_en_el_orden_declarado`, que no se apoya en el DDL derivado
+precisamente para no heredar el fallo.
+
+*3. El `DROP TABLE` de `001_partitioning.sql` se llevaba tres índices.* Al recrear
+`video_access_log` y `api_request_log` como particionadas desaparecían los índices de clave
+foránea que EF acababa de crear sobre ellas, y `002` solo crea los dos de expresión. El
+archivo los recrea ahora él mismo, antes de las particiones — un índice sobre una tabla
+particionada solo se propaga a las particiones creadas *después*.
+====
+
+[IMPORTANT]
+====
+*El DDL derivado ya no se escribe a mano.* `schema_derivado_v2.sql` lo genera
+`Sin-PortalBridge/tools/regenerar_ddl_derivado.sh` volcando con `pg_dump` la base que deja
+esta migración. Editarlo a mano solo consigue que `SchemaParityTests` falle en el commit
+siguiente.
+
+Eso cambia lo que esa prueba significa. Ya no comprueba que dos diseños coincidan —es cierto
+por construcción—: comprueba que el archivo versionado esté al día, y falla cuando alguien
+emite una migración y no regenera el volcado. Lo que el volcado no puede vigilar, por
+circular, se comprueba aparte.
 ====
 
 '''

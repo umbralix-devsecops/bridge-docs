@@ -40,7 +40,7 @@ conjuntos se leen a menudo juntos.
 | 2026-08-22
 
 | xref:adr-bs-002_efcore_dos_proveedores.adoc[ADR-BS-002]
-| EF Core 8 Code-First sobre PostgreSQL. *Revisada: queda un solo proveedor*
+| EF Core Code-First sobre PostgreSQL. *Revisada: queda un solo proveedor.* Versión alineada con el runtime (`ADR-BS-009`)
 | ✅ Aceptada · revisada
 | 2026-08-22
 
@@ -66,6 +66,11 @@ conjuntos se leen a menudo juntos.
 
 | xref:adr-bs-008_inversion_de_dependencias.adoc[ADR-BS-008]
 | Inversión de dependencias entre capas: los puertos en `Application` 🆕
+| ✅ Aceptada
+| 2026-09-17
+
+| xref:adr-bs-009_runtime_net10.adoc[ADR-BS-009]
+| El runtime es .NET 10 LTS, no .NET 8 🆕
 | ✅ Aceptada
 | 2026-09-17
 |===
@@ -134,13 +139,13 @@ Tomadas al definir el proyecto. No se reabren salvo que un ADR las supere.
   ambos conjuntos se leen juntos. Confirmado el 2026-08-22.
 
 | Stack
-| .NET 8 (C#) · REST-BS-01
+| .NET (C#) sobre la LTS vigente · REST-BS-01, reescrita el 2026-09-17 por `ADR-BS-009`. Hoy: .NET 10, C# 14
 
 | Arquitectura
 | Clean Architecture. *Revisada el 2026-09-16:* tres capas —`Api`, `Application`,
   `Infrastructure`— en vez de dos, porque el servicio dejó de ser un traductor entre esquemas
   y pasó a contener evaluación de acceso, sesiones, ingesta y streaming
-  (`arquitectura_tecnica_bridge_service_v2.1.adoc` §5). *La dirección de las dependencias
+  (`arquitectura_tecnica_bridge_service_v2.3.adoc` §5). *La dirección de las dependencias
   deja de ser heredada el 2026-09-17:* tiene ADR propio, `ADR-BS-008`.
 
 | Repositorio
@@ -161,7 +166,7 @@ Tomadas al definir el proyecto. No se reabren salvo que un ADR las supere.
 Estos números no se reutilizan (`Glosario_IDs`, regla 1):
 
 * *ADR:* `ADR-BS-003` — descartada, el archivo se conserva.
-* *Estándares:* ninguno quemado todavía (`EST-BS-01..26` emitidos el 2026-09-17).
+* *Estándares:* ninguno quemado todavía (`EST-BS-01..27` emitidos el 2026-09-17).
 * *Requerimientos funcionales:* `RF-BS-03`, `RF-BS-04`, `RF-BS-07`, `RF-BS-09`, `RF-BS-10`,
   `RF-BS-11`.
 * *No funcionales:* `RNF-BS-05`.

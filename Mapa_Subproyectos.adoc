@@ -18,7 +18,7 @@ include::{root}/_nav.adoc[]
 
 == Panorama
 
-[source,mermaid]
+[mermaid]
 ----
 flowchart TB
     subgraph EXT["Terceros · SinsaTools"]

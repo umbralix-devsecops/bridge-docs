@@ -1,8 +1,8 @@
 = ADR-BS-004 — EF Core como fuente única de verdad del esquema propio
 :author: Equipo de Desarrollo
-:revnumber: 1.1
+:revnumber: 1.2
 :revdate: 2026-08-23
-:revremark: Nota del 2026-09-16: la API de ingesta es lo que mantiene esta decisión en pie
+:revremark: Nota del 2026-09-18: el DDL derivado deja de escribirse a mano y pasa a generarse por script
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -202,6 +202,35 @@ xref:adr-bs-005_servicio_unico.adoc[ADR-BS-005] eso solo vale para las tres tabl
 catálogo. Las de identidad, permisos y auditoría **no se reconstruyen desde ningún sitio**:
 una migración que las dañe es irreversible sin copia de seguridad. Ver la revisión de
 xref:adr-bs-001_cache_postgresql_propio.adoc[ADR-BS-001].
+====
+
+== Nota del 2026-09-18 — el derivado se genera, no se escribe
+
+Al aplicar `MIG-BS-001` quedó claro que «derivado» se estaba cumpliendo solo de palabra:
+`schema_derivado_v2.sql` estaba *escrito a mano*, y `SchemaParityTests` comparaba la migración
+contra él exigiendo igualdad exacta. Eso no podía cuadrar nunca, y no por un fallo de diseño:
+
+* EF Core nombra `pk_catalog_media` donde el archivo decía `catalog_media_pkey`, y
+  `ix_groups_name` donde decía `groups_name_key`. El mismo objeto con otro nombre.
+* EF Core crea un índice por cada clave foránea; el archivo no los declaraba (`DT-BS-10`).
+* Las particiones de las tablas de auditoría existían solo del lado de la migración.
+
+*El archivo pasa a generarse* con `Sin-PortalBridge/tools/regenerar_ddl_derivado.sh`, que
+vuelca con `pg_dump` la base que deja la migración. El precio es que pierde los comentarios de
+diseño que tenía; a cambio, «la fuente es EF Core» deja de ser una afirmación y pasa a ser una
+propiedad que el build comprueba.
+
+[NOTE]
+====
+*Cambia lo que verifica `SchemaParityTests`.* Ya no comprueba que dos diseños coincidan —eso
+es cierto por construcción—: comprueba que el archivo versionado esté al día, y falla cuando
+alguien emite una migración y no regenera el volcado.
+
+Con ello aparece un hueco: nada de lo que el volcado hereda del modelo puede vigilarse
+comparando contra el volcado, porque heredaría el fallo y lo daría por bueno. Las propiedades
+de esa clase se comprueban con aserciones escritas aparte —hoy, que los tipos enumerados vivan
+en `public` y conserven su orden de declaración—. Es la contrapartida de esta nota, y conviene
+recordarla antes de añadir una comprobación nueva «contra el DDL».
 ====
 
 include::{root}/_nav.adoc[]

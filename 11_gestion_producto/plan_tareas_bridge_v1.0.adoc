@@ -1,6 +1,6 @@
 = Plan de tareas — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 1.2
+:revnumber: 1.5
 :revdate: 2026-09-17
 :revremark: T-BS-006, umbral de cobertura, y corrección de los nombres de rol y del recuento de enums tras la Fase 1
 :doctype: article
@@ -93,9 +93,11 @@ decisiones de fontanería.
 | —
 
 | `T-BS-002`
-| `docker-compose.yml`: `postgres:16`, `azurite`, y la API. `healthcheck` en los tres y
-  dependencias por condición.
-| `docker compose up` deja los tres contenedores en *healthy* y `GET /health` responde `200`.
+| `docker-compose.yml`: `postgres:16` y la API, con `healthcheck` en los dos y dependencia por
+  condición. *Sin Azurite:* en la Entrega 1 nada toca el almacenamiento, y las pruebas que lo
+  necesiten usan `Testcontainers.Azurite`, que levanta su propio contenedor. Entra en la
+  Entrega 2 con el proxy (`T-BS-071`).
+| `docker compose up` deja los dos contenedores en *healthy* y `GET /health` responde `200`.
 | `T-BS-001`
 
 | `T-BS-003`
@@ -158,7 +160,7 @@ La fase que más cuesta deshacer. Se hace entera antes de tocar ningún endpoint
 | `T-BS-005`
 
 | `T-BS-013`
-| `MIG-BS-001`. Incluye a mano lo que EF Core no genera: los índices únicos *parciales*
+| `MIG-BS-001`, generada como `MIG_BS_001_InitialSchema`. Incluye a mano lo que EF Core no genera: los índices únicos *parciales*
   (`ux_ingest_running`, `ux_snapshot_close`), el `PARTITION BY RANGE`, las extensiones
   `citext` y `pgcrypto`, y el índice GIN de búsqueda.
 | La migración aplicada sobre una base vacía produce un esquema **idéntico** a
@@ -176,8 +178,11 @@ La fase que más cuesta deshacer. Se hace entera antes de tocar ningún endpoint
 | `T-BS-013`
 
 | `T-BS-015`
-| Entrada `MIG-BS-001` en `changelog_modelo_datos.adoc`, **en el mismo commit**.
-| El changelog y la migración están en el mismo commit.
+| Entrada `MIG-BS-001` en `changelog_modelo_datos.adoc`, que se queda en `bridge-docs`. La
+  migración se genera como `MIG_BS_001_InitialSchema`: el identificador viaja en el nombre
+  (`DOM-BS-05`, reescrita el 2026-09-18).
+| `MigrationChangelogTests` pasa: patrón, unicidad, correlatividad y orden cronológico. La
+  entrada narrativa sigue siendo humana (`DT-BS-06`).
 | `T-BS-013`
 |===
 
@@ -407,7 +412,8 @@ Se lista para que se vea el encaje, no para hacerla ahora.
 | `DEC-BS-11` ✅ ya resuelta
 
 | `T-BS-071`
-| Proxy `GET /media/{id}/stream` con propagación de `Range` y respuesta `206`.
+| Proxy `GET /media/{id}/stream` con propagación de `Range` y respuesta `206`. Incluye añadir
+  Azurite al `docker-compose.yml`, que la Entrega 1 no necesita.
 | `DEC-BS-15` — *el rol de lectura, plazo ajeno*
 
 | `T-BS-072`
