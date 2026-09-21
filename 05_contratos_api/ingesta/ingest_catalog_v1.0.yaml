@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: Portal de Videos — API de Ingesta de Catálogo
-  version: 1.0.0
+  version: 1.1.0
   description: |
     Contrato de entrada del catálogo desde el **microservicio de integraciones de
     SinsaTools** hacia el Portal de Videos.
@@ -98,7 +98,9 @@ paths:
         El token dura **una hora**. El emisor debe cachearlo y renovarlo cuando queden menos
         de cinco minutos, no pedir uno nuevo por lote.
 
-        Límite de intentos fallidos: 10 por minuto y `clientId`, 50 por minuto e IP.
+        Límite de intentos: 50 por minuto e IP, contando todas las peticiones a este
+        endpoint. El bloqueo por intentos fallidos y `clientId` (10 por minuto) está previsto
+        pero no implementado (`DT-BS-12`); mientras tanto, el límite por IP es el que aplica.
       security: []
       requestBody:
         required: true
@@ -132,9 +134,20 @@ paths:
       operationId: ingestCatalog
       summary: Recibe un lote de catálogo
       description: |
-        Aplica el lote de forma **asíncrona**: responde `202` en cuanto lo ha validado y
-        persistido en la cola de ingesta, y devuelve un `ingestId` con el que consultar el
-        resultado en `GET /v1/ingest/{ingestId}`.
+        Valida y **aplica el lote en la misma petición** (`DEC-BS-21`, 2026-09-21): la
+        respuesta `202` llega cuando el lote ya está aplicado y su `status` es el final
+        —`completed`, `partial` o `failed`—, nunca `queued`. Se conserva el `202` por
+        compatibilidad con los clientes escritos contra la 1.0.0; lo que cambia es que ya no
+        hace falta hacer *polling*. `GET /v1/ingest/{ingestId}` sigue existiendo para consultar
+        el resultado después, durante 90 días.
+
+        > La 1.0.0 describía una cola y aplicación asíncrona. Se cambió porque el esquema no
+        > guarda la carga útil —una cola solo podría vivir en memoria— y porque el `409` al
+        > lote concurrente y el `SNAPSHOT_SEQUENCE_GAP` presuponen que lo aplicado y lo
+        > aceptado coinciden. Un lote de 200 productos se aplica en menos de tres segundos.
+
+        Un lote no puede aplicarse mientras otro se está aplicando: el segundo recibe `409`
+        con `INGEST_IN_PROGRESS` y debe reintentar en cuanto el primero termine.
 
         ## Validación
 
@@ -274,7 +287,7 @@ paths:
                   value:
                     ingestId: 2a7f0c91-0000-4000-8000-000000000010
                     batchId: 8f14e45f-ceea-467a-9f4e-2b1c3d4e5f60
-                    status: queued
+                    status: completed
                     duplicate: false
                     received: { products: 1, versions: 1, media: 2 }
                     receivedAt: '2026-09-16T14:30:02Z'
@@ -305,11 +318,16 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
         '409':
-          description: Secuencia de snapshot inválida o snapshot ya cerrado
+          description: Otro lote en ejecución, secuencia de snapshot inválida o snapshot ya cerrado
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
               examples:
+                en_curso:
+                  summary: Otro lote se está aplicando (DOM-BS-09). Reintentar en cuanto termine.
+                  value:
+                    code: INGEST_IN_PROGRESS
+                    message: Another batch is being applied. Retry when it finishes.
                 fuera_de_orden:
                   value:
                     code: SNAPSHOT_SEQUENCE_GAP
@@ -325,11 +343,11 @@ paths:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
               example: { code: BATCH_TOO_LARGE, message: 'Máximo 200 productos y 10 MB por lote.' }
         '429':
-          description: Demasiados lotes por minuto
+          description: Demasiados lotes por minuto (60 por minuto e IP)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
-              example: { code: RATE_LIMITED, message: Máximo 60 lotes por minuto. }
+              example: { code: RATE_LIMITED, message: Too many requests. Please retry later. }
 
   # ────────────────────────────────────────────────────────────────────────────
 
@@ -716,7 +734,10 @@ components:
             - `file://<servidor>/<recurso>/<ruta>` — recurso de red, admitido por compatibilidad
 
             El contenedor del URI debe corresponderse con `visibility`: un recurso `private`
-            en el contenedor público, o al revés, es un error de forma y tumba el lote.
+            en el contenedor público, o al revés, es un error de forma y tumba el lote. El
+            Portal sabe cuál es cada contenedor **por configuración** (`DEC-BS-22`), no por su
+            nombre: la comprobación solo se aplica a URIs de la cuenta configurada, y un
+            contenedor que no sea ninguno de los dos también se rechaza.
 
             Una ruta relativa se rechaza: el Portal no puede resolverla sin conocer la
             configuración de SinsaTools.
@@ -757,6 +778,10 @@ components:
         status:
           type: string
           enum: [queued, running, completed, partial, failed]
+          description: |
+            Estado **final** del lote: la aplicación es síncrona, así que en la práctica es
+            `completed`, `partial` o `failed`. `queued` y `running` se conservan en el
+            enumerado por compatibilidad y para `GET /v1/ingest/{ingestId}`.
         duplicate:
           type: boolean
           description: '`true` si este `batchId` ya se había procesado. No se ha aplicado nada nuevo.'

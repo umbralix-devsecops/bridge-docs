@@ -1,6 +1,6 @@
 = Estándares de código — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 1.4
+:revnumber: 1.5
 :revdate: 2026-09-21
 :revremark: EST-BS-14 reescrita (la forma del error es la del contrato, no ProblemDetails), EST-BS-13 y EST-BS-19 matizadas, y las cinco reglas de analizador que la Fase 2 obligó a apagar.
 :doctype: article
@@ -360,6 +360,17 @@ listan aquí porque un `severity = none` sin explicación es indistinguible de l
 | Persigue el SQL construido con entrada de usuario. En un fixture de integración no hay
   entrada de usuario: el SQL son literales de introspección del propio archivo. En `src/` sigue
   en *error*, que es donde hay peticiones (`SEC-BS-03`).
+
+| `CA1054` / `CA1056` (solo en tres archivos de `Application/Ingest`)
+| «Lo que se llame `*Uri` debe ser `System.Uri`.» En `CatalogBatchInput`, `CatalogModel` y
+  `StorageUriResolver` el texto **es** el dato: `DOM-BS-10` exige conservar el `storageUri` tal
+  y como lo envió el emisor —`System.Uri` lo normaliza y ese texto es además la clave de caché
+  del navegador—, la entrada cruda tiene que admitir un valor inválido para poder describirlo
+  con su ruta de campo, y `Storage:AccountUri` es un prefijo que se compara de forma literal.
+  Va en `.editorconfig` y no en `[SuppressMessage]` porque sobre los parámetros posicionales de
+  un *record* la regla se emite en el parámetro y en la propiedad sintetizada a la vez, y el
+  destino `[property:]` no la calla. `Catalog.cs`, que es una clase, sí la suprime con el
+  atributo. En el resto del código las dos reglas siguen en *error*.
 
 | `CA1303`
 | Exigiría recursos localizados para cadenas que solo aparecen en logs y diagnósticos.

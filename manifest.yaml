@@ -213,7 +213,12 @@ sections:
     documents:
       - path: 05_contratos_api/ingesta/ingest_catalog_v1.0.yaml
         status: vigente
-        version: "1.0"
+        version: "1.1.0"
+        note: >
+          1.1.0 (2026-09-21): aplicación síncrona (DEC-BS-21), INGEST_IN_PROGRESS, límites de
+          tasa por IP, contenedores por configuración (DEC-BS-22). Cambios compatibles: el 202
+          se conserva; solo cambia el status que trae. El archivo conserva el sufijo _v1.0 del
+          nombre porque la ruta es la que citan los demás documentos.
         counterpart: equipo de SinsaTools
         governed_by: [ADR-BS-006]
         implements: [RF-BS-12..17]
@@ -323,6 +328,30 @@ sections:
         depends_on: [ADR-BS-004, ADR-BS-005]
         defines: [DOM-BS-08, DOM-BS-09, DOM-BS-10, REST-BS-12, REST-BS-13, SEC-BS-10]
         note: "El catálogo entra por POST /v1/ingest/catalog. Descarta ADR-BS-003."
+      - path: 11_gestion_producto/adr/adr-bs-007_acceso_a_los_bytes.adoc
+        status: aceptada
+        version: "1.0"
+        depends_on: [ADR-BS-006]
+        note: "Cierra DEC-BS-14: el Bridge lee los bytes con credencial propia y los sirve como proxy."
+      - path: 11_gestion_producto/adr/adr-bs-008_inversion_de_dependencias.adoc
+        status: aceptada
+        version: "1.0"
+        note: "Puertos en Application/Abstractions; Infrastructure los implementa; Api cablea."
+      - path: 11_gestion_producto/plan_primera_entrega_v1.0.adoc
+        status: vigente
+        version: "1.0"
+      - path: 11_gestion_producto/plan_tareas_bridge_v1.0.adoc
+        status: vigente
+        version: "1.7"
+        note: "Fases 0 a 3 cerradas el 2026-09-21."
+      - path: 11_gestion_producto/verificacion_fase3_plan_vs_ejecucion_v1.0.adoc
+        status: vigente
+        version: "1.2"
+        note: >
+          Registro de desvíos entre lo planeado y lo ejecutado en la Fase 3. Se actualiza al
+          cerrar cada tarea de la fase; la fase no se cierra con filas en estado pendiente.
+          Los cuatro documentos anteriores estaban vigentes y fuera de este índice hasta el
+          2026-09-21 (hallazgo H3-03).
     planned:
       - backlog_inicial_v1.0.adoc
       - roadmap_tecnico_v1.0.adoc

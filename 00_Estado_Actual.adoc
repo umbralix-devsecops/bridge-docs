@@ -1,6 +1,6 @@
 = Estado Actual — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 3.0
+:revnumber: 3.1
 :revdate: 2026-09-21
 :doctype: article
 :toc: left
@@ -31,7 +31,7 @@ arquitectura, modelo de datos y contrato de ingesta cerrados y mutuamente cohere
 *Sin bloqueantes externos para arrancar:* el plan de primera entrega
 (`11_gestion_producto/plan_primera_entrega_v1.0.adoc`) está emitido y su camino crítico es
 interno. Lo único con plazo ajeno es el rol de lectura sobre el almacenamiento (`DEC-BS-15`),
-que condiciona la Entrega 2, no la 1. Código: sin empezar.
+que condiciona la Entrega 2, no la 1. *Código: Fases 0 a 3 cerradas* — cimientos, datos, identidad e ingesta; 158 pruebas en verde. Siguiente: Fase 4, catálogo.
 
 == Semáforo por sección
 
@@ -43,7 +43,7 @@ que condiciona la Entrega 2, no la 1. Código: sin empezar.
 | 02 | Casos de uso | ⬜ Pendiente | `CU-BS-001..010` listados en los requerimientos, sin desarrollar. Siguiente en la ruta documental
 | 03 | Diseño | ⬜ Pendiente | C4 y diagramas de estado de la ingesta. El diseño de interfaz vive en el frontend
 | 04 | Arquitectura técnica | ✅ Completa | `arquitectura_tecnica_bridge_service_v2.3.adoc` vigente · `DOM-BS-05` reescrita: el identificador viaja en el nombre de la migración · v1.0 y v1.1 en `_historico/` · modelo de datos v2 verificado
-| 05 | Contratos API | 🟡 Parcial | `ingesta/ingest_catalog_v1.0.yaml` emitido. Los seis `api_*.yaml` del portal viven en `Sin-PortalVideos/openapi/sources/`; los `bridge_*.yaml` quedan superados
+| 05 | Contratos API | 🟡 Parcial | `ingesta/ingest_catalog_v1.0.yaml` en **1.1.0** (síncrono, `INGEST_IN_PROGRESS`, límites por IP; hay que enviársela a SinsaTools). Los seis `api_*.yaml` del portal viven en `Sin-PortalVideos/openapi/sources/`; los `bridge_*.yaml` quedan superados
 | 06 | Seguridad y autorización | ⬜ Pendiente | `SEC-BS-01..12` definidas dentro de 04 y de `ADR-BS-007`; falta el documento propio
 | 07 | Guías de implementación | ⬜ Pendiente | Ingesta, proxy de streaming y evaluación de acceso
 | 08 | Testing | ⬜ Pendiente |
@@ -438,6 +438,40 @@ Dadas de baja: `DT-BS-01`, `DT-BS-03`, `DT-BS-05`.
 | *Deployment slots* de App Service con intercambio, para validar el arranque antes de recibir
   tráfico.
 |===
+
+[IMPORTANT]
+====
+*Fase 3 cerrada el 2026-09-21 — ingesta.* `POST /v1/auth/token`, `POST /v1/ingest/catalog`,
+`GET /v1/ingest/{ingestId}` y `GET /v1/ingest/watermark`. Segundo esquema de autenticación
+con su propia audiencia (`SEC-BS-09` probado en las dos direcciones), validación completa del
+lote con ruta JSON por campo, resolutor de `storageUri` que nunca reconoce por patrón, *upsert*
+por claves de origen con reconciliación por `last_seen_at`, cerrojo de un solo lote por índice
+parcial, idempotencia por `batchId`, barrido de lotes muertos, límites de tasa y gzip. 158
+pruebas en verde.
+
+*Lo importante de esta fase no es el código, es el registro:*
+`11_gestion_producto/verificacion_fase3_plan_vs_ejecucion_v1.0.adoc` compara las cuatro
+fuentes —plan, contrato, glosario y `appsettings`— contra lo ejecutado, y salieron **veinte
+desvíos**, ninguno error de ejecución: documentos escritos en momentos distintos que dejaron
+de coincidir. Los que hay que conocer:
+
+* *Aplicación síncrona* (`DEC-BS-21`). El contrato prometía cola; el esquema no guarda la carga
+  útil y los criterios de concurrencia y secuencia presuponen lo contrario. Contrato en 1.1.0.
+* *Secreto de ingesta como resumen SHA-256*, no en claro (`DEC-BS-20`). El secreto se genera,
+  no se teclea.
+* *Token de ingesta de 60 minutos*, manda el contrato (`DEC-BS-19`).
+* *Contenedores por configuración*, `Storage:PublicContainer` y `PrivateContainer`
+  (`DEC-BS-22`). Y `Ingest:WebPlatformId` opcional hasta que SinsaTools lo facilite
+  (`DEC-BS-23`).
+* *Sin transacción explícita*: `EnableRetryOnFailure` no la admite y la primera ejecución
+  falló entera por eso. Un solo `SaveChanges` es la unidad atómica (V3-20).
+* *Deuda nueva:* `DT-BS-12`, el bloqueo por `clientId` fallido del contrato es un *lockout*,
+  no un límite de tasa, y no está implementado.
+
+Para SinsaTools, tres cosas que pedir y una que enviar: el rol `Storage Blob Data Reader`
+(`DEC-BS-15`), el Id del portal en `Web_Platforms`, el endpoint de reingesta; y el contrato
+1.1.0 con la credencial de ingesta.
+====
 
 [IMPORTANT]
 ====

@@ -1,0 +1,261 @@
+= Verificación de la Fase 3 — lo planeado frente a lo ejecutado
+:author: Equipo de Desarrollo
+:revnumber: 1.2
+:revdate: 2026-09-21
+:revremark: Fase cerrada: 158 pruebas en verde el 2026-09-21. Veinte desvíos, ninguno en estado pendiente; dos hallazgos (V3-15, V3-19) quedan como 📌 con tarea nombrada.
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:sectnumlevels: 3
+:icons: font
+:lang: es
+:root: ..
+:section-id: gestion-producto
+:section-title: Gestión de Producto
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+---
+
+[.lead]
+Registro de todo lo que la ejecución de la Fase 3 —Ingesta— cambió respecto de lo que estaba
+escrito antes de empezarla. «Lo escrito antes» son cuatro fuentes:
+`plan_tareas_bridge_v1.0.adoc` (la tabla de `T-BS-030` a `T-BS-036`),
+`05_contratos_api/ingesta/ingest_catalog_v1.0.yaml`, las reglas `DOM-BS-09` a `DOM-BS-13` y
+`SEC-BS-10` del glosario, y la sección `Ingest` de `appsettings.json` tal y como la dejó la
+Fase 0.
+
+== Por qué existe este documento
+
+Las fases 1 y 2 se cerraron anotando los desvíos en el propio plan y en el estado actual, y
+funcionó porque fueron pocos. La Fase 3 arrancó distinto: **antes de escribir la segunda
+tarea ya había cinco contradicciones entre las fuentes** —el contrato contra el plan, el
+plan contra el esquema, `appsettings` contra el contrato—, y ninguna de ellas era un error de
+ejecución: eran documentos escritos en momentos distintos por la misma persona, cada uno
+correcto respecto de lo que se sabía cuando se escribió.
+
+Eso pide un registro propio. No para culpar al plan, sino para que al cerrar la fase se pueda
+responder con evidencia a la pregunta *«¿el sistema hace lo que los documentos dicen?»*, y
+corregir el documento que se haya quedado atrás en vez de descubrirlo con un lote real.
+
+.Convenciones de estado
+[cols="1,4"]
+|===
+| ✅ *Aplicado* | El código y el documento afectado ya dicen lo mismo.
+| 🔧 *Decidido, pendiente de aplicar* | La decisión está tomada y registrada; el código o el documento aún no la reflejan. Se aplica en la tarea indicada.
+| 📌 *Hallazgo* | No es un cambio: es algo que la ejecución hizo visible y que alguien debe tener presente.
+|===
+
+== Desvíos
+
+[cols="1,2,2,3,1,1",options="header"]
+|===
+| # | Dónde estaba escrito | Qué decía | Qué se hizo, y por qué | Registro | Estado
+
+| V3-01
+| `appsettings.json` → `Ingest:TokenLifetimeMinutes`
+| `15`
+| **`60`**. El contrato de ingesta dice una hora y que el emisor cachea el token renovándolo con cinco minutos de margen: caducar a los 15 le daría `401` en producción sobre un contrato ya publicado. Manda el contrato, que es la interfaz con un equipo externo.
+| `DEC-BS-19`
+| ✅ `T-BS-030`
+
+| V3-02
+| `appsettings.json` y `appsettings.Development.json` → `Ingest:ClientSecret`; contrato: «la comparación del secreto es en tiempo constante»
+| El secreto en claro en configuración, comparado en tiempo constante
+| **Solo el resumen SHA-256** (`Ingest:ClientSecretHash`). El Portal únicamente *verifica* el secreto; guardar lo que no se necesita es pasivo, y la superficie de la configuración es más ancha que Key Vault. SHA-256 y no un KDF porque el secreto lo generamos nosotros con 256 bits de entropía y `/v1/auth/token` es un endpoint sin autenticar, donde un KDF sería un vector de denegación de servicio. Consecuencia de procedimiento: *el secreto se genera, no se teclea*. El contrato no cambia: el resumen es detalle interno, invisible para el emisor.
+| `DEC-BS-20`
+| ✅ `T-BS-030`
+
+| V3-03
+| Contrato → `/v1/auth/token`: «Límite de intentos fallidos: 10 por minuto y `clientId`, 50 por minuto e IP»
+| Dos límites, uno de ellos por intentos *fallidos* y por `clientId`
+| Solo el de **50 por minuto e IP**. El de `clientId` fallido no es un límite de tasa sino un bloqueo por intentos fallidos: un limitador decide *antes* de ejecutar, cuando aún no sabe si la petición va a fallar, y particionar por `clientId` obligaría a leer el cuerpo en el *middleware*. Además el implementado cuenta *todas* las peticiones, no solo las fallidas: es más estricto y no molesta a un emisor que pide un token por hora. El contrato **no** se corrige: un límite que no aplicamos es más permisivo para el emisor y no puede romperle; cuando se pague la deuda, el texto volverá a ser cierto.
+| `DT-BS-12`
+| ✅ `T-BS-030` (parcial, con deuda)
+
+| V3-04
+| `plan_tareas` → `T-BS-030`, «hecho cuando»: «…y el de usuario no abre ningún `/v1/ingest/**`»
+| Criterio verificable en la propia tarea
+| La segunda mitad **no se puede probar hasta que exista un endpoint bajo `/v1/ingest/**`**, y el primero llega con `T-BS-031`. La primera mitad —el token de ingesta no abre `/api/**`— sí está probada (`IngestAuthEndpointsTests`). La prueba de la segunda mitad se escribe junto al primer endpoint de lote, no como prueba saltada.
+| —
+| ✅ `IngestEndpointsTests.Un_token_de_usuario_no_abre_ningun_endpoint_de_ingesta`
+
+| V3-05
+| Contrato → `/v1/ingest/catalog`: «Aplica el lote de forma **asíncrona**: responde `202` en cuanto lo ha validado y persistido en la cola de ingesta»
+| Aceptar, encolar, aplicar después
+| **Síncrono: se valida y se aplica en la misma transacción, y el `202` lleva el estado final.** Tres razones. El esquema no tiene dónde guardar la carga útil —`ingest_batches` no tiene columna de *payload*—, así que la cola solo podría vivir en memoria y un proceso caído quemaría el `batchId` sin aplicarlo. El criterio de `T-BS-032` («dos lotes simultáneos: el segundo recibe `409`») y el `SNAPSHOT_SEQUENCE_GAP` del propio contrato solo tienen sentido si lo *aplicado* y lo *aceptado* coinciden. Y aplicar 200 productos cabe de sobra en una transacción: lo único que habría justificado la cola —el `HEAD` al almacenamiento por `sizeBytes`— lo retiró `DEC-BS-10`. El código `202` se conserva por compatibilidad; cambia solo la descripción y el valor de `status` en el ejemplo `nuevo`.
+| `DEC-BS-21`
+| ✅ `IngestCatalogCommandHandler`; YAML 1.1.0
+
+| V3-06
+| Glosario → `DOM-BS-11`; `plan_tareas` → `T-BS-031` «hecho cuando»
+| Un `storageUri` con `?` se rechaza con **`422`**
+| **`400`**, como cualquier otro error de forma. El contrato define un solo código para los errores de forma, `400` con detalle por campo, y no define ningún `422`; un `?sig=` es exactamente eso, un campo mal formado. Se corrigen la regla y el criterio, no el contrato.
+| `DOM-BS-11` reescrita
+| ✅ validador, glosario y plan
+
+| V3-07
+| Contrato → `IngestMedia.storageUri`: «El contenedor del URI debe corresponderse con `visibility`»; `plan_tareas` → `T-BS-034`: «Nunca reconoce por patrón ni el host ni el nombre del contenedor»
+| Las dos cosas a la vez, y son incompatibles tal cual
+| Los nombres de los dos contenedores pasan a **configuración**: `Storage:PublicContainer` y `Storage:PrivateContainer`. La comprobación es una *búsqueda* en esa configuración, no un *patrón* sobre el nombre —que es lo que `T-BS-034` prohíbe, y con razón: una regla que dependa de que el contenedor se llame `…-private` funciona en Azurite y falla al desplegar—. Cumple las dos fuentes. Es configuración nueva que ninguna de las dos preveía.
+| `DEC-BS-22`
+| ✅ `StorageResolverSettings`; YAML 1.1.0
+
+| V3-08
+| Glosario → `DOM-BS-13`
+| Un recurso cuyo `webPlatformId` no sea el del portal se rechaza
+| La regla se escribe y se prueba, pero **`Ingest:WebPlatformId` es opcional**: con valor, se aplica; sin valor, se acepta todo y se registra una advertencia al arrancar. El identificador del portal en `Web_Platforms` es una de las tres cosas que aún hay que pedir a SinsaTools, y hacerlo obligatorio impediría desplegar la ingesta hasta la única fecha del plan que no controlamos. La regla se enciende con una línea de configuración.
+| `DEC-BS-23`
+| ✅ `IngestSettings.WebPlatformId`; advertencia al arrancar
+
+| V3-09
+| `appsettings.json` → `Ingest:MaxBatchItems`
+| `5000`
+| El contrato fija **200 productos y 10 MB por lote**, y `MaxBatchItems` no dice de qué cuenta 5 000. Se sustituye por `MaxProductsPerBatch: 200` y `MaxBodyBytes: 10485760`, los dos del contrato. Mismo criterio que V3-01: los límites son parte de la interfaz con el emisor.
+| —
+| ✅ `MaxProductsPerBatch` + `[RequestSizeLimit]`
+
+| V3-10
+| `tools/IngestSimulator/Program.cs`
+| «el contrato de ingesta se implementa en la Fase 5»
+| **Fase 3**, `T-BS-031`. Era una numeración anterior del plan que nadie actualizó porque el archivo es un *stub*. Corregido dejando escrito lo que decía.
+| —
+| ✅
+
+| V3-11
+| Glosario → `DEC-BS-05` (rotación del secreto sin indisponibilidad)
+| Decisión abierta sin forma concreta
+| `DEC-BS-20` la hace concreta: con un solo resumen guardado, rotar deja al emisor sin poder pedir token nuevo hasta que recoja el secreto; su token vigente aguanta hasta una hora. La solución barata queda identificada —admitir `ClientSecretHashPrevious` durante el solape— y se implementa cuando se cierre la decisión. Sigue abierta, pero acotada.
+| `DEC-BS-05` anotada
+| ✅ (la anotación)
+
+| V3-12
+| Contrato → `/v1/ingest/catalog`, respuestas `409`; `plan_tareas` → `T-BS-032`
+| El plan exige `409` al lote concurrente; el contrato solo tenía códigos `409` para la foto
+| Se añade **`INGEST_IN_PROGRESS`** al contrato (1.1.0). Sin él, el `409` del plan no tenía forma de decir por qué.
+| `ErrorCodes.IngestInProgress`
+| ✅
+
+| V3-13
+| Glosario → `DOM-BS-09`: «exige `heartbeat_at`»; entidad `IngestBatch.HeartbeatAt`: «última señal de vida del proceso que lo aplica»
+| Un latido que se actualiza mientras el lote se aplica
+| **El latido es la hora de arranque y no se actualiza.** Con aplicación síncrona no hay un «mientras tanto» en el que latir, y un latido escrito dentro de la transacción abierta no sería visible para el barrido hasta confirmar —haría falta otra conexión—. Así que `heartbeat_at = received_at`, y `Ingest:HeartbeatTimeoutMinutes` pasa a significar «cuánto puede durar un lote como mucho»: 10 minutos para 200 productos son dos órdenes de magnitud de margen. La columna y el barrido siguen siendo necesarios por la misma razón de siempre: el proceso que muere entre las dos transacciones.
+| —
+| ✅ documentado en `IngestCatalogCommandHandler` e `IngestSweepService`
+
+| V3-14
+| Contrato → `/v1/ingest/catalog`: «Máximo 60 lotes por minuto»
+| Sin decir por qué se particiona; la implementación de `T-BS-030` había previsto particionar por credencial (`sub`)
+| **Por IP.** Cuando corre el limitador, `UseAuthentication` solo ha ejecutado el esquema por omisión —el del portal— y un token de ingesta no produce identidad hasta la autorización del endpoint. Particionar por `sub` exigiría un esquema de reenvío que decodificara el token sin validarlo para mirar su `aud`, y no compensa con un solo emisor, para el que IP y credencial son la misma partición. `UseRateLimiter` pasa a ir **antes** de `UseAuthentication`, lo que además acota el trabajo criptográfico que un anónimo puede provocar. Revisar si algún día hay varios emisores tras una IP.
+| —
+| ✅ `IngestRateLimiting`, `Program.cs`, YAML 1.1.0
+
+| V3-15
+| Contrato → estado `partial`: «aplicado con ítems fallidos; ver `items`»; ejemplo `parcial` con un medio cuya versión «no existe y no viene en este lote»
+| Errores de negocio por ítem que dejan el lote en `partial`
+| **Hoy nada produce `partial`.** El ejemplo del contrato es imposible por construcción: los medios llegan anidados en su versión, así que siempre vienen con ella. Los `sourceId` repetidos dentro del lote —el otro candidato— se tratan como error de forma (`400`), porque son restricciones únicas de la base y descubrirlos como excepción de la transacción sería tarde y sin ruta de campo. El mecanismo entero existe (`ingest_items`, `counts.errors`, el estado, el `items[]` de la respuesta) y se activará el día que aparezca un error que solo se pueda saber al aplicar.
+| —
+| 📌 `CatalogWriter` devuelve siempre `errors: 0`
+
+| V3-16
+| Contrato → `IngestAccepted.received`: «cuántos elementos traía el lote»; ejemplo `reenvio` con `received` del original
+| Un reenvío devuelve los contadores de lo recibido originalmente
+| **Se cuenta el cuerpo de la petición actual.** `ingest_batches` guarda lo aplicado, no lo recibido, y un reenvío idempotente trae por definición el mismo contenido, así que la diferencia es teórica. Guardar tres enteros más solo para reproducir el ejemplo no compensaba una migración.
+| —
+| ✅ documentado en `ReceivedCounts`
+
+| V3-17
+| Glosario → `DOM-BS-13`: «un recurso cuyo `webPlatformId` no sea el del portal … se rechaza»
+| Ambiguo para un recurso **sin** `webPlatformId`
+| Un recurso sin valor **se acepta**: «de otra plataforma» exige un valor distinto, y el emisor ya filtró por la nuestra. Solo un valor presente y diferente se rechaza.
+| —
+| ✅ `CatalogBatchValidator.ValidarPlataforma`
+
+| V3-18
+| Contrato → `IngestMedia.extension`: «sin punto y en minúsculas»
+| Podía leerse como requisito que se rechaza si no se cumple
+| **Se normaliza**, no se rechaza: `.PDF` → `pdf`. Rechazar un lote entero por una mayúscula habría sido castigar al emisor por algo que podemos arreglar sin ambigüedad. Lo que sí se rechaza es una extensión con caracteres que no sean letras o dígitos, o de más de 16.
+| —
+| ✅
+
+| V3-19
+| Modelo de datos → `ext_api_request_log`: «registro de las peticiones que recibe la frontera de ingesta»
+| Una fila por petición a `/v1/**`
+| **No se escribe en la Fase 3.** Ninguna tarea de la fase lo nombra, y es un *middleware* de la frontera, no parte de ningún endpoint. La correlación y la credencial sí quedan en `ingest_batches` (`correlation_id`, `client_id`). Queda como tarea nombrada para la Fase 6, con el simulador, que es cuando habrá tráfico que mirar.
+| —
+| 📌 pendiente, `T-BS-06x`
+
+| V3-20
+| `plan_tareas` → `T-BS-032`: «idempotencia por `batchId`, lote único en ejecución por índice parcial»; `NpgsqlBridgeOptionsExtensions` (Fase 1): «reintento ante fallo transitorio … la estrategia de ejecución no admite transacciones propias»
+| Implícitamente, una transacción; y la Fase 1 ya avisaba de que con reintentos no puede ser explícita
+| **Dos escrituras y ninguna transacción explícita.** La primera registra el lote en `running` y confirma, para que `ux_ingest_running` actúe de cerrojo entre instancias y el segundo lote reciba su `409` enseguida (en una sola transacción se quedaría *esperando*: PostgreSQL bloquea el `INSERT` en conflicto hasta que la otra decide). La segunda aplica, reconcilia y cierra en **un solo `SaveChanges`**, que es a la vez la unidad atómica y la unidad que `EnableRetryOnFailure` sabe repetir. La primera versión de esta fase abrió una transacción explícita y **falló entera en la primera ejecución**: la estrategia de reintento de Npgsql lanza en el primer `SaveChanges` dentro de una transacción de usuario, y `NpgsqlBridgeOptionsExtensions` lo tenía escrito desde la Fase 1. Consecuencia de diseño: ni el escritor del catálogo ni la reconciliación ejecutan nada directo contra la base (`ExecuteUpdate`); la reconciliación carga y marca entidades rastreadas, con el filtro repetido en memoria porque la base aún tiene el `last_seen_at` viejo de lo que este lote tocó.
+| —
+| ✅ `IngestCatalogCommandHandler`, `CatalogWriter`
+|===
+
+== Conformidades
+
+Lo que se ejecutó tal y como estaba escrito, y que conviene dejar dicho para que el registro
+no parezca solo una lista de fallos.
+
+* **Dos audiencias no intercambiables** (`SEC-BS-09`, `T-BS-030`). Se implementó como *dos
+  esquemas de autenticación*, no como dos audiencias del mismo esquema, y con *dos puertos de
+  emisión* distintos. Es más de lo que el plan pedía, pero en la misma dirección: el token
+  equivocado falla en la validación del manejador y emitirlo es un error de compilación.
+* **Comparación del secreto en tiempo constante.** `CryptographicOperations.FixedTimeEquals`
+  sobre los bytes del resumen, con un señuelo para que el `clientId` desconocido cueste lo
+  mismo que el secreto incorrecto (mismo patrón que `PasswordDecoy`).
+* **Claims del token de servicio**: `iss`, `aud: portal-ingest-api`, `sub` = `clientId`,
+  `scope: catalog:ingest`, tolerancia de reloj de 30 s. Los cinco que el contrato exige, y
+  ninguno más: sin `sid`, sin `perms`.
+* **`429` con `code: RATE_LIMITED` y `Retry-After`**, la forma que el contrato describe.
+* **Tres consultas por lote, no una por registro** (`T-BS-033`). `CatalogWriter` carga de golpe
+  lo que el lote menciona y trabaja en memoria; `SaveChanges` es un viaje.
+* **El resolutor no mira el host ni el nombre del contenedor** (`T-BS-034`). Probado con la
+  negativa que sostiene la regla: el mismo URI de `blob.core.windows.net` con la cuenta de
+  Azurite configurada es «HTTP genérico».
+* **Todos los errores de forma en una pasada, con su ruta JSON** (`T-BS-031`). El emisor es
+  una máquina que corrige y reenvía; darle un error por intento lo condena a tantas idas y
+  vueltas como campos rotos tenga.
+* **Reconciliación por `last_seen_at`, con el corte en el arranque del primer trozo aplicado**
+  (`T-BS-033`). Retira, no borra; productos y versiones también, aunque el contrato solo
+  cuente recursos.
+* **`Content-Encoding: gzip`, `413` con `BATCH_TOO_LARGE`, `X-Correlation-ID` en el lote.**
+* **La credencial en configuración, no en tabla.** `appsettings.json` ya lo decía desde la
+  Fase 0 («Key Vault en Azure, user-secrets en local»), y se respetó a través del puerto
+  `IIngestClientStore`, que deja el cambio a tabla para cuando haya más de un emisor.
+
+== Hallazgos
+
+Cosas que no son cambios pero que la ejecución hizo visibles.
+
+[cols="1,5",options="header"]
+|===
+| # | Hallazgo
+
+| H3-01
+| 📌 `nginx.conf` **no tiene ningún `location /v1/`**. Es correcto —el emisor llama directo a la API, los `servers` del contrato son `portal-api…` y no el host del SPA— pero significa que la superficie de ingesta no pasa por el proxy del frontend y **hay que exponerla en el despliegue** por su cuenta. Afecta a `Guia_Infraestructura_Azure` y a la Entrega 2.
+
+| H3-02
+| 📌 Los ejemplos de `ingest_catalog_v1.0.yaml` tienen los `message` en español («Credenciales inválidas.», «Máximo 60 lotes por minuto.»). Mismo pendiente que `api_auth.yaml` tras la decisión de `EST-BS-19`: el código responde en inglés y los ejemplos del contrato deben reescribirse.
+
+| H3-03
+| 📌 El manifiesto (`manifest.yaml`) no registraba `plan_primera_entrega_v1.0.adoc`, `plan_tareas_bridge_v1.0.adoc`, `ADR-BS-007` ni `ADR-BS-008`. Cuatro documentos vigentes fuera del índice. Corregido en esta emisión, junto con el alta de este documento.
+
+| H3-04
+| 📌 `RequirePermissionAttribute` (Fase 2) implementa `IAuthorizationRequirementData` pero no deriva de `AuthorizeAttribute`, así que **tiene que ir acompañado de `[Authorize]`** para disparar la autenticación. Hoy ningún controlador lo usa —llega con la Fase 4—, y no hay prueba que lo ejercite. `RequireIngestScopeAttribute` sí deriva de `AuthorizeAttribute` precisamente por esto. Conviene alinear el primero con el segundo al empezar `T-BS-040`.
+
+| H3-05
+| 📌 `DT-BS-10` (los 17 índices de clave foránea) decía «se revisan en la Fase 2» y no se revisaron. La condición escrita en la propia deuda —«cuando existan las consultas reales de catálogo y permisos»— solo se cumple en la Fase 4. Re-fechada, no incumplida.
+|===
+
+== Cómo se mantiene
+
+Al cerrar cada tarea de la fase se revisan las cuatro fuentes contra lo escrito y se añade una
+fila por cada diferencia, aunque sea pequeña. Al cerrar la fase, todos los estados 🔧 tienen
+que haber pasado a ✅ o tener una tarea nombrada; si no, la fase no se cierra.
+
+include::{root}/_nav.adoc[]
