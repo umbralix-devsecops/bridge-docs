@@ -1,7 +1,7 @@
 = Estado Actual — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 2.9
-:revdate: 2026-09-18
+:revnumber: 3.0
+:revdate: 2026-09-21
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -438,6 +438,37 @@ Dadas de baja: `DT-BS-01`, `DT-BS-03`, `DT-BS-05`.
 | *Deployment slots* de App Service con intercambio, para validar el arranque antes de recibir
   tráfico.
 |===
+
+[IMPORTANT]
+====
+*Fase 2 cerrada el 2026-09-21 — identidad.* `/auth/login`, `/register`, `/refresh`,
+`/logout` y `/me`, con JWT RS256, el mapa de permisos resuelto una sola vez contra
+`role_permissions`, rotación de refresh con revocación de la cadena entera ante reutilización,
+y sesión única. 63 pruebas en verde: 28 unitarias, 12 de integración contra PostgreSQL real y
+9 de aceptación contra el servicio entero por HTTP.
+
+Lo que el plan no contemplaba y el contrato sí exigía:
+
+* *`RF-02`, sesión única.* Un login revoca las sesiones anteriores con motivo `superseded`.
+* *`RF-06`, aviso del alta.* Buzón de salida en `notification_log` escrito en la misma
+  transacción que la cuenta, y un servicio de fondo que lo drena por SMTP con MailKit. Mailpit
+  en el `docker-compose` para desarrollo. Verificado de punta a punta: la fila llega a `sent`.
+
+Tres correcciones que costaron tiempo y quedan escritas para que no se repitan:
+
+* *El prefijo `/api` es del proxy, no del servicio.* Las rutas son `auth/**`. La cookie del
+  refresco sí lleva `Path=/api/auth/refresh`, porque el `Path` lo interpreta el navegador.
+* *La forma del error es la del contrato*, `{code, message, correlationId}`, no
+  `ProblemDetails`. `EST-BS-14` reescrita; `SEC-BS-06` matizada con el `detail` de
+  `Development`.
+* *Los atributos de validación de un record posicional van en el parámetro*, no en
+  `[property:]`. Con `[property:]` MVC lanza — y hace bien: si los ignorara en silencio, los
+  dos endpoints públicos no habrían validado nada con la suite en verde.
+
+*Decisión de idioma del 2026-09-21:* todo texto que pueda llegarle a un cliente va en inglés,
+correo incluido. Los diagnósticos para quien desarrolla o despliega siguen en español
+(`EST-BS-19`). Los ejemplos en español de `api_auth.yaml` quedan por reescribir.
+====
 
 [IMPORTANT]
 ====

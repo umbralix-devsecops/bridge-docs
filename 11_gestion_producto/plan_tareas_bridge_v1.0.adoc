@@ -1,8 +1,8 @@
 = Plan de tareas — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 1.5
-:revdate: 2026-09-17
-:revremark: T-BS-006, umbral de cobertura, y corrección de los nombres de rol y del recuento de enums tras la Fase 1
+:revnumber: 1.6
+:revdate: 2026-09-21
+:revremark: Fases 0, 1 y 2 cerradas. La Fase 2 absorbió RF-02 y RF-06, que el plan no contemplaba.
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -199,6 +199,26 @@ y `ADR-BS-004` sigue cumpliéndose: EF Core es la fuente del esquema, y el SQL c
 
 == Fase 2 — Identidad
 
+[NOTE]
+====
+✅ *Cerrada el 2026-09-21.* Las cinco tareas hechas y verificadas: 63 pruebas en verde, de las
+que 28 son unitarias, 12 de integración contra PostgreSQL real y 9 de aceptación contra el
+servicio entero por HTTP.
+
+*Dos requisitos que este plan no contemplaba y que el contrato sí exigía,* encontrados al
+leer `api_auth.yaml` antes de escribir el controlador:
+
+* `RF-02`, *sesión única*: un login correcto revoca las sesiones anteriores del usuario, con
+  motivo `superseded`. Entró en `T-BS-021`.
+* `RF-06`, *aviso del alta*: `/auth/register` encola una fila en `notification_log` en la
+  misma transacción que crea la cuenta, y un servicio de fondo la envía por SMTP con MailKit.
+  Entró en `T-BS-024`, y arrastró el `docker-compose` (Mailpit) y `DT-BS-11`.
+
+*Y una corrección de ruta:* los controladores del portal **no** llevan el prefijo `/api`. Lo
+pone el navegador y lo quita el proxy, en desarrollo y en producción
+(`arquitectura_tecnica_bridge_service_v2.4.adoc`).
+====
+
 [cols="1,3,2,1",options="header"]
 |===
 | ID | Tarea | Hecho cuando | Depende de
@@ -236,7 +256,7 @@ y `ADR-BS-004` sigue cumpliéndose: EF Core es la fuente del esquema, y el SQL c
 | `T-BS-022`
 |===
 
-*Traza:* `SEC-BS-02`, `SEC-BS-09`, `ADR-008` del portal.
+*Traza:* `SEC-BS-02`, `SEC-BS-09`, `RF-02`, `RF-06`, `ADR-008` del portal.
 
 == Fase 3 — Ingesta
 

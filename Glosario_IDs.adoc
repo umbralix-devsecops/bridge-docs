@@ -140,7 +140,7 @@ Cada eslabón debe poder recorrerse en ambos sentidos:
 | SEC-BS-02 | Comparación de `clientSecret` y de hash de contraseña en tiempo constante
 | SEC-BS-03 | Toda consulta parametrizada; prohibida la interpolación de cadenas, también en `FromSqlRaw`
 | SEC-BS-04 | Los logs nunca registran `clientSecret`, `accessToken`, `password_hash` ni el `token` de un recurso
-| SEC-BS-06 | El cuerpo de un `500` nunca contiene detalle de excepción
+| SEC-BS-06 | El cuerpo de un `500` nunca contiene detalle de excepción. *Matizada el 2026-09-21:* en `Development`, y solo ahí, añade un campo `detail` con la cadena de excepciones (`EST-BS-13`)
 | SEC-BS-08 | `gitleaks` en el pipeline; secreto detectado ⇒ build fallido
 | SEC-BS-09 | 🆕 Credenciales de ingesta y de usuario independientes; el claim `aud` se valida antes que nada
 | SEC-BS-10 | 🆕 `storage_uri`, `storage_path`, `storage_container` y `storage_token` no salen en ninguna respuesta ni log
@@ -177,6 +177,7 @@ Cada eslabón debe poder recorrerse en ambos sentidos:
 | DT-BS-08 | 🆕 El proxy de streaming ocupa un hilo por transferencia, sin límite de tamaño | Medio
 | DT-BS-09 | 🆕 Cuatro reglas del estándar de código dependen de revisión humana, y el equipo es de una persona: no hay segundo par de ojos | Medio
 | DT-BS-10 | 🆕 EF Core crea un índice por cada clave foránea: 17 que el diseño no pidió, incluidos los de columnas de auditoría que nadie filtra (`granted_by`, `assigned_by`, `approved_by`, `created_by`). Se revisan en la Fase 2, cuando existan las consultas reales de catálogo y permisos y se pueda medir en vez de suponer | Bajo
+| DT-BS-11 | 🆕 La cola de notificaciones no reserva las filas que toma: `notification_log` tiene tres estados —`queued`, `sent`, `failed`— y ninguno significa «en curso». Con una instancia da igual; con dos, las dos leen las mismas filas y el correo sale duplicado. Resolverlo exige migrar el enumerado | Bajo
 |===
 
 .Decisiones abiertas

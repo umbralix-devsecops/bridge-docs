@@ -140,13 +140,23 @@ sections:
     title: Arquitectura técnica
     status: completa
     documents:
-      - path: 04_arquitectura_tecnica/arquitectura_tecnica_bridge_service_v2.0.adoc
+      # Corregido el 2026-09-21: este manifest declaraba vigente la v2.0 en una ruta que ya
+      # no existe —esta en _historico— y no listaba ni la v2.1 ni la v2.3. La v2.1 se movio
+      # a _historico en la misma revision: dos arquitecturas con pinta de vigentes una al
+      # lado de la otra es como se acaba leyendo la equivocada.
+      - path: 04_arquitectura_tecnica/arquitectura_tecnica_bridge_service_v2.3.adoc
         status: vigente
-        version: "2.0"
-        governed_by: [ADR-BS-001, ADR-BS-002, ADR-BS-004, ADR-BS-005, ADR-BS-006]
+        version: "2.4"
+        governed_by: [ADR-BS-001, ADR-BS-002, ADR-BS-004, ADR-BS-005, ADR-BS-006, ADR-BS-007, ADR-BS-008, ADR-BS-009]
         implements: [RF-BS-01..02, RF-BS-05..06, RF-BS-08, RF-BS-12..20, RNF-BS-11]
-        defines: [SEC-BS-01..04, SEC-BS-06, SEC-BS-08..10, DOM-BS-04..10, DT-BS-02, DT-BS-04, DT-BS-06..08, DEC-BS-03, DEC-BS-05, DEC-BS-07..13]
-        supersedes: 04_arquitectura_tecnica/_historico/arquitectura_tecnica_bridge_service_v1.1.adoc
+        defines: [SEC-BS-01..04, SEC-BS-06, SEC-BS-08..12, DOM-BS-04..12, DT-BS-02, DT-BS-04, DT-BS-06..08, DEC-BS-03, DEC-BS-05, DEC-BS-07..13]
+        supersedes: 04_arquitectura_tecnica/_historico/arquitectura_tecnica_bridge_service_v2.1.adoc
+      - path: 04_arquitectura_tecnica/_historico/arquitectura_tecnica_bridge_service_v2.1.adoc
+        status: historico
+        version: "2.1"
+      - path: 04_arquitectura_tecnica/_historico/arquitectura_tecnica_bridge_service_v2.0.adoc
+        status: historico
+        version: "2.0"
       - path: 04_arquitectura_tecnica/_historico/arquitectura_tecnica_bridge_service_v1.1.adoc
         status: historico
         version: "1.1"

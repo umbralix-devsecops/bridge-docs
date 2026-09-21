@@ -21,7 +21,7 @@ include::{root}/_nav.adoc[]
 ====
 *Clasificación:* {classification} +
 *Versión:* {revnumber} · *Fecha:* {revdate} +
-*Estado:* ⛔ *Superada por la v2.1* — `../arquitectura_tecnica_bridge_service_v2.1.adoc` +
+*Estado:* ⛔ *Superada por la v2.1, y esa por la v2.3* — `./arquitectura_tecnica_bridge_service_v2.1.adoc` y `../arquitectura_tecnica_bridge_service_v2.3.adoc` +
 *Supera a:* v1.0 y v1.1, en este mismo `_historico/`
 ====
 

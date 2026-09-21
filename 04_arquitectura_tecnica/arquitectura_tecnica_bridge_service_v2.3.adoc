@@ -1,8 +1,8 @@
 = Arquitectura Técnica — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 2.3
-:revdate: 2026-09-18
-:revremark: Inversión de dependencias (ADR-BS-008) y runtime .NET 10 LTS (ADR-BS-009).
+:revnumber: 2.4
+:revdate: 2026-09-21
+:revremark: El prefijo /api es del proxy, no del servicio. Forma del error según el contrato y detail en Development.
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -148,7 +148,7 @@ flowchart TB
 
 | Superficie
 | 3 endpoints bajo `/v1/ingest/`
-| 27 endpoints bajo `/api/`
+| 27 endpoints bajo `/api/` *tal y como los ve el navegador* — ver la nota
 
 | Riesgo si se compromete
 | *Alto* — puede alterar el catálogo de todos
@@ -165,6 +165,36 @@ Las dos credenciales son *independientes y no intercambiables* (SEC-BS-09). Un t
 ingesta no abre ningún endpoint `/api`, y un token de usuario —ni siquiera el de un
 administrador— no abre ningún endpoint `/v1/ingest`. La separación está en el claim `aud`, y
 se valida antes que cualquier otra cosa.
+====
+
+[CAUTION]
+====
+*El prefijo `/api` no es una ruta de este servicio.* Lo añade el navegador y lo quita el
+proxy, y este documento lo daba por hecho sin decirlo. Costó un rato averiguarlo el
+2026-09-21, así que queda escrito:
+
+[cols="1,1,2",options="header"]
+|===
+| Quien pide | Quien reenvía | Qué recibe el servicio
+
+| El navegador: `/api/auth/login`
+| `nginx.conf`, `location /api/` con `proxy_pass ${API_UPSTREAM}/;` — la barra final elimina el
+  prefijo
+| `/auth/login`
+
+| El navegador en desarrollo: `/api/auth/login`
+| `proxy.conf.json` de `ng serve`, con `pathRewrite: { "^/api": "" }`
+| `/auth/login`
+|===
+
+Las rutas de los controladores son, por tanto, `auth/**`, `catalog/**`, `media/**`,
+`admin/**` — sin prefijo. Los endpoints de ingesta sí llevan `/v1/` en el propio servicio,
+porque el proxy no los toca: el microservicio de SinsaTools llama directamente.
+
+*Y de ahí una asimetría que parece un error y no lo es:* la ruta del refresco es
+`auth/refresh`, pero su cookie lleva `Path=/api/auth/refresh`. El `Path` de una cookie lo
+interpreta el navegador, que vive del otro lado del proxy; con la ruta interna, el refresh
+token no se enviaría nunca. Lo mismo vale para la cookie `pv_media` del reproductor.
 ====
 
 ---
@@ -880,7 +910,7 @@ Dos esquemas de autenticación registrados, discriminados por `aud`:
 | SEC-BS-02 | Comparación de `clientSecret` y de hash de contraseña en tiempo constante.
 | SEC-BS-03 | Toda consulta parametrizada. Prohibida la interpolación de cadenas, incluso dentro de `FromSqlRaw`.
 | SEC-BS-04 | Los logs nunca registran `clientSecret`, `accessToken`, `password_hash` ni el `token` de un recurso.
-| SEC-BS-06 | El cuerpo de un `500` nunca contiene detalle de excepción.
+| SEC-BS-06 | El cuerpo de un `500` nunca contiene detalle de excepción. Matizada el 2026-09-21: en `Development`, y solo ahí, añade un campo `detail`.
 | SEC-BS-08 | `gitleaks` en el pipeline; secreto detectado ⇒ build fallido.
 | SEC-BS-09 | 🆕 Las credenciales de ingesta y las de usuario son independientes. La validación del claim `aud` precede a cualquier otra comprobación.
 | SEC-BS-10 | 🆕 `storage_uri`, `storage_path`, `storage_container` y `storage_token` no aparecen en ninguna respuesta ni en ningún log. El confinamiento es estructural: solo `Infrastructure` los ve.

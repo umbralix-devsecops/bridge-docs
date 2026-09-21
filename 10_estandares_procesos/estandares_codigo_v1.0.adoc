@@ -1,8 +1,8 @@
 = Estándares de código — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 1.3
-:revdate: 2026-09-17
-:revremark: Primera emisión, actualizada a .NET 10 / C# 14 por ADR-BS-009 y a DOM-BS-05 reescrita.
+:revnumber: 1.4
+:revdate: 2026-09-21
+:revremark: EST-BS-14 reescrita (la forma del error es la del contrato, no ProblemDetails), EST-BS-13 y EST-BS-19 matizadas, y las cinco reglas de analizador que la Fase 2 obligó a apagar.
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -176,15 +176,43 @@ Ver §6 para el resto de correcciones a ese documento.
 | ⚠️ Revisión humana
 
 | `EST-BS-13`
-| El cuerpo de un `500` nunca contiene detalle de excepción; sí un `traceId` que permita
-  encontrarlo en el log (`SEC-BS-06`).
+| El cuerpo de un `500` nunca contiene detalle de excepción; sí un `correlationId` que permita
+  encontrarlo en el log (`SEC-BS-06`). *Matizada el 2026-09-21:* en `Development`, y solo ahí,
+  el cuerpo añade un campo `detail` con la cadena de excepciones. Ver la nota de abajo.
 | Prueba del middleware
 
 | `EST-BS-14`
-| Toda respuesta de error usa `ProblemDetails` (RFC 7807), con el mismo `type` para el mismo
-  tipo de fallo en todos los endpoints.
+| *Reescrita el 2026-09-21.* Toda respuesta de error usa la forma del contrato —
+  `{code, message, correlationId}`— con el mismo `code` para el mismo tipo de fallo en todos
+  los endpoints. Ya **no** es `ProblemDetails`.
 | Prueba de contrato contra los `api_*.yaml`
 |===
+
+[IMPORTANT]
+====
+*Por qué `EST-BS-14` dejó de pedir `ProblemDetails`.*
+
+RFC 7807 es el estándar y era la regla. Pero `api_auth.yaml` define
+`{code, message, correlationId}` con códigos concretos —`INVALID_CREDENTIALS`,
+`ACCOUNT_INACTIVE`, `EMAIL_ALREADY_EXISTS`, `REFRESH_TOKEN_EXPIRED`, `SESSION_REVOKED`— y el
+frontend está construido y probado contra esa forma, ramificando por `code`.
+
+Se eligió el contrato. Cumplir la regla habría obligado a reescribir el manejo de errores de
+una aplicación que ya funciona, a cambio de conformidad formal. Lo que no era admisible era
+tener las dos formas en el mismo servicio según quién respondiera, así que el cambio alcanzó a
+los tres sitios que producen errores: el manejador global de excepciones, el `400` automático
+de `[ApiController]` —que por omisión emite `ValidationProblemDetails`— y los controladores.
+
+*El `detail` de `Development`.* `SEC-BS-06` decía «nunca» sin matices. Diagnosticar un `500`
+buscando una línea de JSON en la consola costó media tarde el 2026-09-21, así que en
+`Development` el cuerpo lleva la cadena de excepciones. El campo se omite del JSON cuando es
+nulo, de modo que la respuesta en cualquier entorno desplegado es exactamente la del contrato.
+
+*Riesgo que esto introduce:* desplegar con `ASPNETCORE_ENVIRONMENT=Development` pasa a filtrar
+excepciones. Ya era un fallo grave —cambia el nivel de log y la validación de ámbitos de la
+DI— pero hasta ahora no tenía consecuencias de seguridad. Comprobarlo entra en la guía de
+infraestructura.
+====
 
 === Asincronía y recursos
 
@@ -218,8 +246,13 @@ Ver §6 para el resto de correcciones a ese documento.
   `.editorconfig`; no se discute en revisión.
 
 | `EST-BS-19`
-| *El código en inglés, los comentarios y la documentación en español.* Es la convención del
-  proyecto y aplica también a nombres de tabla, columna y migración.
+| *El código en inglés, los comentarios y la documentación en español.* Aplica también a
+  nombres de tabla, columna y migración. *Ampliada el 2026-09-21:* además, **todo texto que
+  pueda llegarle a un cliente va en inglés** —los `message` de la API, los mensajes de
+  validación y el cuerpo de los correos—. Los diagnósticos dirigidos a quien desarrolla o
+  despliega siguen en español, porque son documentación: el texto de
+  `RsaSigningKeys` que explica cómo generar la clave con `openssl` lo lee quien monta el
+  entorno, no un cliente.
 
 | `EST-BS-20`
 | Un archivo, un tipo público. El nombre del archivo es el del tipo.
@@ -297,6 +330,61 @@ contrato bilateral.
 pipeline, y por eso este documento insiste en automatizar todo lo automatizable. Las cuatro
 reglas marcadas como «revisión humana» —`EST-BS-10`, `EST-BS-11`, `EST-BS-12`, y el criterio
 de `EST-BS-03`— son *deuda consciente*: `DT-BS-09`.
+====
+
+== Analizadores apagados, con su motivo
+
+`TreatWarningsAsErrors` con `AnalysisMode=All` es lo que sostiene este documento, y el precio
+es que cada regla sin sentido para este proyecto hay que apagarla **a mano y con motivo**. Se
+listan aquí porque un `severity = none` sin explicación es indistinguible de la pereza.
+
+[cols="1,4",options="header"]
+|===
+| Regla | Por qué está apagada
+
+| `CA1515`
+| «Los tipos públicos de un ejecutable pueden ser internos.» Aquí no tiene ningún caso válido:
+  todo ejecutable es o un host de ASP.NET Core o un proyecto de pruebas. MVC solo descubre
+  controladores **públicos** —uno `internal` se queda sin rutas y nada avisa—, `CS0051`
+  arrastra a los tipos que aparecen en la firma de sus acciones, y xunit necesita las clases de
+  prueba públicas. Obedecerla rompería el ruteo en silencio.
+
+| `CA1812`
+| «Este tipo interno no se instancia nunca.» Da por muerto todo lo que no se crea con `new`, y
+  en este servicio eso es casi todo lo que importa: los middleware los crea
+  `UseMiddleware<T>` por reflexión, la fábrica de diseño la localiza `dotnet ef` recorriendo el
+  ensamblado, y los manejadores los resuelve el contenedor. La alternativa —marcarlos
+  públicos— choca de frente con `CA1515`.
+
+| `CA2100` (solo en `tests/`)
+| Persigue el SQL construido con entrada de usuario. En un fixture de integración no hay
+  entrada de usuario: el SQL son literales de introspección del propio archivo. En `src/` sigue
+  en *error*, que es donde hay peticiones (`SEC-BS-03`).
+
+| `CA1303`
+| Exigiría recursos localizados para cadenas que solo aparecen en logs y diagnósticos.
+
+| `CA1014`
+| Pide `NeutralResourcesLanguage`; ningún ensamblado de este repositorio se publica como
+  paquete.
+|===
+
+Y dos que **no** se apagaron, porque tenían razón y el arreglo era el correcto:
+
+* `CA1711` sobre `INotificationQueue`. El sufijo `Queue` está reservado a los tipos que *son*
+  una cola, y aquello era un puerto para poner algo en una. Se renombró el par a
+  `INotificationOutboxWriter` / `INotificationOutboxReader`, que además nombra el patrón.
+* `CA2000` sobre `WebApplicationFactory`. Señalaba una fuga real: `WithWebHostBuilder` devuelve
+  una fábrica **nueva** y deja la original sin desechar. Se sustituyó por una subclase.
+
+[NOTE]
+====
+Los `[SuppressMessage]` puntuales llevan su justificación en el propio atributo y no se
+repiten aquí: `CA1056` en `CatalogMedia.StorageUri` (`DOM-BS-10` exige el URI íntegro y
+`System.Uri` normaliza), `CA1711` en `RolePermission` y `UserMediaException` (vocabulario de
+dominio fijado en los requerimientos y en la base), y `CA1031` en los dos únicos sitios donde
+capturar todo es la función del código: el manejador global de excepciones y el bucle del
+drenador de notificaciones.
 ====
 
 == Correcciones a la guía de onboarding del portal
