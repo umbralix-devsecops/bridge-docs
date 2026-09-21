@@ -1,8 +1,8 @@
 = Historial de cambios del modelo de datos — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 2.3
-:revdate: 2026-09-18
-:revremark: MIG-BS-001 generada y aplicada. 14 enums: aparece media_visibility. El DDL derivado pasa a generarse por script.
+:revnumber: 2.5
+:revdate: 2026-09-21
+:revremark: MIG-BS-002: cierre de DT-BS-10. Sin índices por convención; ocho retirados, seis declarados con nombre. 56 índices.
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -331,6 +331,52 @@ circular, se comprueba aparte.
 // *Notas de despliegue:* CONCURRENTLY, particiones, índices únicos parciales,
 // orden respecto de la ingesta, y si hay que avisar al equipo de SinsaTools.
 // ─────────────────────────────────────────────────────────────────────────────
+
+=== MIG-BS-002 — IndicesDeliberados
+
+[cols="1,3"]
+|===
+| *Migración EF* | `MIG_BS_002_IndicesDeliberados`
+| *Contexto* | `AppDbContext`
+| *Fecha* | ✅ Generada y aplicada el 2026-09-21 · `20260921213627_MIG_BS_002_IndicesDeliberados`. Verificada operación a operación: ocho `DropIndex`, tres `RenameIndex`, ninguna sobre `api_request_log` (la primera generación salió mal y se rehizo; H4-05 en `verificacion_fase4`)
+| *Versión del ER* | `modelo_datos_bridge_v2.mermaid` (sin cambios de forma: solo índices)
+| *Reversibilidad* | ✅ Total (`Down` recrea los índices retirados)
+| *Impacto en datos* | Ninguno
+| *Ventana* | No. Los índices se retiran, no se crean; los tres renombrados son `ALTER INDEX … RENAME`
+| *Motivada por* | `DT-BS-10`, cerrada en `T-BS-042` con las consultas reales delante
+|===
+
+*Qué hace:* quita la convención de EF Core que crea un índice por cada clave foránea
+(`ForeignKeyIndexConvention`) y, con ella, los catorce índices que nadie pidió. De esos:
+
+* **Ocho se retiran**, porque ninguna consulta del servicio ni ningún endpoint del contrato
+  los usa: `ix_group_version_access_granted_by`, `ix_groups_created_by`,
+  `ix_user_groups_assigned_by`, `ix_user_media_exceptions_granted_by`, `ix_users_approved_by`
+  (columnas de auditoría que nadie filtra), `ix_sessions_replaced_by_session_id` (la cadena
+  de rotación se recorre por clave primaria, `JOIN … ON s.id = c.replaced_by_session_id`),
+  `ix_user_media_exceptions_media_id` (todos los consumidores van por usuario, prefijo de la
+  PK) y `ix_notification_log_user_id` (sin consumidor).
+* **Tres se renombran y se declaran deliberados**, con su consumidor: `ix_users_role`
+  (`GET /admin/users?role=`), `ix_user_groups_group` (`membersCount` de `GroupDto`),
+  `ix_ext_log_batch` (cruzar peticiones con su lote, V3-19).
+* **Tres ya eran deliberados** desde `001_partitioning.sql` y pasan a estar declarados también
+  en EF con el mismo nombre, para que el modelo y la base digan lo mismo:
+  `ix_api_request_log_user_id`, `ix_video_access_log_user_id`, `ix_video_access_log_media_id`.
+
+Total: de 64 índices a **56**, contando particiones.
+
+*Por qué:* cada índice se paga en cada `INSERT`, y la ingesta inserta a miles. La deuda
+decía «cuando existan las consultas reales, medir en vez de suponer»; existen desde la Fase 4
+y la revisión es esta. A partir de aquí, **todo índice del esquema está escrito a mano con su
+nombre y su motivo**: no hay ninguno que exista porque una convención lo decidió.
+
+*Notas de despliegue:*
+
+* Sin ventana: `DROP INDEX` y `ALTER INDEX … RENAME` sobre tablas pequeñas. Si alguna
+  creciera antes de aplicarla, `DROP INDEX CONCURRENTLY` no se puede emitir dentro de la
+  transacción de la migración; hoy no hace falta.
+* La misma migración no toca columnas: el cambio de `ValueGeneratedNever` en los cuatro
+  `Active` (H4-01) es solo de modelo y no produce operación.
 
 == Versiones del modelo ER
 

@@ -342,11 +342,15 @@ sections:
         version: "1.0"
       - path: 11_gestion_producto/plan_tareas_bridge_v1.0.adoc
         status: vigente
-        version: "1.7"
-        note: "Fases 0 a 3 cerradas el 2026-09-21."
+        version: "1.8"
+        note: "Fases 0 a 4 cerradas el 2026-09-21."
       - path: 11_gestion_producto/verificacion_fase3_plan_vs_ejecucion_v1.0.adoc
         status: vigente
         version: "1.2"
+      - path: 11_gestion_producto/verificacion_fase4_plan_vs_ejecucion_v1.0.adoc
+        status: vigente
+        version: "1.1"
+        note: "Registro de desvíos de la Fase 4 y disposición de DT-BS-10 índice a índice."
         note: >
           Registro de desvíos entre lo planeado y lo ejecutado en la Fase 3. Se actualiza al
           cerrar cada tarea de la fase; la fase no se cierra con filas en estado pendiente.

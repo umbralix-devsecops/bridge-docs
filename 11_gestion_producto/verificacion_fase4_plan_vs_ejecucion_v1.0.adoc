@@ -1,0 +1,159 @@
+= Verificación de la Fase 4 — lo planeado frente a lo ejecutado
+:author: Equipo de Desarrollo
+:revnumber: 1.1
+:revdate: 2026-09-21
+:revremark: Fase cerrada: 176 pruebas en verde, MIG-BS-002 generada y aplicada (20260921213627). Añadidos H4-04 y H4-05, salidos de la primera ejecución de la suite.
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:sectnumlevels: 3
+:icons: font
+:lang: es
+:root: ..
+:section-id: gestion-producto
+:section-title: Gestión de Producto
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+---
+
+[.lead]
+Registro de lo que la ejecución de la Fase 4 —Catálogo— cambió o fijó respecto de lo escrito
+antes de empezarla. Las fuentes: la tabla `T-BS-040…043` del plan, `api_catalog.yaml` del
+frontend (`Sin-PortalVideos/openapi/sources/`), la semilla de roles `003_seed_roles.sql`, el
+modelo de datos y `DT-BS-10`. Mismo método y mismas convenciones de estado que
+`verificacion_fase3_plan_vs_ejecucion_v1.0.adoc`.
+
+== El cotejo previo
+
+Antes de escribir código se leyó `api_catalog.yaml` entero contra el esquema y la semilla. A
+diferencia de la Fase 3, **no salió ninguna contradicción**: los permisos del contrato
+(`catalog:read`, `videos:read`) existen en la semilla con la distribución por rol que el
+contrato presupone —el auditor lee el catálogo y no ve los vídeos—, los campos de los DTO
+tienen columna, y el índice de búsqueda de la Fase 1 es exactamente el que el contrato pide.
+Lo que sí salió fueron **cuatro silencios**: cosas que el contrato no dice y que el código
+tiene que decidir. Están abajo como V4-01 a V4-04.
+
+== Desvíos y decisiones
+
+[cols="1,2,2,3,1,1",options="header"]
+|===
+| # | Dónde estaba escrito | Qué decía | Qué se hizo, y por qué | Registro | Estado
+
+| V4-01
+| `api_catalog.yaml` → control de acceso; esquema → `user_media_exceptions.expires_at`
+| El contrato describe grupo, concesión y revocación; el esquema tiene una caducidad de la que el contrato no habla
+| **Una excepción caducada no existe**: ni concede ni revoca. Es la única lectura en la que la columna significa algo; si una revocación caducada siguiera excluyendo, `expires_at` sería decorativa.
+| `MediaAccess`
+| ✅
+
+| V4-02
+| Esquema → `groups.active`
+| Nada en el contrato sobre grupos inactivos
+| **Un grupo inactivo no concede nada.** Desactivar un grupo es la forma de retirar el acceso a todos sus miembros de una vez sin borrar la pertenencia; si siguiera concediendo, no habría forma de hacerlo.
+| `MediaAccess`
+| ✅
+
+| V4-03
+| `api_catalog.yaml` → `GET /catalog/products/{id}` y `/versions/{id}/media`: `404` «no encontrado»; lista con filtro `active` por omisión `true`
+| Silencio sobre qué devuelven el detalle y los medios de una entidad **retirada**
+| **Retirado = invisible.** Detalle de producto retirado, medios de versión retirada (o de producto retirado): `404`. Recursos retirados: no se listan, ni con concesión individual. Es la lectura del contrato de ingesta: `active: false` «retira del catálogo», y una retirada que se pudiera saltar con una excepción no sería una retirada. La lista de productos conserva `active=false` explícito para quien quiera ver los retirados.
+| `ICatalogReader`
+| ✅
+
+| V4-04
+| `api_catalog.yaml` → `versionsCount`: «versiones activas»; `mediaCount`: «accesibles por el usuario»
+| Explícito, pero fácil de igualar por descuido
+| Se respeta la asimetría: **`versionsCount` no depende del usuario; `mediaCount` sí.** Probado en `Dos_usuarios_de_grupos_distintos_ven_listas_distintas`, donde los dos usuarios ven `versionsCount = 2` y `mediaCount` distinto.
+| —
+| ✅ conformidad
+
+| V4-05
+| Glosario → `DT-BS-10`: «17 índices por clave foránea que el diseño no pidió»
+| Diecisiete
+| **Catorce.** Contados en el DDL derivado por su nombre de convención `ix_<tabla>_<columna>`: once sobre tablas normales y tres sobre las dos particionadas. Los otros tres que el glosario contaba ya tenían nombre propio (`ix_versions_product`, `ix_media_version`, `ix_gva_version`) desde la Fase 1. La disposición, índice a índice, está en la sección siguiente.
+| `DT-BS-10`, `MIG-BS-002`
+| ✅
+
+| V4-06
+| `plan_tareas` → `T-BS-042`: «el plan de ejecución no trae la tabla entera»
+| Un criterio sobre el plan de ejecución, sin decir cómo se comprueba con cuatro filas
+| Con cuatro filas el planificador **siempre** elige el recorrido secuencial, así que la prueba lo prohíbe (`SET enable_seqscan = off`) y pide `EXPLAIN` **del SQL real que EF ejecutó**, capturado con un interceptor: si la expresión de la consulta no coincidiera con la del índice GIN, el plan no lo usaría ni prohibido el secuencial. Y `mediaCount` se comprueba sobre el SQL capturado: dos consultas, un `COUNT`, ningún `FROM catalog_media` que traiga filas.
+| `CatalogAccessTests`
+| ✅
+
+| V4-07
+| `AppDbContext`: sin `HasDefaultSchema`; DDL derivado con todo en `public`
+| Nada: era el valor por omisión de EF Core, nunca decidido
+| **Se queda en `public`, ahora como decisión.** La base `bridge` es dedicada y en PostgreSQL la frontera fuerte es la base, no el *schema*; un *schema* propio sería orden, no protección, y encarecería cada SQL a mano. Se reabre si Infraestructura comparte base entre servicios. Salió de una pregunta al revisar `regenerar_ddl_derivado.sh`.
+| `DEC-BS-24`
+| ✅
+|===
+
+== `DT-BS-10`, índice a índice
+
+Catorce índices creados por `ForeignKeyIndexConvention`. La convención **se quita del
+contexto** (`AppDbContext.ConfigureConventions`): desde `MIG-BS-002`, todo índice del esquema
+está declarado a mano con su nombre y su motivo.
+
+[cols="2,3,1",options="header"]
+|===
+| Índice | Evidencia | Decisión
+
+| `ix_group_version_access_granted_by` | Columna de auditoría. Ninguna consulta filtra por quién concedió. | ❌ Retirar
+| `ix_groups_created_by` | Ídem. | ❌ Retirar
+| `ix_user_groups_assigned_by` | Ídem. | ❌ Retirar
+| `ix_user_media_exceptions_granted_by` | Ídem. | ❌ Retirar
+| `ix_users_approved_by` | Ídem. | ❌ Retirar
+| `ix_sessions_replaced_by_session_id` | La cadena de rotación se recorre hacia delante: `JOIN cadena c ON s.id = c.replaced_by_session_id` busca por **clave primaria**. Nadie pregunta «quién me reemplazó». | ❌ Retirar
+| `ix_user_media_exceptions_media_id` | La consulta de acceso correlaciona por `(user_id, media_id)`, la PK. Los endpoints de administración (`/admin/users/{id}/media-exceptions`) van por usuario, prefijo de la PK. Los recursos no se borran. | ❌ Retirar
+| `ix_notification_log_user_id` | Sin consumidor: el drenador lee por estado, y no hay endpoint de notificaciones por usuario. | ❌ Retirar
+| `ix_users_role_id` | `GET /admin/users?role=` (`api_admin.yaml`, Fase 5) filtra por rol. | ✅ Deliberado → `ix_users_role`
+| `ix_user_groups_group_id` | `membersCount` de `GroupDto` cuenta por grupo; la PK `(user_id, group_id)` solo sirve por usuario. | ✅ Deliberado → `ix_user_groups_group`
+| `ix_ext_api_request_log_batch_id` | Cruzar peticiones con su lote (`V3-19`, pendiente de escribirse). | ✅ Deliberado → `ix_ext_log_batch`
+| `ix_api_request_log_user_id` | `GET /admin/logs/requests` filtra por usuario. Ya lo recreaba `001_partitioning.sql`. | ✅ Declarado en EF con el mismo nombre
+| `ix_video_access_log_user_id` | `GET /admin/logs/video-access`: «qué vio este usuario». Ídem. | ✅ Declarado en EF con el mismo nombre
+| `ix_video_access_log_media_id` | «Quién vio este recurso». Ídem. | ✅ Declarado en EF con el mismo nombre
+|===
+
+Resultado: **de 64 índices a 56**. `SchemaParityTests` actualizado; `MIG-BS-002` descrita en el
+changelog del modelo y pendiente de generar con `dotnet ef migrations add MIG_BS_002_IndicesDeliberados`.
+
+== Conformidades
+
+* Los DTO son los del contrato letra por letra: `mediaType`, `fileGroup`, `origin`,
+  `versionsCount`, `mediaCount`, `pagination{page,pageSize,total,totalPages}`.
+* `SEC-BS-10`: ningún campo `storage_*` en ninguna respuesta. El tipo de Application ya no los
+  trae, así que en Api no hay nada que omitir —y la prueba busca la cadena `storage` en el
+  JSON crudo para asegurarse.
+* Permisos por recurso y acción, nunca por rol (`H-06`): `[RequirePermission("catalog","read")]`
+  y `[RequirePermission("videos","read")]`. Primer consumidor del atributo corregido en H3-04;
+  el `403` del auditor sobre los medios es la primera prueba real de ese `403`.
+* La búsqueda usa `plainto_tsquery`: el texto del usuario tal cual, sin sintaxis de
+  operadores que se pueda romper.
+
+== Hallazgos
+
+[cols="1,5",options="header"]
+|===
+| # | Hallazgo
+
+| H4-01
+| 🔴 **Fallo latente en la ingesta de la Fase 3, encontrado al escribir la matriz de acceso.** Los cuatro `Active` del modelo (`catalog_products`, `catalog_versions`, `catalog_media`, `groups`) tenían `HasDefaultValue(true)` sobre un `bool` no anulable. EF Core no distingue «no asignado» de `false` —los dos son el valor por omisión del CLR— y ante `Active = false` en un `INSERT` **omitía la columna y la base ponía `true`**. Efecto: un recurso que llegaba **nuevo y ya retirado** se guardaba activo; un grupo creado inactivo nacía activo. La reconciliación y las bajas de recursos ya existentes no estaban afectadas (son `UPDATE`). Corregido con `.ValueGeneratedNever()` —EF envía siempre el valor y el `DEFAULT` queda en el DDL— y una prueba de regresión en `IngestFlowTests` (`Un_recurso_nuevo_que_llega_retirado_se_guarda_retirado`). Sin migración: el DDL no cambia.
+
+| H4-02
+| 📌 `notification_log` no tiene índice por `status`, y el drenador lee `WHERE status = 'queued'` cada cinco segundos. Hoy la tabla es pequeña y el recorrido es barato; cuando deje de serlo, el índice correcto es uno **parcial** sobre `status = 'queued'`, no uno sobre `user_id` como el que se retira. Se anota, no se actúa.
+
+| H4-03
+| 📌 `CatalogText` repite las cadenas de los enumerados que ya tienen las tablas de `CatalogBatchValidator`, porque el validador necesita además el orden para el mensaje «valores válidos: …». Duplicación consciente, documentada en los dos sitios. Si divergen, las pruebas de aceptación del catálogo lo dicen (`industry=marine` entra por una y sale por la otra).
+| H4-04
+| 🔴 **Los interceptores de EF Core no se toman del contenedor de la aplicación.** `SqlCapture` estaba registrado como `IInterceptor` en DI y capturaba cero órdenes: `AddDbContext` no los resuelve solo. Corregido en `AddInfrastructure` con la sobrecarga que recibe el proveedor: `options.AddInterceptors(proveedor.GetServices<IInterceptor>())`. Sin este cambio, cualquier interceptor futuro (auditoría, métricas) se registraría y no haría nada, en silencio.
+
+| H4-05
+| 📌 **La primera `MIG-BS-002` salió mal y hubo que rehacerla.** Un `HasIndex` destinado a `ApiRequestLogConfiguration` quedó por error de edición en `NotificationLogConfiguration`; la migración generada retiraba `ix_api_request_log_user_id` (y sus dos hijos de partición) y renombraba el de `notification_log`. Lo detectó `SchemaParityTests` (54 ≠ 56), no la lectura. Secuencia de recuperación: `database update MIG_BS_001_InitialSchema` → `migrations remove` → `migrations add` → `database update` → DDL derivado. Lección para el changelog: **una migración de índices se lee operación a operación antes de aplicarla**, y la cifra esperada (aquí ocho `DropIndex` y tres `RenameIndex`) se escribe antes de generarla.
+|===
+
+include::{root}/_nav.adoc[]

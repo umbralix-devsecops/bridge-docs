@@ -853,10 +853,10 @@ CREATE UNIQUE INDEX ix_catalog_versions_ext_version_id ON public.catalog_version
 
 
 --
--- Name: ix_ext_api_request_log_batch_id; Type: INDEX; Schema: public; Owner: -
+-- Name: ix_ext_log_batch; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX ix_ext_api_request_log_batch_id ON public.ext_api_request_log USING btree (batch_id);
+CREATE INDEX ix_ext_log_batch ON public.ext_api_request_log USING btree (batch_id);
 
 
 --
@@ -864,20 +864,6 @@ CREATE INDEX ix_ext_api_request_log_batch_id ON public.ext_api_request_log USING
 --
 
 CREATE INDEX ix_ext_log_recent ON public.ext_api_request_log USING btree (created_at DESC);
-
-
---
--- Name: ix_group_version_access_granted_by; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_group_version_access_granted_by ON public.group_version_access USING btree (granted_by);
-
-
---
--- Name: ix_groups_created_by; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_groups_created_by ON public.groups USING btree (created_by);
 
 
 --
@@ -930,13 +916,6 @@ CREATE INDEX ix_media_version ON public.catalog_media USING btree (version_id, "
 
 
 --
--- Name: ix_notification_log_user_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_notification_log_user_id ON public.notification_log USING btree (user_id);
-
-
---
 -- Name: ix_products_industry; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -972,13 +951,6 @@ CREATE UNIQUE INDEX ix_roles_name ON public.roles USING btree (name);
 
 
 --
--- Name: ix_sessions_replaced_by_session_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_sessions_replaced_by_session_id ON public.sessions USING btree (replaced_by_session_id);
-
-
---
 -- Name: ix_sessions_token_hash; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -993,38 +965,10 @@ CREATE INDEX ix_sessions_user ON public.sessions USING btree (user_id) WHERE (NO
 
 
 --
--- Name: ix_user_groups_assigned_by; Type: INDEX; Schema: public; Owner: -
+-- Name: ix_user_groups_group; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX ix_user_groups_assigned_by ON public.user_groups USING btree (assigned_by);
-
-
---
--- Name: ix_user_groups_group_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_user_groups_group_id ON public.user_groups USING btree (group_id);
-
-
---
--- Name: ix_user_media_exceptions_granted_by; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_user_media_exceptions_granted_by ON public.user_media_exceptions USING btree (granted_by);
-
-
---
--- Name: ix_user_media_exceptions_media_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_user_media_exceptions_media_id ON public.user_media_exceptions USING btree (media_id);
-
-
---
--- Name: ix_users_approved_by; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX ix_users_approved_by ON public.users USING btree (approved_by);
+CREATE INDEX ix_user_groups_group ON public.user_groups USING btree (group_id);
 
 
 --
@@ -1035,10 +979,10 @@ CREATE UNIQUE INDEX ix_users_email ON public.users USING btree (email);
 
 
 --
--- Name: ix_users_role_id; Type: INDEX; Schema: public; Owner: -
+-- Name: ix_users_role; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX ix_users_role_id ON public.users USING btree (role_id);
+CREATE INDEX ix_users_role ON public.users USING btree (role_id);
 
 
 --

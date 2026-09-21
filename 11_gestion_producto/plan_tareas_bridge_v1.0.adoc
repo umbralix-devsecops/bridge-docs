@@ -1,8 +1,8 @@
 = Plan de tareas — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 1.7
+:revnumber: 1.8
 :revdate: 2026-09-21
-:revremark: Fases 0 a 3 cerradas. La Fase 3 dejó veinte desvíos registrados en verificacion_fase3_plan_vs_ejecucion_v1.0.adoc.
+:revremark: Fases 0 a 4 cerradas. La Fase 4 cierra DT-BS-10 con MIG-BS-002 y deja siete desvíos y cinco hallazgos en verificacion_fase4_plan_vs_ejecucion_v1.0.adoc.
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -334,6 +334,32 @@ que este plan decía:
 
 == Fase 4 — Catálogo
 
+[NOTE]
+====
+✅ *Cerrada el 2026-09-21.* Las cuatro tareas hechas y verificadas: **176 pruebas en verde**
+(18 más que al cerrar la Fase 3): la matriz de acceso de `T-BS-040` contra PostgreSQL real con
+el SQL capturado por interceptor y `EXPLAIN` con recorrido secuencial prohibido, y las tres
+rutas del contrato por HTTP con dos usuarios de grupos distintos.
+
+Registro propio: `verificacion_fase4_plan_vs_ejecucion_v1.0.adoc`, con **siete** entradas y
+cinco hallazgos. Lo que cambia respecto de lo escrito aquí:
+
+* `T-BS-042`: `DT-BS-10` eran **catorce** índices por convención, no 17 (V4-05). Se quitó
+  `ForeignKeyIndexConvention` del contexto: desde `MIG-BS-002` (`20260921213627`) todo índice
+  está declarado a mano. Ocho retirados, tres renombrados; 64 → 56. `DT-BS-10` cerrada.
+* `T-BS-042`: «el plan de ejecución no trae la tabla entera» se prueba con `EXPLAIN` del SQL
+  real y `SET enable_seqscan = off`, porque con cuatro filas el planificador siempre elige el
+  recorrido secuencial (V4-06).
+* Cuatro silencios del contrato resueltos en código y registrados (V4-01..04): excepción
+  caducada no existe; grupo inactivo no concede; retirado = `404`/invisible; `versionsCount`
+  no depende del usuario y `mediaCount` sí.
+* `DEC-BS-24`: el esquema se queda en `public`, ahora como decisión (V4-07).
+* Hallazgo con efecto en la Fase 3: `HasDefaultValue(true)` sobre `bool` tragaba el `false`
+  en `INSERT` (H4-01). Corregido con `.ValueGeneratedNever()` y prueba de regresión.
+* Hallazgo de infraestructura: los `IInterceptor` de DI no llegan a EF si no se pasan en
+  `AddDbContext` (H4-04). Corregido.
+====
+
 [cols="1,3,2,1",options="header"]
 |===
 | ID | Tarea | Hecho cuando | Depende de
@@ -353,8 +379,12 @@ que este plan decía:
 
 | `T-BS-042`
 | `mediaCount` por `JOIN` — no por filtrado en memoria. Es la razón de ser de `ADR-BS-005`.
+  **Cierra `DT-BS-10`:** con las consultas reales de catálogo y permisos ya escritas, se
+  revisan los 17 índices de clave foránea que EF creó sin pedirlos, con el plan de ejecución
+  delante. Los que ninguna consulta use se retiran en una migración (`MIG-BS-002`); los que sí,
+  se documentan como deliberados.
 | El plan de ejecución no trae la tabla entera; el número coincide con lo que el usuario ve
-  al entrar.
+  al entrar. `DT-BS-10` cerrada o re-fechada con motivo.
 | `T-BS-040`
 
 | `T-BS-043`

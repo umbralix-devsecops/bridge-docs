@@ -246,7 +246,7 @@ Cosas que no son cambios pero que la ejecución hizo visibles.
 | 📌 El manifiesto (`manifest.yaml`) no registraba `plan_primera_entrega_v1.0.adoc`, `plan_tareas_bridge_v1.0.adoc`, `ADR-BS-007` ni `ADR-BS-008`. Cuatro documentos vigentes fuera del índice. Corregido en esta emisión, junto con el alta de este documento.
 
 | H3-04
-| 📌 `RequirePermissionAttribute` (Fase 2) implementa `IAuthorizationRequirementData` pero no deriva de `AuthorizeAttribute`, así que **tiene que ir acompañado de `[Authorize]`** para disparar la autenticación. Hoy ningún controlador lo usa —llega con la Fase 4—, y no hay prueba que lo ejercite. `RequireIngestScopeAttribute` sí deriva de `AuthorizeAttribute` precisamente por esto. Conviene alinear el primero con el segundo al empezar `T-BS-040`.
+| ✅ *Corregido el 2026-09-21, antes de la Fase 4.* `RequirePermissionAttribute` (Fase 2) implementaba `IAuthorizationRequirementData` pero no derivaba de `AuthorizeAttribute`: sin un `[Authorize]` al lado no disparaba la autenticación, el requisito se evaluaba contra un anónimo y la respuesta era `403` donde tocaba `401`. Ningún controlador lo usaba aún. Ahora deriva de `AuthorizeAttribute` y fija el esquema del portal, igual que `RequireIngestScopeAttribute`; la prueba de aceptación llega con su primer consumidor (`T-BS-041`).
 
 | H3-05
 | 📌 `DT-BS-10` (los 17 índices de clave foránea) decía «se revisan en la Fase 2» y no se revisaron. La condición escrita en la propia deuda —«cuando existan las consultas reales de catálogo y permisos»— solo se cumple en la Fase 4. Re-fechada, no incumplida.

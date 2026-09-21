@@ -1,6 +1,6 @@
 = Estado Actual — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 3.1
+:revnumber: 3.2
 :revdate: 2026-09-21
 :doctype: article
 :toc: left
@@ -31,7 +31,7 @@ arquitectura, modelo de datos y contrato de ingesta cerrados y mutuamente cohere
 *Sin bloqueantes externos para arrancar:* el plan de primera entrega
 (`11_gestion_producto/plan_primera_entrega_v1.0.adoc`) está emitido y su camino crítico es
 interno. Lo único con plazo ajeno es el rol de lectura sobre el almacenamiento (`DEC-BS-15`),
-que condiciona la Entrega 2, no la 1. *Código: Fases 0 a 3 cerradas* — cimientos, datos, identidad e ingesta; 158 pruebas en verde. Siguiente: Fase 4, catálogo.
+que condiciona la Entrega 2, no la 1. *Código: Fases 0 a 4 cerradas* — cimientos, datos, identidad, ingesta y catálogo; 176 pruebas en verde. Siguiente: Fase 5, administración.
 
 == Semáforo por sección
 
@@ -438,6 +438,33 @@ Dadas de baja: `DT-BS-01`, `DT-BS-03`, `DT-BS-05`.
 | *Deployment slots* de App Service con intercambio, para validar el arranque antes de recibir
   tráfico.
 |===
+
+[IMPORTANT]
+====
+*Fase 4 cerrada el 2026-09-21 — catálogo.* `GET /catalog/products`, `GET /catalog/products/{id}`
+y `GET /catalog/versions/{id}/media`. Una sola consulta de acceso (`MediaAccessQueries.VisibleTo`)
+que todo lo demás reutiliza: grupos activos más excepciones vigentes, la revocación gana.
+`mediaCount` por `COUNT` correlacionado, búsqueda por el índice GIN de la Fase 1 con el SQL
+real capturado y su `EXPLAIN` en la prueba. 176 pruebas en verde.
+
+Registro: `11_gestion_producto/verificacion_fase4_plan_vs_ejecucion_v1.0.adoc`. El cotejo
+previo con `api_catalog.yaml` no dio contradicciones, sí cuatro silencios que el código tuvo
+que decidir (V4-01..04). Lo que hay que conocer:
+
+* *`DT-BS-10` cerrada.* Sin convención de índices por clave foránea; `MIG-BS-002` retira ocho
+  y renombra tres, con el consumidor de cada uno escrito. 64 → 56 índices.
+* *`DEC-BS-24`:* el esquema se queda en `public` de la base dedicada `bridge`. La frontera
+  fuerte en PostgreSQL es la base, no el *schema*.
+* *H4-01, fallo latente de la Fase 3 corregido:* un recurso que llegaba nuevo y ya retirado se
+  guardaba activo (`HasDefaultValue(true)` sobre `bool`). Sin migración.
+* *H4-04:* los interceptores de EF Core hay que pasarlos desde DI a `AddDbContext`; no se toman
+  solos. Corregido; es la razón de que `SqlCapture` funcione.
+* *Deuda anotada, no actuada:* `notification_log` querrá un índice parcial por
+  `status = 'queued'` cuando crezca (H4-02).
+
+Siguiente: Fase 5, administración (`T-BS-05x`). Antes de escribir código, leer `api_admin.yaml`
+entero contra esquema y semilla, como en la 4.
+====
 
 [IMPORTANT]
 ====
