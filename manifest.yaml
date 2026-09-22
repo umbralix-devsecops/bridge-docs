@@ -243,10 +243,18 @@ sections:
     slug: guias_implementacion
     anchor: _guias-implementacion
     title: Guías de implementación
-    status: pendiente
+    status: parcial
     note: >
       guia_sync_worker_v1.0.adoc y guia_scaffolding_onpremise_v1.0.adoc quedan sin objeto:
       no hay SyncWorker ni modelo DB-First que regenerar.
+    documents:
+      - path: 07_guias_implementacion/guia_arranque_local_v1.0.adoc
+        status: vigente
+        version: "1.0"
+        note: >
+          Levantar el servicio por primera vez: requisitos, secretos en user-secrets, compose,
+          migraciones, primer administrador, siembra manual del catálogo, frontend, verify.
+          Sustituye la sección «Primer arranque» del README del código, desfasada.
     planned:
       - guia_ingesta_v1.0.adoc
       - guia_proxy_streaming_v1.0.adoc

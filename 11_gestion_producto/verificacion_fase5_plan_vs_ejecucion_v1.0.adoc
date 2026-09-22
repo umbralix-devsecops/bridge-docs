@@ -1,8 +1,8 @@
 = Verificación de la Fase 5 — lo planeado frente a lo ejecutado
 :author: Equipo de Desarrollo
-:revnumber: 1.1
+:revnumber: 1.2
 :revdate: 2026-09-22
-:revremark: T-BS-050 escrita y verificada (201 pruebas en verde); V5-11..13 añadidos; MIG-BS-003 generada (20260922171757).
+:revremark: T-BS-051 escrita (grupos, versiones, miembros); V5-14..16 añadidos. Pendiente dotnet test.
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -138,6 +138,27 @@ decide y aquí se dejan escritos (V5-04 en adelante).
 | Implícita
 | **Un manejador por agregado** en administración (`UserAdminHandler` con cinco órdenes). Las cinco comparten comprobación de existencia, cierre de unidad de trabajo y proyección de respuesta; cinco clases repartirían eso en cinco sitios. Los puertos de lectura los consume Api directamente, como `ICatalogReader` en la Fase 4.
 | `UserAdminHandler`
+| ✅
+
+| V5-14
+| `api_admin.yaml` → `/admin/groups/{id}`: «detalle del grupo con miembros y versiones»; `GroupDto` solo trae `membersCount`
+| Que el detalle lista miembros. No hay ninguna ruta que los devuelva, ni filtro `groupId` en `GET /admin/users`
+| **Se implementa `GET /admin/groups/{id}/members?page&pageSize`**, que el frontend ya llama (GAP-24 de portal-docs) con la forma `{data:[{id,fullName,email,role,status}],pagination}`. Aditiva, bajo `groups:read`. **El contrato debe recogerla** en su siguiente revisión; hasta entonces es la única ruta del Bridge que no está en un YAML.
+| `AdminGroupsController.ListMembersAsync`
+| ⚠️ contrato pendiente
+
+| V5-15
+| `api_admin.yaml` → `POST /admin/groups/{id}/versions` y `POST /admin/users/{id}/groups`: duplicado = **400**
+| Que asignar dos veces es un dato inválido
+| **409 `ALREADY_ASSIGNED`.** Un duplicado es un conflicto con el estado actual, no una petición mal formada; el frontend ya comenta «409 si la versión ya está asignada» en `admin-groups.api.ts`. Mismo criterio para el nombre repetido de grupo: **409 `GROUP_NAME_TAKEN`** (el contrato solo listaba 400).
+| `GroupFailures`
+| ⚠️ contrato pendiente
+
+| V5-16
+| `api_admin.yaml` → `DELETE /admin/groups/{id}`: «elimina el grupo y todas sus asociaciones»
+| Borrado físico
+| **Se cumple tal cual**, a diferencia de usuarios (V5-02): ningún FK de auditoría apunta a `groups`; `user_groups` y `group_version_access` son `ON DELETE CASCADE`. Los usuarios que pertenecían siguen existiendo.
+| `GroupAdminHandler.DeleteAsync`
 | ✅
 |===
 

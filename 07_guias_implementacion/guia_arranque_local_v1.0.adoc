@@ -1,0 +1,327 @@
+= Guía de arranque local — Bridge Service v1.0
+:author: Equipo de Desarrollo
+:revnumber: 1.0
+:revdate: 2026-09-22
+:revremark: Primera versión. Escrita contra docker-compose.yml, appsettings.Development.json.example, verify.sh y el estado real al cierre de T-BS-051.
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:sectnumlevels: 3
+:icons: font
+:lang: es
+:root: ..
+:section-id: guias-implementacion
+:section-title: Guías de implementación
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+[cols="1,3"]
+|===
+| *Para quién* | Quien clona `Sin-PortalBridge` por primera vez y quiere el servicio corriendo con datos, el frontend hablándole y las pruebas en verde.
+| *Tiempo* | 20–30 minutos con buena red. La primera descarga de imágenes y paquetes es lo que tarda.
+| *Estado del código que describe* | Fases 0–4 en `main`; Fase 5 (`T-BS-050`, `T-BS-051`) en `feat/fase-5-admin`. Simulador de ingesta (`T-BS-060`) **aún no escrito**: el catálogo se siembra con una llamada HTTP a mano, §7.
+| *Qué no cubre* | Azure, Key Vault, Blob Storage (Entrega 2), CI. Para eso, `09_infraestructura_despliegue/` cuando exista.
+|===
+
+== Antes de empezar
+
+Cuatro herramientas. Comprueba las versiones: los tres fallos más comunes del primer arranque son un SDK 8 heredado de la guía de onboarding del portal (desactualizada; `ADR-BS-009`), un Node anterior a 22.12 y Docker sin arrancar.
+
+[cols="1,1,2",options="header"]
+|===
+| Herramienta | Versión | Comprobación
+
+| .NET SDK | **10.x** | `dotnet --version` → `10.0.…`
+| Docker Desktop (o Engine + Compose v2) | cualquiera reciente | `docker compose version` y `docker ps` sin error
+| `dotnet-ef` | 10.x | `dotnet ef --version`. Si falta: `dotnet tool install --global dotnet-ef`
+| Node.js (solo para el frontend) | **≥ 22.12** | `node --version`
+| `openssl` (una vez, para la clave JWT) | cualquiera | En Windows viene con Git for Windows; úsalo desde Git Bash
+| `gitleaks` (opcional) | — | La CI lo ejecuta; `verify.sh` avisa si no está
+|===
+
+Repositorios, hermanos en la misma carpeta — las rutas relativas de los scripts y del README lo asumen:
+
+[source]
+----
+portal-videos/
+├── Sin-PortalBridge/     ← este servicio
+├── Sin-PortalVideos/     ← frontend Angular
+├── bridge-docs/          ← esta documentación
+└── portal-docs/          ← documentación del portal (contratos api_*.yaml viven en Sin-PortalVideos/openapi/sources)
+----
+
+[source,bash]
+----
+git clone https://github.com/Devs-Umbralix/Sin-PortalBridge.git
+git clone <url>/Sin-PortalVideos.git
+git clone <url>/bridge-docs.git
+cd Sin-PortalBridge
+----
+
+== Configuración local (una sola vez)
+
+=== La cadena de conexión y el resto de ajustes no secretos
+
+[source,bash]
+----
+cp src/BridgeService.Api/appsettings.Development.json.example \
+   src/BridgeService.Api/appsettings.Development.json
+----
+
+El archivo copiado está en `.gitignore` (`SEC-BS-01`). Apunta a `localhost:5432`, base `bridge`, usuario `bridge`, contraseña `bridge_dev_only` — exactamente lo que levanta el `compose`. No hace falta tocar nada más para arrancar.
+
+=== La clave de firma de los JWT
+
+Es el único secreto real. Va a *user-secrets*, que viven fuera del árbol de trabajo (`%APPDATA%\Microsoft\UserSecrets\bridge-service-portal-videos\` en Windows, `~/.microsoft/usersecrets/…` en Linux/macOS).
+
+[source,bash]
+----
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out clave-dev.pem
+dotnet user-secrets --project src/BridgeService.Api set "Jwt:PrivateKeyPem" "$(cat clave-dev.pem)"
+rm clave-dev.pem
+----
+
+[NOTE]
+Sin ella el servicio arranca pero el primer `POST /auth/login` falla con un mensaje que dice exactamente esto. En Azure la misma clave de configuración llega desde Key Vault; el código no distingue.
+
+=== La credencial de ingesta
+
+`POST /v1/ingest/catalog` exige un token de servicio, que a su vez exige `Ingest:ClientId` y **el resumen SHA-256** de un secreto. El secreto se genera, nunca se teclea. En Git Bash o Linux:
+
+[source,bash]
+----
+secreto=$(openssl rand -base64 32 | tr -d '=' | tr '+/' '-_')
+resumen=$(printf '%s' "$secreto" | openssl dgst -sha256 -binary | base64 | tr -d '=' | tr '+/' '-_')
+echo "secreto=$secreto"
+echo "resumen=$resumen"
+----
+
+(El `.example` trae el equivalente en PowerShell.) El **resumen** va a `Ingest:ClientSecretHash` en `appsettings.Development.json`, sustituyendo a `<pega aqui el resumen>`. El **secreto** lo guardas tú: es lo que presentará el cliente de ingesta en §7. `ClientId` puede quedarse en `ingest-simulator-local`.
+
+=== Enlace de invitación (`DEC-BS-25`)
+
+`Frontend:BaseUrl` ya viene como `http://localhost:4200` en el `.example`. Con él se compone `…/set-password?token=…` del correo que recibe un usuario creado por administrador. Si falta, `POST /admin/users` falla con un mensaje explícito y el arranque avisa.
+
+== Levantar la infraestructura
+
+[source,bash]
+----
+docker compose up -d postgres mailpit
+docker compose ps
+----
+
+Espera a que `postgres` esté `healthy`. Qué hay:
+
+[cols="1,1,3",options="header"]
+|===
+| Servicio | Puerto | Para qué
+
+| `postgres` (16-alpine) | 5432 | La base. Volumen `postgres-data`: sobrevive a `down`; `down -v` la borra.
+| `mailpit` | 1025 SMTP · **8025 web** | Buzón de desarrollo. Acepta todo y no entrega nada. Ahí aparecen los correos de registro, aprobación e invitación: `http://localhost:8025`.
+| `api` | 8080 | La API **en contenedor**. Para desarrollar no la uses: `dotnet run` (§5) recarga y depura; el contenedor sirve para probar el `Dockerfile`.
+|===
+
+[TIP]
+`docker compose up -d` sin nombres levanta también `api`, que compila la imagen (minutos) y necesita `JWT_PRIVATE_KEY_PEM` e `INGEST_CLIENT_SECRET_HASH` en un `.env`. Para el día a día, levanta solo `postgres` y `mailpit`.
+
+== Base de datos: migraciones y semilla
+
+[source,bash]
+----
+dotnet restore
+dotnet ef database update -p src/BridgeService.Infrastructure -s src/BridgeService.Api
+----
+
+`dotnet ef` no arranca la aplicación: usa `AppDbContextFactory`, que fija Development y lee la cadena de `appsettings.Development.json`. Aplica en orden `MIG-BS-001` (esquema, particiones, GIN, **semilla de 4 roles y 24 permisos** desde `003_seed_roles.sql`), `MIG-BS-002` (índices) y `MIG-BS-003` (administración de usuarios).
+
+Comprobación rápida:
+
+[source,bash]
+----
+docker compose exec postgres psql -U bridge -d bridge -c "SELECT name FROM roles ORDER BY 1;"
+docker compose exec postgres psql -U bridge -d bridge -c "SELECT count(*) FROM __efmigrationshistory;"   # → 3
+----
+
+[IMPORTANT]
+El esquema se cambia **solo** por migraciones de EF Core (`ADR-BS-004`, `DOM-BS-04`). `schema_derivado_v2.sql` es un artefacto derivado para leer, nunca para ejecutar. Nueva migración = nueva entrada `MIG-BS-NNN` en `changelog_modelo_datos.adoc` en el mismo commit (`DOM-BS-05`); `ArchitectureTests` lo comprueba.
+
+== Arrancar el servicio
+
+[source,bash]
+----
+dotnet run --project src/BridgeService.Api
+----
+
+Escucha en `https://localhost:7001` y `http://localhost:7000` (`launchSettings.json`). El log de arranque avisa, sin parar, de lo que falte: `Ingest:WebPlatformId` (normal en local), contenedores de Storage (Entrega 2), `Frontend:BaseUrl`.
+
+[source,bash]
+----
+curl -k https://localhost:7001/health          # → Healthy
+curl -k https://localhost:7001/health/ready    # comprueba la base
+----
+
+[NOTE]
+Si `dotnet run` protesta por el certificado HTTPS de desarrollo: `dotnet dev-certs https --trust` una vez. El frontend usa `secure: false` en su proxy, así que le da igual.
+
+== El primer administrador
+
+No hay usuario sembrado: la semilla crea roles, no cuentas. El único camino de alta sin sesión es el autorregistro, que nace `pending` con rol `viewer`; el primer administrador se promociona **una vez, a mano**, y a partir de ahí todo lo demás va por la API.
+
+. Regístrate:
++
+[source,bash]
+----
+curl -k -X POST https://localhost:7001/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@tu-dominio.local","password":"UnaClaveLarga123","fullName":"Administrador"}'
+----
++
+En Mailpit aparece el correo `account_registered`.
+
+. Promociónalo en la base. `ck_users_approved` exige `approved_by` y `approved_at` juntos o ninguno; como no hay nadie que apruebe, se deja ninguno:
++
+[source,bash]
+----
+docker compose exec postgres psql -U bridge -d bridge -c "
+UPDATE users
+   SET status  = 'active',
+       role_id = (SELECT id FROM roles WHERE name = 'administrator'),
+       updated_at = now()
+ WHERE email = 'admin@tu-dominio.local';"
+----
+
+. Entra:
++
+[source,bash]
+----
+curl -k -X POST https://localhost:7001/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@tu-dominio.local","password":"UnaClaveLarga123"}'
+----
++
+Devuelve `accessToken` (15 min) y deja el *refresh token* en una cookie. Con ese token, `GET /auth/me` debe listar permisos `recurso:accion` con `users:read`, `users:write`, `groups:write`, etc.
+
+Desde aquí, los siguientes usuarios se crean con `POST /admin/users` (reciben invitación en Mailpit con el enlace para fijar contraseña) o se aprueban con `PUT /admin/users/{id}/approve`.
+
+== Sembrar el catálogo
+
+El catálogo entra **solo por empuje** (`ADR-BS-006`): no hay conexión a SinsaTools y el simulador `tools/IngestSimulator` es todavía un *stub* (Fase 6). Hasta entonces, un lote mínimo a mano:
+
+. Token de servicio, con el **secreto** de §2.3:
++
+[source,bash]
+----
+curl -k -X POST https://localhost:7001/v1/auth/token \
+  -H "Content-Type: application/json" \
+  -d '{"clientId":"ingest-simulator-local","clientSecret":"<secreto>"}'
+----
+
+. Un lote conforme a `ingest_catalog_v1.0.yaml`. El `storageUri` tiene que ser de la cuenta y contenedor configurados (`DEC-BS-22`) y **sin firma** (`DOM-BS-11`):
++
+[source,bash]
+----
+curl -k -X POST https://localhost:7001/v1/ingest/catalog \
+  -H "Authorization: Bearer <token de servicio>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "batchId": "'"$(uuidgen)"'",
+    "mode": "upsert",
+    "generatedAt": "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'",
+    "products": [{
+      "sourceId": 1001, "name": "Producto de prueba", "tradeName": "Demo", "industry": "marine", "active": true,
+      "versions": [{
+        "sourceId": 2001, "name": "NA 2026", "active": true,
+        "media": [{
+          "source": "EntityFiles", "sourceId": 3001, "name": "demo.mp4", "extension": "mp4",
+          "visibility": "private", "position": 0, "active": true,
+          "storageUri": "http://localhost:10000/devstoreaccount1/media-private/demo/demo.mp4"
+        }]
+      }]
+    }]
+  }'
+----
++
+Respuesta `202` con `"status":"completed"`. `GET /v1/ingest/{batchId}` lo confirma.
+
+[NOTE]
+Nadie lee bytes de ese `storageUri` en la Entrega 1: el catálogo lista y el acceso se evalúa, pero el *streaming* es Entrega 2. Por eso el `compose` no levanta Azurite.
+
+Para que un `viewer` vea el medio: crear un grupo (`POST /admin/groups` con `versionIds`), meterlo en él (`POST /admin/users/{id}/groups`). El cambio es inmediato, sin refrescar sesión: el acceso se evalúa en cada lectura.
+
+== El frontend contra el servicio real
+
+[source,bash]
+----
+cd ../Sin-PortalVideos
+npm ci
+npm start          # ng serve con proxy.conf.json → https://localhost:7001, reescribe /api → /
+----
+
+`http://localhost:4200`. El proxy quita el prefijo `/api`, así que el frontend llama `/api/auth/login` y el servicio recibe `/auth/login`. CORS ya admite `http://localhost:4200`.
+
+`npm run start:mock` arranca **sin** servicio, contra la API simulada del propio frontend; útil para trabajar la interfaz, inútil para probar esto.
+
+== Verificar que todo está bien
+
+[source,bash]
+----
+./verify.sh        # Windows: .\verify.ps1
+----
+
+Es lo mismo que ejecuta la CI, en el mismo orden: `restore`, `format --verify-no-changes`, `build` en Release con avisos como errores, pruebas de arquitectura, todas las pruebas con cobertura, `gitleaks` si está instalado. Si esto pasa y la CI falla, el que está mal es el script.
+
+Solo pruebas, en desarrollo:
+
+[source,bash]
+----
+dotnet test
+----
+
+[cols="1,3",options="header"]
+|===
+| Proyecto | Qué necesita
+
+| `UnitTests` | Nada. Solo ve `Application`.
+| `ArchitectureTests` | Nada. Regla de dependencia, puertos sin `IQueryable`, nombre y correlatividad de migraciones.
+| `IntegrationTests` | **Docker corriendo.** Testcontainers levanta su propio PostgreSQL 16 —no usa el del `compose`— y ejecuta `SchemaParityTests`: migraciones contra DDL derivado, recuentos 18 / 14 / 58.
+| `AcceptanceTests` | **Docker corriendo.** Host real con `WebApplicationFactory` sobre otro PostgreSQL de Testcontainers; recorre autenticación, ingesta, catálogo con control de acceso y administración por HTTP.
+|===
+
+La primera ejecución descarga `postgres:16-alpine` para Testcontainers y tarda; después, ~1 minuto.
+
+== Problemas habituales
+
+[cols="2,3",options="header"]
+|===
+| Síntoma | Causa y arreglo
+
+| `Falta 'ConnectionStrings:Postgres'` al hacer `dotnet ef` | No copiaste el `.example` (§2.1), o lo copiaste con otro nombre.
+| `login` devuelve 500 y el log habla de `Jwt:PrivateKeyPem` | Falta la clave en user-secrets (§2.2). `dotnet user-secrets list --project src/BridgeService.Api` la muestra.
+| `POST /v1/auth/token` → 401 | El `clientSecret` no corresponde al `ClientSecretHash` configurado. Regenera el par (§2.3) y pega el **resumen**, no el secreto.
+| `POST /v1/ingest/catalog` → 422 por `storageUri` | La cuenta o el contenedor no coinciden con `Storage:*`, o la URI lleva *query string*. Mira el detalle del ítem en `GET /v1/ingest/{batchId}`.
+| `POST /admin/users` → 500 `Frontend:BaseUrl` | Falta la clave (§2.4).
+| `IntegrationTests` / `AcceptanceTests` fallan en el arranque del contenedor | Docker no está corriendo, o Testcontainers no encuentra el socket. `docker ps` primero.
+| `dotnet build` falla por `IDE0005`, `CA*`, `CS157x` | Es a propósito: avisos = errores (`EST-BS`). Arregla el aviso, no lo silencies.
+| `index.lock` en `.git` | Otro proceso de git dejó el candado. Comprueba que no hay ninguno y bórralo.
+| Un correo no llega | No llega a ningún sitio: mira `http://localhost:8025`. Si tampoco está ahí, `notification_log` guarda el estado (`queued` / `sent` / `failed` con `error_detail`).
+|===
+
+== Trazabilidad
+
+[cols="1,3",options="header"]
+|===
+| Artefacto | Relación
+
+| Estado vivo | xref:{root}/00_Estado_Actual.adoc[00_Estado_Actual]
+| Por qué .NET 10 | `ADR-BS-009`
+| Por qué el esquema lo define EF Core | `ADR-BS-004`; xref:{root}/04_arquitectura_tecnica/modelo_datos/changelog_modelo_datos.adoc[changelog_modelo_datos]
+| Por qué el catálogo entra por empuje | `ADR-BS-006`; `05_contratos_api/ingesta/ingest_catalog_v1.0.yaml`
+| Secretos fuera del árbol | `SEC-BS-01`, `SEC-BS-08`
+| Estándares ejecutables | xref:{root}/10_estandares_procesos/estandares_codigo_v1.0.adoc[estandares_codigo]
+| Lo que describe el README del código | `Sin-PortalBridge/README.md` — la sección «Primer arranque» está **desfasada** (habla de la Fase 1 sin compilar); esta guía la sustituye hasta que se reescriba.
+|===
+
+include::{root}/_nav.adoc[]
