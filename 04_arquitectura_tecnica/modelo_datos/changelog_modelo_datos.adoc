@@ -1,8 +1,8 @@
 = Historial de cambios del modelo de datos — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 2.5
-:revdate: 2026-09-21
-:revremark: MIG-BS-002: cierre de DT-BS-10. Sin índices por convención; ocho retirados, seis declarados con nombre. 56 índices.
+:revnumber: 2.6
+:revdate: 2026-09-22
+:revremark: MIG-BS-003 (AdministracionUsuarios) generada y verificada: account_setup_tokens, users.deleted_at, notification_log.payload. Modelo ER 2.1.
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -378,6 +378,50 @@ nombre y su motivo**: no hay ninguno que exista porque una convención lo decidi
 * La misma migración no toca columnas: el cambio de `ValueGeneratedNever` en los cuatro
   `Active` (H4-01) es solo de modelo y no produce operación.
 
+=== MIG-BS-003 — AdministracionUsuarios
+
+[cols="1,3"]
+|===
+| *Migración EF* | `MIG_BS_003_AdministracionUsuarios`
+| *Contexto* | `AppDbContext`
+| *Fecha* | 2026-09-22 (sello `20260922171757`)
+| *Versión del ER* | `modelo_datos_bridge_v2.mermaid` **2.1** (revisión aditiva; V5-12)
+| *Reversibilidad* | ✅ Total (`Down` borra la tabla y las dos columnas; se pierden tokens vivos y la marca de baja)
+| *Impacto en datos* | Ninguno sobre filas existentes: dos columnas nuevas anulables y una tabla vacía
+| *Ventana* | No. `ADD COLUMN … NULL` sin valor por omisión es instantáneo en PostgreSQL 16
+| *Motivada por* | `T-BS-050` · `DEC-BS-25` · `DEC-BS-26` · `SEC-BS-04`
+|===
+
+*Qué hace:*
+
+* `users.deleted_at timestamptz NULL` — la baja lógica (`DEC-BS-26`). Sin índice: los
+  listados filtran por `status` y el predicado es barato sobre una tabla de cientos.
+* `account_setup_tokens` — tokens de un solo uso para fijar la contraseña (`DEC-BS-25`):
+  `id`, `user_id` (FK `users`, `ON DELETE CASCADE`), `token_hash varchar(64)` con índice
+  único `ux_account_setup_tokens_hash`, `purpose varchar(16)`, `expires_at`, `used_at`,
+  `created_at`. **Sin índice por `user_id`** (`DT-BS-10`): la única consulta por usuario es
+  consumir sus tokens vivos, rara y sobre una tabla pequeña. **`purpose` es texto, no tipo
+  enumerado**: un valor nuevo (`reset`, mañana) no debe costar una migración de tipo.
+* `notification_log.payload jsonb NULL` — datos que la plantilla necesita y el tipo no lleva.
+  Hoy, el enlace de invitación. Se pone a `NULL` al marcar `sent` o `failed` porque puede
+  llevar un token en claro (`SEC-BS-04`).
+
+*Por qué:* `POST /admin/users` promete una cuenta que recibe cómo entrar; `DELETE` promete
+una eliminación que el esquema (cuatro FK `RESTRICT` de auditoría) no permite físicamente.
+Las dos decisiones que lo resuelven necesitan estas piezas.
+
+*Al revertir se pierde:* los tokens de invitación no consumidos (los usuarios invitados
+tendrían que ser reinvitados) y la marca de baja: los dados de baja reaparecerían en los
+listados como suspendidos, con correo y nombre anonimizados. La anonimización en sí no se
+revierte.
+
+*Recuentos esperados:* 18 tablas (+1), 14 enums (=), 58 índices (+2: PK y único de la tabla
+nueva). `SchemaParityTests` ya los espera.
+
+*Notas de despliegue:* ninguna. Leída operación a operación antes de aplicar (H4-05): trae
+**dos `AddColumn`, una `CreateTable` y un `CreateIndex`**, y nada más. Verificado el
+2026-09-22: `SchemaParityTests` en verde con 18 / 14 / 58.
+
 == Versiones del modelo ER
 
 [cols="1,2,3,1",options="header"]
@@ -397,6 +441,13 @@ nombre y su motivo**: no hay ninguno que exista porque una convención lo decidi
   e ingesta. El catálogo gana identificador interno estable frente a la clave natural de
   origen, `industry`, la terna de almacenamiento y `last_seen_at`. `SYNC_RUN` / `SYNC_ITEM`
   se sustituyen por `ingest_batches` / `ingest_items`.
+| ✅ Vigente
+
+| v2.1
+| `modelo_datos_bridge_v2.mermaid` (mismo archivo, cabecera 2.1)
+| Revisión aditiva por `MIG-BS-003`: `account_setup_tokens`, `users.deleted_at`,
+  `notification_log.payload`. Ninguna relación ni columna existente cambia, por eso no es
+  v3 (V5-12).
 | ✅ Vigente
 |===
 

@@ -208,6 +208,23 @@ CREATE TYPE public.user_status AS ENUM (
 
 SET default_tablespace = '';
 
+SET default_table_access_method = heap;
+
+--
+-- Name: account_setup_tokens; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.account_setup_tokens (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    token_hash character varying(64) NOT NULL,
+    purpose character varying(16) NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    used_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
 --
 -- Name: api_request_log; Type: TABLE; Schema: public; Owner: -
 --
@@ -225,8 +242,6 @@ CREATE TABLE public.api_request_log (
 )
 PARTITION BY RANGE (created_at);
 
-
-SET default_table_access_method = heap;
 
 --
 -- Name: api_request_log_2026; Type: TABLE; Schema: public; Owner: -
@@ -459,7 +474,8 @@ CREATE TABLE public.notification_log (
     status public.notification_status DEFAULT 'queued'::public.notification_status NOT NULL,
     error_detail text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    sent_at timestamp with time zone
+    sent_at timestamp with time zone,
+    payload jsonb
 );
 
 
@@ -552,6 +568,7 @@ CREATE TABLE public.users (
     last_login_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    deleted_at timestamp with time zone,
     CONSTRAINT ck_users_approved CHECK (((approved_by IS NULL) = (approved_at IS NULL)))
 );
 
@@ -664,6 +681,14 @@ ALTER TABLE ONLY public.api_request_log_2026
 
 ALTER TABLE ONLY public.api_request_log_2027
     ADD CONSTRAINT api_request_log_2027_pkey PRIMARY KEY (id, created_at);
+
+
+--
+-- Name: account_setup_tokens pk_account_setup_tokens; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.account_setup_tokens
+    ADD CONSTRAINT pk_account_setup_tokens PRIMARY KEY (id);
 
 
 --
@@ -1007,6 +1032,13 @@ CREATE INDEX ix_video_access_log_user_id ON ONLY public.video_access_log USING b
 
 
 --
+-- Name: ux_account_setup_tokens_hash; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX ux_account_setup_tokens_hash ON public.account_setup_tokens USING btree (token_hash);
+
+
+--
 -- Name: ux_ingest_running; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -1131,6 +1163,14 @@ ALTER INDEX public.ix_video_access_log_user_id ATTACH PARTITION public.video_acc
 
 ALTER TABLE public.api_request_log
     ADD CONSTRAINT api_request_log_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: account_setup_tokens fk_account_setup_tokens_users_user_id; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.account_setup_tokens
+    ADD CONSTRAINT fk_account_setup_tokens_users_user_id FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
 
 
 --

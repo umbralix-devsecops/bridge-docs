@@ -1,9 +1,12 @@
 %% Modelo de datos del Bridge Service
-%% Version: 2.0 · Fecha: 2026-09-16
+%% Version: 2.1 · Fecha: 2026-09-22 (2.0: 2026-09-16)
 %% Motor: PostgreSQL 16 (Azure Database for PostgreSQL Flexible Server)
 %% Gobernado por: ADR-BS-001, ADR-BS-002, ADR-BS-004, ADR-BS-005, ADR-BS-006
 %% .
 %% Verificado contra PostgreSQL 16.13: 17 tablas, 13 enums, 0 errores.
+%% 2.1 (MIG-BS-003, Fase 5): + ACCOUNT_SETUP_TOKENS, users.deleted_at, notification_log.payload.
+%%     Revision aditiva del mismo modelo, no version nueva: ninguna relacion ni columna
+%%     existente cambia (interpretacion de DOM-BS-06 registrada en verificacion_fase5 V5-12).
 %% .
 %% Supera a modelo_datos_bridge_v1.mermaid (el cache de lectura de un servicio que leia
 %% un SQL Server remoto) y absorbe modelo_datos_v3.mermaid de portal-docs. Es el UNICO
@@ -27,6 +30,7 @@ erDiagram
     ROLES  ||--o{ ROLE_PERMISSIONS : define
     ROLES  ||--o{ USERS            : clasifica
     USERS  ||--o{ SESSIONS         : abre
+    USERS  ||--o{ ACCOUNT_SETUP_TOKENS : invita
     USERS  ||--o{ USER_GROUPS      : pertenece
     GROUPS ||--o{ USER_GROUPS      : agrupa
     GROUPS ||--o{ GROUP_VERSION_ACCESS : concede
@@ -129,8 +133,19 @@ erDiagram
         timestamptz approved_at
         timestamptz suspended_at
         timestamptz last_login_at
+        timestamptz deleted_at "baja logica DEC-BS-26: la fila queda para la auditoria, la identidad se anonimiza"
         timestamptz created_at
         timestamptz updated_at
+    }
+
+    ACCOUNT_SETUP_TOKENS {
+        uuid id PK
+        uuid user_id FK "ON DELETE CASCADE"
+        varchar token_hash UK "SHA-256 base64url del token; el token nunca se guarda (DEC-BS-25)"
+        varchar purpose "invite; texto y no enum para no migrar por un valor nuevo"
+        timestamptz expires_at
+        timestamptz used_at "nulo mientras vive; un solo uso"
+        timestamptz created_at
     }
 
     SESSIONS {
@@ -267,6 +282,7 @@ erDiagram
         text error_detail
         timestamptz created_at
         timestamptz sent_at
+        jsonb payload "datos para la plantilla; se pone a NULL al enviar o fallar (puede llevar el enlace de invitacion)"
     }
 
 %% ── INDICES REQUERIDOS ────────────────────────────────────────────────

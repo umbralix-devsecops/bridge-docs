@@ -1,0 +1,166 @@
+= Verificación de la Fase 5 — lo planeado frente a lo ejecutado
+:author: Equipo de Desarrollo
+:revnumber: 1.1
+:revdate: 2026-09-22
+:revremark: T-BS-050 escrita y verificada (201 pruebas en verde); V5-11..13 añadidos; MIG-BS-003 generada (20260922171757).
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:sectnumlevels: 3
+:icons: font
+:lang: es
+:root: ..
+:section-id: gestion-producto
+:section-title: Gestión de Producto
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+
+---
+
+[.lead]
+Registro de lo que la ejecución de la Fase 5 —Administración— cambia o fija respecto de lo
+escrito antes de empezarla. Fuentes: la tabla `T-BS-050…054` del plan, `api_admin.yaml` y
+`api_sync.yaml` del frontend (`Sin-PortalVideos/openapi/sources/`), la semilla
+`003_seed_roles.sql`, el modelo de datos y el código de las Fases 2 a 4. Mismo método y mismas
+convenciones de estado que las verificaciones de las Fases 3 y 4.
+
+== El cotejo previo
+
+Se leyeron las diecinueve rutas de `api_admin.yaml` y las cuatro de `api_sync.yaml` contra
+el esquema, la semilla y lo ya construido. Los permisos del contrato existen en la semilla con
+la distribución que el contrato presupone (`users:*` solo administrador; `groups:read` también
+editor; `logs:read` administrador y auditor; `config:*` administrador). Los enumerados
+`role`, `status` y `registrationType` coinciden letra por letra con `roles.name`, `user_status`
+y `reg_type`. Toda columna que un DTO pide existe.
+
+A diferencia de la Fase 4, esta vez **sí salieron contradicciones**, y de las que obligan a
+decidir antes de escribir: dos del contrato de administración contra la realidad del esquema y
+de `api_auth.yaml`, y una del plan contra el frontend. Están abajo como V5-01 a V5-03, ya
+resueltas con el responsable del producto el 2026-09-22. El resto son silencios que el código
+decide y aquí se dejan escritos (V5-04 en adelante).
+
+== Desvíos y decisiones
+
+[cols="1,2,2,3,1,1",options="header"]
+|===
+| # | Dónde estaba escrito | Qué decía | Qué se hace, y por qué | Registro | Estado
+
+| V5-01
+| `api_admin.yaml` → `POST /admin/users`: «se crea `active` y el sistema envía las credenciales al email»; `api_auth.yaml`: solo `login`, `register`, `refresh`, `logout`
+| Que el usuario recibe una contraseña por correo. No existe ninguna ruta para fijarla ni cambiarla
+| **Enlace de invitación y ruta nueva** `POST /auth/set-password`. La cuenta nace `active` con un hash inservible; el correo lleva un token de un solo uso y caducidad. Ninguna contraseña viaja por SMTP ni pasa por el administrador. Se descartaron la contraseña temporal por correo (viaja en claro y no hay cambio obligatorio posible sin la misma ruta nueva) y la contraseña en la petición del administrador (traslada el problema). Coste asumido: dos contratos cambian y el frontend necesita una pantalla.
+| `DEC-BS-25`, `MIG-BS-003`
+| ✅ decidido; ⏳ código
+
+| V5-02
+| `api_admin.yaml` → `DELETE /admin/users/{id}`: «elimina el usuario y todas sus sesiones, pertenencias y excepciones»; esquema: `approved_by`, `created_by`, `granted_by`, `assigned_by` con `ON DELETE RESTRICT`
+| Borrado físico. El esquema lo impide para cualquier usuario que haya aprobado a otro, creado un grupo o concedido algo: es decir, para todo administrador con historia
+| **Baja lógica con anonimización.** `users.deleted_at`; sesiones revocadas, pertenencias y excepciones borradas, email y nombre reescritos, hash inservible. La fila permanece y la auditoría conserva autor sin tocar una sola FK. El email queda libre. Se descartó el borrado físico con `409` para quien deje rastro (comportamiento distinto según la historia del usuario) y el borrado físico poniendo la auditoría a `NULL` (contradice para qué existen esas columnas).
+| `DEC-BS-26`, `MIG-BS-003`
+| ✅ decidido; ⏳ código
+
+| V5-03
+| `plan_tareas` → `T-BS-054` y `DEC-BS-07`: «`POST /admin/sync` → `503`»; frontend → sección *Sync History* consume `GET /admin/sync/status`, `GET /admin/sync/logs`, `GET /admin/sync/logs/{id}`; `api_sync.yaml` describe `SYNC_LOG`, `scope: full|delta`, `nextScheduledSync`
+| El plan solo veía el `POST`. El contrato y el frontend siguen describiendo el modelo *pull* que `ADR-BS-006` descartó
+| **Servir la familia desde `ingest_batches`**: el historial de sincronización es el historial de lotes. Estados y contadores tienen correspondencia directa; `triggerType` es siempre `automatic`; `nextScheduledSync` nulo hasta `DEC-BS-09`; `isDataStale` por umbral configurable. `POST` sigue en `503`. El frontend no cambia; `api_sync.yaml` queda anotado para reescribirse sobre lo que existe.
+| `DEC-BS-27`
+| ✅ decidido; ⏳ código
+
+| V5-04
+| `api_admin.yaml` → `PATCH /admin/users/{id}` con `role`; `Contrato_JWT`: `perms{}` viaja en el token de acceso
+| Nada sobre qué pasa con las sesiones vigentes al cambiar el rol
+| **Cambiar el rol revoca las sesiones activas del usuario** (`forced`). El token de acceso lleva los permisos resueltos al emitirse; sin revocación, el usuario conservaría el rol viejo hasta el siguiente *refresh* (hasta 15 minutos con más permisos de los que tiene). El *refresh* exige sesión usable, así que la revocación surte efecto en la siguiente petición. Suspender ya lo hacía por contrato.
+| `SuspendUser`, `UpdateUser`
+| ⏳
+
+| V5-05
+| `api_admin.yaml` → `VideoAccessLogDto.accessSource`: `group`, `individual_exception`, `denied`; esquema `access_source`: `group`, `individual_exception`, `denied_revoke`, `denied_none`
+| El contrato tiene tres valores; la base distingue por qué se denegó
+| **La lectura colapsa `denied_revoke` y `denied_none` en `denied`**, como pide el contrato: el frontend no conoce otros valores. La distinción se conserva en la base y se ofrecerá al contrato como campo adicional cuando se revise (`api_admin.yaml` 1.1). No se pierde información, solo no se expone.
+| `CatalogText`-equivalente en `AdminText`
+| ⏳
+
+| V5-06
+| `plan_tareas` → `T-BS-053`: «`api_request_log`, `ext_api_request_log`, `notification_log`»; `api_admin.yaml` → `/admin/logs/requests` (`api_request_log`) y `/admin/logs/video-access` (`video_access_log`)
+| El plan y el contrato no listan las mismas tablas
+| **Manda el contrato**: se exponen `api_request_log` y `video_access_log`. `ext_api_request_log` no se escribe todavía (V3-19, Fase 6) y `notification_log` no tiene consumidor en el frontend. La prueba de `SEC-BS-04` recorre igualmente las cuatro tablas de registro.
+| `T-BS-053`
+| ⏳
+
+| V5-07
+| `RNF-06`, `T-BS-012`: `api_request_log` modelada en la Fase 1
+| Que existe el registro de peticiones
+| **Nadie lo escribe.** Ninguna fase del plan asignó el *middleware* que inserta en `api_request_log`; sin él, `/admin/logs/requests` devolvería siempre vacío. Se incorpora a `T-BS-053` (`RequestLogMiddleware`: método, ruta, estado, latencia, `correlation_id`, IP, `sub` si lo hay; escritura fuera del camino de la respuesta). `video_access_log` sí tiene dueño: la Fase 7.
+| `T-BS-053`
+| ⏳
+
+| V5-08
+| `api_admin.yaml` → `GET /admin/users?search=`: «búsqueda por nombre o email»
+| Un filtro sin índice que lo sirva: `ix_users_email` es *btree* sobre `citext`, sirve igualdad y prefijo, no contiene
+| `ILIKE '%…%'` sobre `full_name` y `email`, con recorrido secuencial asumido: la tabla de usuarios se mide en cientos, no en millones, y un índice trigram (`pg_trgm`) sería una extensión más por una pantalla de administración. Se anota; si `users` creciera, el índice correcto es GIN `gin_trgm_ops`, no otro *btree*.
+| `UserAdminRepository.ListAsync` (`ILIKE` escapado)
+| ✅
+
+| V5-09
+| `api_admin.yaml` → `POST /admin/users/{id}/groups` y `POST /admin/groups/{id}/versions`: `400` «ya pertenece / ya está asociada»
+| Un `400` para lo que es un conflicto de estado, no de forma
+| Se respeta el contrato: **`400`** con código propio (`ALREADY_MEMBER`, `ALREADY_GRANTED`), como se hizo en la Fase 3 con `DOM-BS-11`. Cambiarlo a `409` sería más correcto y rompería al frontend por nada.
+| —
+| ⏳
+
+| V5-10
+| `api_admin.yaml` → `MediaExceptionRequest`: `mediaId`, `accessType`; esquema: además `reason`, `expires_at`
+| El contrato no permite dar motivo ni caducidad a una excepción
+| Se aceptan **`reason` y `expiresAt` como opcionales** en la petición: el DTO del frontend sigue válido y quien los mande los guarda. Es la única forma de que `expires_at` —que la Fase 4 ya interpreta (V4-01)— tenga algún productor.
+| —
+| ⏳
+
+| V5-11
+| `api_admin.yaml` → `PUT …/suspend`, `DELETE …`, `PATCH …` con `role`
+| Nada sobre el administrador actuando sobre su propia cuenta
+| **Un administrador no se suspende, no se da de baja y no se cambia el rol a sí mismo**: `400 SELF_ACTION_NOT_ALLOWED`. Cualquiera de las tres puede dejar la instalación sin nadie que pueda deshacerla. Que lo haga otro administrador. Cambiarse el nombre sí.
+| `UserAdminHandler`
+| ✅
+
+| V5-12
+| Glosario → `DOM-BS-06`: «si cambia la forma del modelo, se emite `modelo_datos_bridge_vN.mermaid` nuevo»
+| Cualquier cambio de forma es versión nueva
+| **Se interpreta como revisión aditiva (2.1), no v3.** `MIG-BS-003` añade una tabla y dos columnas anulables y no toca ninguna relación ni columna existente; una v3 arrastraría renombrar el DDL derivado, el script que lo genera, el manifest y las pruebas de paridad por un cambio que el diagrama absorbe con tres bloques más. `DOM-BS-06` se aplica a lo que rompe la lectura del ER anterior. **Interpretación, no decisión**: si el responsable prefiere v3 literal, se hace antes de generar la migración.
+| `changelog_modelo_datos` v2.6
+| ⚠️ a confirmar
+
+| V5-13
+| Convención de la Fase 2: un `XCommandHandler` por orden
+| Implícita
+| **Un manejador por agregado** en administración (`UserAdminHandler` con cinco órdenes). Las cinco comparten comprobación de existencia, cierre de unidad de trabajo y proyección de respuesta; cinco clases repartirían eso en cinco sitios. Los puertos de lectura los consume Api directamente, como `ICatalogReader` en la Fase 4.
+| `UserAdminHandler`
+| ✅
+|===
+
+== `MIG-BS-003` — lo que trae
+
+* `users.deleted_at timestamptz NULL` (`DEC-BS-26`); índice parcial no: los listados filtran por
+  `status` y el `deleted_at IS NULL` es un predicado barato sobre una tabla pequeña.
+* `account_setup_tokens` (`DEC-BS-25`): `id`, `user_id` (FK `CASCADE`), `token_hash` (único),
+  `purpose` (`invite`; queda sitio para `reset`), `expires_at`, `used_at`, `created_at`.
+* `notification_log.payload jsonb NULL`: los datos que el correo necesita y que el tipo no
+  lleva —hoy, el enlace de invitación—. Como el token va en claro dentro del enlace, el
+  *payload* solo vive mientras la notificación está `queued`: el drenador lo pone a `NULL` al
+  marcar `sent` o `failed`. Así `SEC-BS-04` se cumple también para este token, y su resumen
+  en `account_setup_tokens` es lo único que perdura.
+
+== Hallazgos
+
+[cols="1,5",options="header"]
+|===
+| # | Hallazgo
+
+| H5-01
+| 📌 `api_sync.yaml` entero (versión, `TriggerSyncRequest.scope`, `SYNC_LOG`) es un fósil del modelo *pull*. Con `DEC-BS-27` el frontend queda servido, pero el contrato describe cosas que no existen. Reescribir sobre `ingest_batches` cuando se toque el frontend; mientras, es documentación engañosa para quien llegue nuevo.
+|===
+
+include::{root}/_nav.adoc[]
