@@ -1,0 +1,154 @@
+= Verificación de la Fase 6 — lo planeado frente a lo ejecutado
+:author: Equipo de Desarrollo
+:revnumber: 1.1
+:revdate: 2026-09-23
+:revremark: Fase 6 cerrada el 2026-09-23: seed 250/752/2525 contra el servicio real, grant 9 versiones, Playwright 2/2 en verde. Entrega 1 demostrada sin SinsaTools. V6-01..10, H6-01..04.
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:sectnumlevels: 3
+:icons: font
+:lang: es
+:root: ..
+:section-id: gestion-producto
+:section-title: Gestión de Producto
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+---
+
+[.lead]
+Registro de lo que la ejecución de la Fase 6 —Simulador y aceptación— cambia o fija respecto de
+lo escrito antes. Fuentes: la tabla `T-BS-060…063` del plan, `fixtures.ts` del frontend
+(`Sin-PortalVideos/src/app/core/http/mock/`), `ingest_catalog_v1.0.yaml`, `EST-BS-08`, la suite
+E2E del frontend (`e2e/`) y el código de las Fases 3 a 5. Mismo método que las verificaciones
+anteriores.
+
+== El cotejo previo
+
+Es la fase que hace demostrable la Entrega 1 sin SinsaTools. Se leyó `fixtures.ts` entero y se
+**ejecutó**, no se estimó: los recuentos del plan no cuadran con el fixture actual (V6-01). Se
+leyó la suite E2E existente del frontend para reutilizar sus `data-testid` y su `login`, y se
+comprobó qué ve un usuario del catálogo según las decisiones de la Fase 4 (V6-03). Y se buscaron
+las tres clases que `EST-BS-08` nombra al 100 %: no existen con esos nombres (V6-04).
+
+== Desvíos y decisiones
+
+[cols="1,2,2,3,1,1",options="header"]
+|===
+| # | Dónde estaba escrito | Qué decía | Qué se hace, y por qué | Registro | Estado
+
+| V6-01
+| `plan_tareas` → `T-BS-060`, `README`, `IngestSimulator.csproj`: «250 productos, 613 versiones, 1.842 recursos»
+| Los tres recuentos del mock
+| **El fixture actual da 250 / 752 / 2.525.** Los 613 y 1.842 son de una versión anterior de `fixtures.ts` (`versionsCount = i % 7 === 6 ? 0 : 2 + (i % 4)` y `mediaCount = i === 2 ? 0 : 3 + i` dan 752 y 2.525). El criterio de `T-BS-060` —«cuadran exactamente con el mock»— se cumple **contra el mock ejecutado**, no contra un número copiado: el extractor ejecuta `fixtures.ts` y el JSON canónico declara sus recuentos. Todo texto que decía 613/1.842 se corrige.
+| `extract/export-fixtures.mts`, `catalog.canonical.json`
+| ✅
+
+| V6-02
+| `plan_tareas` → `T-BS-060`: «convierte `fixtures.ts` en un JSON canónico»
+| Convertir. No dice cómo
+| **Se ejecuta el fixture con Node** (`--experimental-strip-types`, Node ≥ 22.12 que el frontend ya exige) y se vuelca; no se reimplementan sus fórmulas en C#. Una copia se desviaría a la primera edición del mock sin que nada avisara. El JSON resultante **va en git** (`tools/IngestSimulator/Data/catalog.canonical.json`, 1,4 MB, sin marca de tiempo para que solo cambie cuando cambie el fixture): `seed` no necesita Node ni el frontend, y la CI tampoco. `extract` lo regenera. Lo que el canónico añade al mock, y por qué, está en la cabecera del script: `sourceId` numéricos (el contrato los exige; `ext_version_id` es único en toda la base y el mock repite `EXT-V-1` por producto), `visibility` (imágenes públicas, resto privado) y la ruta de almacenamiento.
+| `export-fixtures.mts`
+| ✅
+
+| V6-03
+| `plan_tareas` → `T-BS-062`: «un usuario de un grupo con acceso a tres softwares … **ve exactamente esos tres**»
+| Que el catálogo se filtra por acceso
+| **No se filtra: V4-04 fijó que `versionsCount` no depende del usuario y el listado tampoco; lo que depende es `mediaCount` y la lista de medios.** El criterio se lee como: solo las versiones de esos tres productos muestran «View media (n)», con n igual a los medios del canónico; todo lo demás dice «No media»; y otro usuario sin grupo no ve medios en ninguna. Es lo que el JOIN concede. El oráculo de n es el JSON canónico, no la propia API.
+| `bridge-acceptance.e2e.ts`
+| ✅
+
+| V6-04
+| `EST-BS-08`, `plan_tareas` → `T-BS-063`: «100 % en `MediaAccessEvaluator`, `SessionService` y `PermissionResolver`»
+| Tres nombres de clase
+| **Son nombres de la fase de diseño; las clases reales se llaman de otra forma.** Correspondencia: `MediaAccessEvaluator` → `Application.Catalog.MediaAccess` + `Infrastructure.Persistence.Catalog.MediaAccessQueries`; `SessionService` → `LoginCommandHandler` + `RefreshCommandHandler` + `LogoutCommandHandler`; `PermissionResolver` → `PermissionMap`. La puerta exige el 100 % a las seis y **falla si alguna no aparece en los informes**: un umbral sobre una clase ausente pasa en verde y no vale nada (el propio `ci.yml` lo advertía). `EST-BS-08` debe actualizar los nombres.
+| `tools/CoverageGate/Program.cs`
+| ⚠️ estándar pendiente
+
+| V6-05
+| `plan_tareas` → `T-BS-063`: «`verify.sh`: … umbral 80 % global y 100 % en tres clases»; `ci.yml` ya tenía el 80 % con `reportgenerator` + `grep`
+| Un umbral en la CI, ninguno en `verify.sh`, y ninguno por clase
+| **Una sola puerta, programa y no script** (`tools/CoverageGate`): lee los Cobertura XML, une los informes de las suites línea a línea y aplica los dos umbrales. `verify.sh`, `verify.ps1` y `ci.yml` la llaman igual. Tres copias de la misma lógica en tres lenguajes divergen a la segunda edición. `reportgenerator` sigue en la CI solo para el resumen legible.
+| `verify.sh`, `verify.ps1`, `ci.yml`
+| ✅
+
+| V6-06
+| `plan_tareas` → `T-BS-061`: «un `docker compose up` seguido de un comando deja el catálogo completo cargado»
+| Un comando
+| **Dos comandos y una operación manual la primera vez.** El servicio no tiene semilla de cuentas y ninguna ruta crea un administrador sin serlo (DEC-BS-25 va por invitación, que exige uno). `seed-users` registra las cuentas del mock por `/auth/register`, detecta que `admin@portal.dev` no puede entrar, **imprime el `UPDATE` exacto** y sale con código 3; después de ejecutarlo una vez, `demo` (`seed-users` + `seed` + `grant`) es el único comando. `e2e-entrega1.sh` hace ese `UPDATE` por su cuenta contra el compose. Es la misma promoción que documenta la guía de arranque §6; una semilla de administrador con contraseña conocida en el repositorio sería peor.
+| `Seeder.SeedUsersAsync`
+| ✅
+
+| V6-07
+| `IngestSimulator.csproj`: «No referencia a ningún proyecto del servicio»; `Microsoft.Extensions.Http.Resilience` referenciado
+| Solo HTTP; con un paquete de resiliencia
+| **Se retira el paquete.** `HttpClient` y `System.Text.Json` bastan, y el emisor real de SinsaTools no tendrá nuestros paquetes. Sin dependencias, la prueba del contrato es más honesta.
+| `IngestSimulator.csproj`
+| ✅
+
+| V6-08
+| `T-BS-062`: «sin tocar el mock»; el frontend distingue `403` (`media-forbidden`) de lista vacía (`media-empty`)
+| —
+| **El servicio real devuelve `200` con lista vacía a un visualizador sin acceso, no `403`** (Fase 4: `403` es solo para quien no tiene `videos:read`, como el auditor). El mock del frontend devuelve `403` en «la tercera versión». La suite del mock sigue pasando contra el mock; la de aceptación comprueba la pantalla real («No media»). Cuando el frontend se pruebe entero contra el servicio, `catalog.e2e.ts › una versión a la que no se tiene acceso` tendrá que aceptar `media-empty`. Se anota; no se toca el frontend desde aquí.
+| —
+| 📌 frontend
+
+| V6-09
+| `T-BS-061`: «modo “foto incompleta” para probar la reconciliación»
+| —
+| **`--incomplete [N]`**: omite uno de cada N productos (10 por omisión) de una foto `snapshot`. Al recibir `isLast`, el servicio debe desactivar los 25 ausentes, y un `seed` completo posterior los reactiva. Los contadores `-N medios` que imprime cada lote son la evidencia. Solo tiene sentido en `snapshot`; en `upsert` no hay reconciliación.
+| `Seeder.SeedAsync`
+| ✅
+
+| V6-10
+| Frontend → `e2e/support/fixtures.ts`: toda prueba falla si el navegador registra un error de consola (C-06)
+| Regla pensada contra el mock, que no emite peticiones
+| **La suite de aceptación tolera un único caso: el 401 de `POST /api/auth/refresh` al arrancar.** `session-bootstrap.ts` (DEC-FE-07) intenta restaurar la sesión; sin cookie, el servicio responde 401 como debe y la aplicación va al login, pero Chrome anota todo recurso 4xx como error de consola. Cualquier otro error sigue tumbando la prueba. Primera ejecución real (2026-09-23): las dos pruebas llegaron al final sin fallar ninguna aserción del criterio; solo cayó por esto.
+| `bridge-acceptance.e2e.ts`
+| ✅
+|===
+
+== Cómo se usa
+
+[source,bash]
+----
+# Una vez: cuentas del mock + promoción del primer administrador (el simulador dice el SQL)
+dotnet run --project tools/IngestSimulator -- seed-users
+# Catálogo completo en dos lotes snapshot, con verificación de recuentos
+SIM_CLIENT_SECRET=… dotnet run --project tools/IngestSimulator -- seed
+# Grupo «Demo — tres softwares» con VL-001..003 y viewer@portal.dev dentro
+dotnet run --project tools/IngestSimulator -- grant
+# Todo lo anterior:
+SIM_CLIENT_SECRET=… dotnet run --project tools/IngestSimulator -- demo
+# Reconciliación:
+SIM_CLIENT_SECRET=… dotnet run --project tools/IngestSimulator -- seed --incomplete 10
+# Regenerar el canónico cuando cambie fixtures.ts:
+dotnet run --project tools/IngestSimulator -- extract
+# La Entrega 1 de punta a punta:
+SIM_CLIENT_SECRET=… ./tools/e2e-entrega1.sh
+----
+
+== Hallazgos
+
+[cols="1,5",options="header"]
+|===
+| # | Hallazgo
+
+| H6-01
+| ⚠️ *Los recuentos del plan estaban desactualizados* (V6-01). Nadie los volvió a calcular cuando cambió el fixture, y estaban copiados en tres sitios (plan, README, csproj). Regla: **los números que salen de un archivo se leen del archivo**, no se copian a la documentación; la documentación dice de dónde salen.
+
+| H6-02
+| 📌 *`EST-BS-08` nombra clases que no existen* (V6-04). El estándar se escribió antes que el código y nadie lo revisó al escribir las Fases 2 y 4. La puerta de cobertura lo habría dicho antes si hubiera existido desde la Fase 2, que es cuando el plan la ponía.
+
+| H6-04
+| ⚠️ *`verify.sh` nunca había pasado el paso de formato.* La primera ejecución completa (2026-09-23) sacó ~120 errores `IDE1006` en código de las Fases 2 a 6: la regla `campos_privados` del `.editorconfig` exigía `_camelCase` a **todo** campo privado, incluidos `const` y `static readonly`, y a toda variable local incluidas las `const`; el código, desde la Fase 2, usa PascalCase para esos casos —que es además la convención de .NET para constantes— de forma consistente. Se ajustó la regla al código, no el código a la regla: dos reglas nuevas más específicas (con `required_modifiers`) para constantes y estáticos de solo lectura privados, y una para constantes locales. Lo que sí eran errores del código (espacios, orden de `using`) lo arregló `dotnet format`. Lección: `verify.sh` debió correr al cerrar cada fase, no al final de la sexta; desde ahora es parte del cierre de fase.
+
+| H6-03
+| 📌 El frontend y el servicio discrepan en el «sin acceso» a los medios de una versión: `403` en el mock, `200` vacío en el real (V6-08). Es una divergencia mock/servicio, no un error de ninguno de los dos; se resolverá cuando la suite completa del frontend corra contra el servicio.
+|===
+
+include::{root}/_nav.adoc[]

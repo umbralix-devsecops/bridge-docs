@@ -559,7 +559,7 @@ esperamos, y un simulador lo ejercita.
 | 0.3
 | `docker-compose` con PostgreSQL 16 y un **simulador del microservicio de integraciones**
   que empuje lotes contra `/v1/ingest/catalog` a partir de las semillas del mock del
-  frontend — 250 productos, 613 versiones, 1.842 medios ya existen en `fixtures.ts`.
+  frontend — 250 productos, 752 versiones, 2.525 medios ya existen en `fixtures.ts`.
 | 1
 
 | 0.4

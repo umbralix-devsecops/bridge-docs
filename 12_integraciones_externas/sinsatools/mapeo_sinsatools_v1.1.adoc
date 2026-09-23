@@ -241,7 +241,7 @@ resulta *exagerada*. El coste real, desglosado:
 * La migración. Añadir `position` y `featured` a `catalog_versions` es una columna anulable y
   un `MIG-BS-NNN`. Media hora.
 * El relleno del histórico. La ingesta es una *foto completa* (`ADR-BS-006`): el primer lote
-  posterior al cambio rellena las 613 versiones de golpe. No hay backfill que escribir.
+  posterior al cambio rellena las 752 versiones de golpe. No hay backfill que escribir.
 
 *Lo que sí cuesta, y es lo único que cuesta:*
 

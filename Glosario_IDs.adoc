@@ -1,7 +1,7 @@
 = Glosario de IDs y trazabilidad — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 2.7
-:revdate: 2026-09-17
+:revnumber: 2.8
+:revdate: 2026-09-23
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -155,7 +155,7 @@ Cada eslabón debe poder recorrerse en ambos sentidos:
 
 | DOM-BS-04 | El esquema se modifica solo mediante migraciones de EF Core sobre `AppDbContext`
 | DOM-BS-05 | *(reescrita el 2026-09-18)* Toda migración lleva su identificador `MIG_BS_NNN` *en el nombre del archivo*, único y correlativo — verificado por `MigrationChangelogTests`, falla el build— y su entrada `MIG-BS-NNN` en `changelog_modelo_datos.adoc`. El documento se queda en `bridge-docs`: la versión anterior exigía «el mismo commit», incumplible entre dos repositorios
-| DOM-BS-06 | Si cambia la forma del modelo, se emite `modelo_datos_bridge_vN.mermaid` nuevo
+| DOM-BS-06 | *(precisada el 2026-09-23, V5-12)* Si cambia la forma del modelo: un cambio *aditivo y compatible* —tabla, columna anulable o índice nuevos; nada existente cambia de nombre, tipo, nulabilidad ni cardinalidad— es *revisión* `x.y` del mismo `modelo_datos_bridge_vX.mermaid` (cabecera y tabla de versiones del changelog); un cambio *incompatible* —renombrar o eliminar tabla o columna, cambiar tipo o cardinalidad, mover una relación, `NOT NULL` nuevo sin valor por omisión— es *versión* nueva: `modelo_datos_bridge_vN.mermaid` y el anterior a `_historico/`. Solo datos o solo índices no tocan el ER. Así, `MIG-BS-003` es ER 2.1 y `MIG-BS-004` no lo mueve
 | DOM-BS-07 | El SQL de vistas y permisos va en archivos `.sql` incrustados, no en literales C#
 | DOM-BS-08 | 🆕 La clave natural de un recurso es el par *origen + identificador de origen* — `(source, sourceId)` en el contrato de ingesta, `(origin, ext_media_id)` en la base—, nunca el identificador solo: `Images.Id` y `Entity_Files.Id` viven en secuencias distintas y pueden colisionar.
 | DOM-BS-09 | 🆕 Un solo lote de ingesta en ejecución, por índice único parcial. Exige `heartbeat_at` y un barrido que libere los muertos

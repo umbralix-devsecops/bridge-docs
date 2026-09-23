@@ -445,8 +445,9 @@ construir un lote válido, el contrato está mal escrito.
 
 | `T-BS-060`
 | Extractor: convierte `fixtures.ts` del frontend en un JSON canónico —250 productos,
-  613 versiones, 1.842 recursos—.
-| Los tres recuentos cuadran exactamente con el mock.
+  752 versiones, 2.525 recursos—.
+| Los tres recuentos cuadran exactamente con el mock. _Los números de esta fila se leen del
+  fixture, no se copian: el 2026-09-23 daba 250/752/2.525 y antes 250/613/1.842 (V6-01)._
 | —
 
 | `T-BS-061`

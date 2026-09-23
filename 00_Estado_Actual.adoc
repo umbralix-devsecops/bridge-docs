@@ -1,6 +1,6 @@
 = Estado Actual — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 3.3
+:revnumber: 3.6
 :revdate: 2026-09-23
 :doctype: article
 :toc: left
@@ -31,7 +31,7 @@ arquitectura, modelo de datos y contrato de ingesta cerrados y mutuamente cohere
 *Sin bloqueantes externos para arrancar:* el plan de primera entrega
 (`11_gestion_producto/plan_primera_entrega_v1.0.adoc`) está emitido y su camino crítico es
 interno. Lo único con plazo ajeno es el rol de lectura sobre el almacenamiento (`DEC-BS-15`),
-que condiciona la Entrega 2, no la 1. *Código: Fases 0 a 5 cerradas* — cimientos, datos, identidad, ingesta, catálogo y administración; Fase 5 en `feat/fase-5-admin` pendiente de fusionar a `main`. Siguiente: Fase 6, simulador y aceptación.
+que condiciona la Entrega 2, no la 1. *Código: Fases 0 a 6 cerradas.* **La Entrega 1 está demostrada sin SinsaTools** (2026-09-23): `tools/e2e-entrega1.sh` levanta base, API real, simulador (250/752/2.525 en 4 s), frontend sin mock y Playwright sobre el criterio de aceptación, en verde. Fase 6 en `feat/fase-6-simulador`, pendiente de fusionar a `main`. Siguiente: Fase 7 (Entrega 2) con Azurite en local; producción espera `DEC-BS-15`.
 
 == Semáforo por sección
 
@@ -469,8 +469,9 @@ entero contra esquema y semilla, como en la 4.
 [IMPORTANT]
 ====
 *Fase 5 cerrada el 2026-09-23 — administración.* `/admin/users/**`, `/admin/groups/**`,
-`/admin/logs/**`, `/admin/sync/**` y `POST /auth/set-password`: 30 rutas. Una migración,
-`MIG-BS-003` (`account_setup_tokens`, `users.deleted_at`, `notification_log.payload`; ER 2.1).
+`/admin/logs/**`, `/admin/sync/**` y `POST /auth/set-password`: 30 rutas. Dos migraciones:
+`MIG-BS-003` (`account_setup_tokens`, `users.deleted_at`, `notification_log.payload`; ER 2.1) y
+`MIG-BS-004` (`content_editor` gana `config:read`; solo datos, ER sin cambios).
 
 Registro: `11_gestion_producto/verificacion_fase5_plan_vs_ejecucion_v1.0.adoc` (V5-01..22).
 El cotejo previo dio tres contradicciones (`DEC-BS-25..27`) y el código añadió otras diez
@@ -488,15 +489,48 @@ decisiones. Lo que hay que conocer:
   `GET /admin/groups/{id}/members` (V5-14), `mediaExceptions[]` en el detalle de usuario (V5-17)
   y `409` con los códigos del frontend donde el YAML decía `400` (V5-15). *El contrato debe
   recogerlas.*
-* *Pendiente de confirmar:* V5-12, ER 2.1 aditivo frente a v3 literal por `DOM-BS-06`; y V5-22,
-  el contrato y el frontend dan `config:read` al editor de contenido y la semilla no. Manda la
-  semilla hasta que se decida en seguridad.
+* *Decididos el 2026-09-23, opción A en ambos:* V5-12, `DOM-BS-06` precisado —aditivo y
+  compatible es revisión `x.y`; incompatible es versión `vN`—, por lo que `MIG-BS-003` queda en
+  ER 2.1. V5-22, el editor de contenido lee `config` como dicen `api_sync.yaml` y el frontend:
+  `MIG-BS-004` (un `UPDATE` reversible) y la misma fila en `003_seed_roles.sql`; `POST /admin/sync`
+  sigue siendo del administrador. `verificacion_fase5` 1.6, `changelog_modelo_datos` 2.7.
 * *Nuevo:* `07_guias_implementacion/guia_arranque_local_v1.0.adoc`, la primera guía. Sustituye
   el «Primer arranque» del README.
 
 Siguiente: Fase 6 — `T-BS-060` (extractor de `fixtures.ts`) y `T-BS-061` (el simulador),
 que es lo que hace demostrable la Entrega 1. `T-BS-063` debe hacer que `verify.sh` aplique
 el umbral de cobertura, que hoy solo recoge.
+====
+
+[IMPORTANT]
+====
+*Fase 6 cerrada el 2026-09-23 — simulador y aceptación. Entrega 1 demostrada.* `tools/IngestSimulator` (extractor que
+ejecuta `fixtures.ts`, emisor en lotes `snapshot` con verificación de recuentos, foto incompleta,
+cuentas del mock y grupo demo), `tools/CoverageGate` (80 % global, 100 % por clase, compartida
+por `verify.sh`, `verify.ps1` y la CI), `tools/e2e-entrega1.sh` y la suite Playwright
+`bridge-acceptance.e2e.ts` en el frontend.
+
+Registro: `11_gestion_producto/verificacion_fase6_plan_vs_ejecucion_v1.0.adoc` (V6-01..09). Lo
+que hay que conocer:
+
+* *V6-01:* los recuentos del plan (250/613/1.842) eran de un fixture anterior; el actual da
+  **250 / 752 / 2.525**, y desde ahora los declara el archivo, no la documentación.
+* *V6-03:* «ve exactamente esos tres» se mide en `mediaCount` y medios, no en el listado, que no
+  filtra por acceso (V4-04).
+* *V6-04:* `EST-BS-08` nombra clases de diseño que no existen; la puerta exige el 100 % a las
+  seis reales y falla si alguna desaparece. **El estándar debe actualizarse.**
+* *V6-06:* la primera promoción de `admin@portal.dev` es un `UPDATE` a mano, una vez; el
+  simulador lo imprime y `e2e-entrega1.sh` lo ejecuta.
+* *H6-04:* `verify.sh` nunca había pasado el paso de formato desde la Fase 2 (regla de nombres
+  más estricta que el código); se ajustó la regla y desde ahora `verify.sh` es parte del cierre
+  de cada fase.
+* *V6-10:* contra el servicio real, el 401 del `refresh` de arranque es un error de consola para
+  Chrome; la suite de aceptación lo tolera y nada más.
+
+La primera ejecución completa de `tools/e2e-entrega1.sh` pasó en verde el 2026-09-23: la Entrega
+1 queda demostrada. Después: fusionar a `main`, cerrar las decisiones abiertas de la
+Fase 5 (V5-12, 14, 15, 17, 22) y las tres peticiones a SinsaTools; la Entrega 2 (Fase 7) espera
+el rol de lectura sobre el almacenamiento (`DEC-BS-15`).
 ====
 
 [IMPORTANT]

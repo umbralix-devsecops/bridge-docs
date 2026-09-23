@@ -1,8 +1,8 @@
 = Historial de cambios del modelo de datos — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 2.6
-:revdate: 2026-09-22
-:revremark: MIG-BS-003 (AdministracionUsuarios) generada y verificada: account_setup_tokens, users.deleted_at, notification_log.payload. Modelo ER 2.1.
+:revnumber: 2.7
+:revdate: 2026-09-23
+:revremark: MIG-BS-004 (EditorConfigRead): content_editor gana config:read (V5-22, opción A). Solo datos; ER sigue en 2.1. DOM-BS-06 precisado: revisión x.y si es aditivo y compatible, versión nueva si rompe (V5-12, opción A).
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -91,8 +91,14 @@ backup.* La política de copias de seguridad dejó de ser opcional.
 
 . `dotnet ef migrations add <NombreEnIngles> --project src/BridgeService.Infrastructure`
 . Entrada `MIG-BS-NNN` en <<_entradas,Entradas>>, *en el mismo commit*.
-. Si cambia la forma del modelo: `modelo_datos_bridge_vN.mermaid` nuevo, el anterior a
-  `_historico/` (DOM-BS-06).
+. Si cambia la forma del modelo (DOM-BS-06, precisado el 2026-09-23 por V5-12):
+** *aditivo y compatible* —tabla, columna anulable o índice nuevos; nada existente cambia de
+   nombre, tipo, nulabilidad ni cardinalidad— es *revisión* `x.y` del mismo archivo: se sube la
+   cabecera del `.mermaid` y se anota en <<_versiones_del_modelo_er,Versiones del modelo ER>>;
+** *incompatible* —renombrar o eliminar tabla o columna, cambiar tipo o cardinalidad, mover una
+   relación, columna nueva `NOT NULL` sin valor por omisión— es *versión* `vN` nueva:
+   `modelo_datos_bridge_vN.mermaid`, el anterior a `_historico/`;
+** solo datos o solo índices: el ER no se toca. Se dice en la entrada.
 
 NOTE: El `--context` explícito deja de ser obligatorio: desde la revisión de
 xref:{root}/11_gestion_producto/adr/adr-bs-002_efcore_dos_proveedores.adoc[ADR-BS-002] hay un
@@ -422,7 +428,55 @@ nueva). `SchemaParityTests` ya los espera.
 **dos `AddColumn`, una `CreateTable` y un `CreateIndex`**, y nada más. Verificado el
 2026-09-22: `SchemaParityTests` en verde con 18 / 14 / 58.
 
+=== MIG-BS-004 — EditorConfigRead
+
+[cols="1,3"]
+|===
+| *Migración EF* | `MIG_BS_004_EditorConfigRead`
+| *Contexto* | `AppDbContext`
+| *Fecha* | 2026-09-23 (sello `20260923203543`)
+| *Versión del ER* | `modelo_datos_bridge_v2.mermaid` **2.1** (sin cambios de forma: solo datos)
+| *Reversibilidad* | ✅ Total (`Down` vuelve `can_read` a `false`; el editor recupera el `403` de MIG-BS-001)
+| *Impacto en datos* | Una fila de `role_permissions`: `content_editor` × `config`, `can_read false → true`. Recuento invariable: 24 filas
+| *Ventana* | No. Un `UPDATE` de una fila
+| *Motivada por* | `V5-22` (opción A, decidida el 2026-09-23) · `api_sync.yaml` · `06_seguridad_autorizacion`
+|===
+
+*Qué hace:* `EmbeddedSql.Execute(…, "004_editor_config_read.up.sql")` (DOM-BS-07): el editor de
+contenido pasa a leer `config`, que es lo que exigen `GET /admin/sync/status` y el campo
+`isDataStale`. `can_write` y `can_delete` siguen en `false`: disparar la sincronización
+(`POST /admin/sync`, `config:write`) sigue siendo del administrador. `003_seed_roles.sql`
+se actualiza en el mismo commit para que una base nueva nazca ya así; el `ON CONFLICT DO
+NOTHING` de la semilla hace que esta migración sea la única vía para las bases que ya
+existían. Idempotente: el `UPDATE` filtra `can_read = false`.
+
+*Por qué:* `api_sync.yaml` y el frontend (`sync.page.ts`, `can('config:read')`) daban la
+lectura al editor; la semilla, no. Tres artefactos decían una cosa y uno otra, y la
+divergencia estaba fijada por `AdminSyncEndpointsTests` para que no pasara desapercibida.
+Se resuelve a favor del contrato: el editor mantiene el catálogo y necesita saber si el dato
+que ve está fresco. Lo que no gana es ninguna capacidad de escritura.
+
+*Al revertir se pierde:* nada de datos. El editor vuelve a `403` en `/admin/sync/status`,
+en contra del contrato y del frontend, que no cambian.
+
+*Efecto en sesiones vivas:* el mapa de permisos viaja en el claim `perms{}` y se lee una vez,
+en el login. Un editor con sesión abierta ve el cambio al volver a entrar; no hace falta
+revocar nada.
+
+*Recuentos esperados:* 18 tablas (=), 14 enums (=), 58 índices (=), 24 permisos (=).
+`SchemaParityTests` no cambia.
+
+*Notas de despliegue:* la migración no la generó `dotnet ef`, porque el modelo no cambió y
+habría salido vacía: se escribió a mano con su `.Designer.cs` idéntico al de `MIG-BS-003`
+(mismo modelo destino). El sello y el nombre siguen la convención; `MigrationChangelogTests`
+la reconoce como `MIG_BS_004`.
+
 == Versiones del modelo ER
+
+NOTE: Regla de numeración (DOM-BS-06, V5-12): *revisión* `x.y` para cambios aditivos y
+compatibles con el ER anterior; *versión* `vN` para los que rompen su lectura. Una migración
+de solo datos o solo índices no cambia ninguno de los dos.
+
 
 [cols="1,2,3,1",options="header"]
 |===

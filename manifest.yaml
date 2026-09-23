@@ -72,7 +72,7 @@ root_documents:
   - path: Glosario_IDs.adoc
     title: Glosario de IDs
     status: vigente
-    version: "2.0"
+    version: "2.8"
   - path: Mapa_Subproyectos.adoc
     title: Mapa de subproyectos
     status: vigente
@@ -250,7 +250,7 @@ sections:
     documents:
       - path: 07_guias_implementacion/guia_arranque_local_v1.0.adoc
         status: vigente
-        version: "1.0"
+        version: "1.1"
         note: >
           Levantar el servicio por primera vez: requisitos, secretos en user-secrets, compose,
           migraciones, primer administrador, siembra manual del catálogo, frontend, verify.
@@ -361,8 +361,12 @@ sections:
         note: "Registro de desvíos de la Fase 4 y disposición de DT-BS-10 índice a índice."
       - path: 11_gestion_producto/verificacion_fase5_plan_vs_ejecucion_v1.0.adoc
         status: vigente
-        version: "1.2"
-        note: "Desvíos de la Fase 5. T-BS-050 y T-BS-051 cerradas (V5-01..16); V5-12, 14 y 15 pendientes de confirmación o de contrato."
+        version: "1.6"
+        note: "Desvíos de la Fase 5, cerrada (V5-01..22, H5-01..04). V5-12 y V5-22 decididos el 2026-09-23 (opción A; MIG-BS-004). Pendientes de contrato: V5-14, 15, 17."
+      - path: 11_gestion_producto/verificacion_fase6_plan_vs_ejecucion_v1.0.adoc
+        status: vigente
+        version: "1.1"
+        note: "Desvíos de la Fase 6: recuentos reales del mock (V6-01), extractor que ejecuta el fixture (V6-02), lectura del criterio de aceptación (V6-03), nombres reales de EST-BS-08 (V6-04)."
         note: >
           Registro de desvíos entre lo planeado y lo ejecutado en la Fase 3. Se actualiza al
           cerrar cada tarea de la fase; la fase no se cierra con filas en estado pendiente.

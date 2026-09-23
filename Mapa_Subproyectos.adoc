@@ -106,7 +106,7 @@ eso los cuatro `bridge_*.yaml` —contratos bilaterales de uno consigo mismo— 
 === Estado
 
 *Construido y probado.* 9 commits, cobertura del 94 %, API simulada completa con semillas de
-250 productos, 613 versiones y 1.842 recursos. Seis contratos OpenAPI en `openapi/sources/`.
+250 productos, 752 versiones y 2.525 recursos. Seis contratos OpenAPI en `openapi/sources/`.
 
 Lo que falta no es el frontend: es el servidor que responda a `/api`. Hoy apunta a
 `https://localhost:7001` por `proxy.conf.json` y no hay nadie escuchando.
@@ -257,7 +257,7 @@ fila.
 
 No entra un solo dato real hasta que el microservicio implemente el contrato. El desarrollo no
 espera: `tools/IngestSimulator` empuja lotes contra la API de ingesta alimentado con las
-semillas del mock del frontend —250 productos, 613 versiones, 1.842 recursos—, que ya existen
+semillas del mock del frontend —250 productos, 752 versiones, 2.525 recursos—, que ya existen
 en `fixtures.ts`.
 
 [CAUTION]

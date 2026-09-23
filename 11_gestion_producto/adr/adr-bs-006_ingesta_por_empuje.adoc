@@ -247,7 +247,7 @@ El contrato está en `05_contratos_api/ingesta/ingest_catalog_v1.0.yaml`.
 
 * **Dependemos de que implementen el contrato.** Hasta que lo hagan no entra un solo dato
   real. Mitigación: el simulador de `tools/IngestSimulator`, alimentado con las semillas del
-  mock del frontend —250 productos, 613 versiones, 1.842 recursos ya existen en
+  mock del frontend —250 productos, 752 versiones, 2.525 recursos ya existen en
   `fixtures.ts`—. El desarrollo no espera a nadie.
 
 * **`POST /admin/sync` se queda sin sentido.** El frontend ya tiene el botón construido y no

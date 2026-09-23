@@ -1,8 +1,8 @@
 = Guía de arranque local — Bridge Service v1.0
 :author: Equipo de Desarrollo
-:revnumber: 1.0
-:revdate: 2026-09-22
-:revremark: Primera versión. Escrita contra docker-compose.yml, appsettings.Development.json.example, verify.sh y el estado real al cierre de T-BS-051.
+:revnumber: 1.1
+:revdate: 2026-09-23
+:revremark: §7 pasa del curl al simulador (demo, seed-users, seed, grant); verificación con la puerta de cobertura y e2e-entrega1.sh.
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -22,7 +22,7 @@ include::{root}/_nav.adoc[]
 |===
 | *Para quién* | Quien clona `Sin-PortalBridge` por primera vez y quiere el servicio corriendo con datos, el frontend hablándole y las pruebas en verde.
 | *Tiempo* | 20–30 minutos con buena red. La primera descarga de imágenes y paquetes es lo que tarda.
-| *Estado del código que describe* | Fases 0–4 en `main`; Fase 5 (`T-BS-050`, `T-BS-051`) en `feat/fase-5-admin`. Simulador de ingesta (`T-BS-060`) **aún no escrito**: el catálogo se siembra con una llamada HTTP a mano, §7.
+| *Estado del código que describe* | Fases 0–5 en `main`; Fase 6 (simulador, aceptación, puerta de cobertura) en `feat/fase-6-simulador`. El catálogo y las cuentas se siembran con el simulador, §7.
 | *Qué no cubre* | Azure, Key Vault, Blob Storage (Entrega 2), CI. Para eso, `09_infraestructura_despliegue/` cuando exista.
 |===
 
@@ -206,50 +206,51 @@ Devuelve `accessToken` (15 min) y deja el *refresh token* en una cookie. Con ese
 
 Desde aquí, los siguientes usuarios se crean con `POST /admin/users` (reciben invitación en Mailpit con el enlace para fijar contraseña) o se aprueban con `PUT /admin/users/{id}/approve`.
 
-== Sembrar el catálogo
+== Sembrar el catálogo y las cuentas
 
-El catálogo entra **solo por empuje** (`ADR-BS-006`): no hay conexión a SinsaTools y el simulador `tools/IngestSimulator` es todavía un *stub* (Fase 6). Hasta entonces, un lote mínimo a mano:
+El catálogo entra **solo por empuje** (`ADR-BS-006`): no hay conexión a SinsaTools. En su lugar
+está el simulador (`tools/IngestSimulator`, Fase 6), que lee el catálogo del mock del frontend
+—250 productos, 752 versiones, 2.525 medios; los recuentos los declara el propio archivo
+`Data/catalog.canonical.json`— y lo empuja por `/v1/ingest/catalog` igual que hará el emisor
+real. Solo HTTP.
 
-. Token de servicio, con el **secreto** de §2.3:
-+
 [source,bash]
 ----
-curl -k -X POST https://localhost:7001/v1/auth/token \
-  -H "Content-Type: application/json" \
-  -d '{"clientId":"ingest-simulator-local","clientSecret":"<secreto>"}'
+export SIM_CLIENT_SECRET='<el secreto de §2.3>'
+dotnet run --project tools/IngestSimulator -- demo
 ----
 
-. Un lote conforme a `ingest_catalog_v1.0.yaml`. El `storageUri` tiene que ser de la cuenta y contenedor configurados (`DEC-BS-22`) y **sin firma** (`DOM-BS-11`):
-+
+`demo` hace tres cosas, en orden, y cada una se puede lanzar sola:
+
+. `seed-users` — registra por `/auth/register` las seis cuentas del mock (`admin@portal.dev` /
+  `Admin123!`, `editor@`, `auditor@`, `viewer@`, `pending@`, `suspended@`, con las contraseñas
+  de `fixtures.ts`) y las deja en su estado. **La primera vez se detiene** porque
+  `admin@portal.dev` nace pendiente y nadie puede aprobarlo: imprime el `UPDATE` de §6 con ese
+  correo. Ejecútalo y repite.
+. `seed` — el catálogo en lotes `snapshot` de 200 (dos lotes), con `sequence`/`isLast`, y al
+  final comprueba que lo que el servicio dice haber recibido cuadra con el canónico. Si no
+  cuadra, sale con código 1.
+. `grant` — crea el grupo «Demo — tres softwares» con todas las versiones de `VL-001`, `VL-002` y
+  `VL-003` y mete en él a `viewer@portal.dev`. Es el escenario del criterio de aceptación.
+
+Comprobación: en Mailpit hay seis correos de registro; `GET /admin/sync/status` con el token del
+administrador da `catalogSummary.totalProducts = 250` e `isDataStale = false`.
+
+Otras órdenes útiles:
+
 [source,bash]
 ----
-curl -k -X POST https://localhost:7001/v1/ingest/catalog \
-  -H "Authorization: Bearer <token de servicio>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "batchId": "'"$(uuidgen)"'",
-    "mode": "upsert",
-    "generatedAt": "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'",
-    "products": [{
-      "sourceId": 1001, "name": "Producto de prueba", "tradeName": "Demo", "industry": "marine", "active": true,
-      "versions": [{
-        "sourceId": 2001, "name": "NA 2026", "active": true,
-        "media": [{
-          "source": "EntityFiles", "sourceId": 3001, "name": "demo.mp4", "extension": "mp4",
-          "visibility": "private", "position": 0, "active": true,
-          "storageUri": "http://localhost:10000/devstoreaccount1/media-private/demo/demo.mp4"
-        }]
-      }]
-    }]
-  }'
+dotnet run --project tools/IngestSimulator -- seed --incomplete 10   # foto sin 25 productos: prueba la reconciliación
+dotnet run --project tools/IngestSimulator -- seed --mode upsert     # sin reconciliación
+dotnet run --project tools/IngestSimulator -- extract                # regenera el canónico desde fixtures.ts (Node ≥ 22.12)
+dotnet run --project tools/IngestSimulator -- help
 ----
-+
-Respuesta `202` con `"status":"completed"`. `GET /v1/ingest/{batchId}` lo confirma.
 
 [NOTE]
-Nadie lee bytes de ese `storageUri` en la Entrega 1: el catálogo lista y el acceso se evalúa, pero el *streaming* es Entrega 2. Por eso el `compose` no levanta Azurite.
-
-Para que un `viewer` vea el medio: crear un grupo (`POST /admin/groups` con `versionIds`), meterlo en él (`POST /admin/users/{id}/groups`). El cambio es inmediato, sin refrescar sesión: el acceso se evalúa en cada lectura.
+Nadie lee bytes de los `storageUri` en la Entrega 1: el catálogo lista y el acceso se evalúa,
+pero el *streaming* es Entrega 2. Por eso el `compose` no levanta Azurite. Los URI apuntan a la
+cuenta y contenedores de Azurite por omisión (`--storage-account`, `--public-container`,
+`--private-container` para otros).
 
 == El frontend contra el servicio real
 
@@ -271,7 +272,15 @@ npm start          # ng serve con proxy.conf.json → https://localhost:7001, re
 ./verify.sh        # Windows: .\verify.ps1
 ----
 
-Es lo mismo que ejecuta la CI, en el mismo orden: `restore`, `format --verify-no-changes`, `build` en Release con avisos como errores, pruebas de arquitectura, todas las pruebas con cobertura, `gitleaks` si está instalado. Si esto pasa y la CI falla, el que está mal es el script.
+Es lo mismo que ejecuta la CI, en el mismo orden: `restore`, `format --verify-no-changes`, `build` en Release con avisos como errores, pruebas de arquitectura, todas las pruebas con cobertura, **la puerta de cobertura** (`tools/CoverageGate`: 80 % global y 100 % en las clases críticas de `EST-BS-08`, tumba el build) y `gitleaks` si está instalado. Si esto pasa y la CI falla, el que está mal es el script.
+
+La Entrega 1 de punta a punta —base, API real, simulador, frontend sin mock y Playwright sobre el
+criterio de aceptación (`T-BS-062`)—:
+
+[source,bash]
+----
+SIM_CLIENT_SECRET='<el secreto de §2.3>' ./tools/e2e-entrega1.sh      # KEEP=1 deja API y frontend levantados
+----
 
 Solo pruebas, en desarrollo:
 
@@ -306,6 +315,8 @@ La primera ejecución descarga `postgres:16-alpine` para Testcontainers y tarda;
 | `IntegrationTests` / `AcceptanceTests` fallan en el arranque del contenedor | Docker no está corriendo, o Testcontainers no encuentra el socket. `docker ps` primero.
 | `dotnet build` falla por `IDE0005`, `CA*`, `CS157x` | Es a propósito: avisos = errores (`EST-BS`). Arregla el aviso, no lo silencies.
 | `index.lock` en `.git` | Otro proceso de git dejó el candado. Comprueba que no hay ninguno y bórralo.
+| `seed-users` sale con código 3 | Es lo esperado la primera vez: `admin@portal.dev` nace pendiente. Ejecuta el `UPDATE` que imprime y repite.
+| `seed` → «Los recuentos NO cuadran» | Algún lote quedó `partial`: mira las líneas «·» que imprime (entidad y motivo) y `GET /v1/ingest/{ingestId}`. Lo habitual: `Storage:AccountUri` distinto del `--storage-account` del simulador (`DEC-BS-22`).
 | Un correo no llega | No llega a ningún sitio: mira `http://localhost:8025`. Si tampoco está ahí, `notification_log` guarda el estado (`queued` / `sent` / `failed` con `error_detail`).
 |===
 

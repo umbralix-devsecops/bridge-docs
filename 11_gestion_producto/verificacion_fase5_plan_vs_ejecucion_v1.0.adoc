@@ -1,8 +1,8 @@
 = Verificación de la Fase 5 — lo planeado frente a lo ejecutado
 :author: Equipo de Desarrollo
-:revnumber: 1.5
+:revnumber: 1.6
 :revdate: 2026-09-23
-:revremark: Fase 5 cerrada y verificada (229 pruebas). T-BS-050..054; V5-01..22; H5-01..04. Pendientes de decisión o contrato: V5-12, 14, 15, 17, 22.
+:revremark: V5-12 y V5-22 decididos (opción A ambos): DOM-BS-06 precisado; MIG-BS-004 da config:read al editor. Pendientes de contrato: V5-14, 15, 17.
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -129,9 +129,9 @@ decide y aquí se dejan escritos (V5-04 en adelante).
 | V5-12
 | Glosario → `DOM-BS-06`: «si cambia la forma del modelo, se emite `modelo_datos_bridge_vN.mermaid` nuevo»
 | Cualquier cambio de forma es versión nueva
-| **Se interpreta como revisión aditiva (2.1), no v3.** `MIG-BS-003` añade una tabla y dos columnas anulables y no toca ninguna relación ni columna existente; una v3 arrastraría renombrar el DDL derivado, el script que lo genera, el manifest y las pruebas de paridad por un cambio que el diagrama absorbe con tres bloques más. `DOM-BS-06` se aplica a lo que rompe la lectura del ER anterior. **Interpretación, no decisión**: si el responsable prefiere v3 literal, se hace antes de generar la migración.
-| `changelog_modelo_datos` v2.6
-| ⚠️ a confirmar
+| **Decidido el 2026-09-23 (opción A): revisión aditiva 2.1, y `DOM-BS-06` se precisa** para que no vuelva a ser interpretación. Aditivo y compatible —tabla, columna anulable o índice nuevos; nada existente cambia de nombre, tipo, nulabilidad ni cardinalidad— es revisión `x.y` del mismo archivo; incompatible —renombrar o eliminar, cambiar tipo o cardinalidad, mover una relación, `NOT NULL` sin valor por omisión— es versión `vN` nueva con el anterior a `_historico/`. Solo datos o índices no tocan el ER. Una v3 literal habría arrastrado el DDL derivado, su script, el manifest y las pruebas de paridad por tres bloques que el diagrama absorbe. Texto normativo en `Glosario_IDs` (2.8) y `ADR-BS-004`; regla operativa en `changelog_modelo_datos` (2.7).
+| `Glosario_IDs` DOM-BS-06 · `changelog_modelo_datos` v2.7
+| ✅
 
 | V5-13
 | Convención de la Fase 2: un `XCommandHandler` por orden
@@ -199,9 +199,9 @@ decide y aquí se dejan escritos (V5-04 en adelante).
 | V5-22
 | `api_sync.yaml` → `GET /admin/sync/status`: «`config:read` (Administrador y Editor de Contenido)»; `SyncStatusResponse.isDataStale`: «visible para administrador y content_editor»; frontend `sync.page.ts`: `can('config:read')`
 | `003_seed_roles.sql`: `content_editor` → `config` **false/false/false**
-| **Manda la semilla.** Los permisos los gobierna `06_seguridad_autorizacion` y su semilla, no un YAML de un recurso concreto; abrir `config:read` al editor es una decisión de seguridad que hay que tomar en el sitio de las decisiones de seguridad, no colarla por una prueba. Hoy el editor recibe `403` en `/admin/sync/status` y no ve `isDataStale`. **La prueba fija lo que hay** para que un cambio se note. Si se decide abrirlo: una fila de `role_permissions` (`MIG-BS-004`) y el YAML queda como está; si no, el YAML y el frontend cambian.
-| `AdminSyncEndpointsTests`
-| ⚠️ decisión pendiente
+| **Decidido el 2026-09-23 (opción A): el editor lee `config`.** Mientras se decidía mandó la semilla y la prueba fijó el `403` para que el cambio se notara. Se resuelve a favor del contrato y del frontend, que ya coincidían: el editor mantiene el catálogo y necesita saber si el dato que ve está fresco (`isDataStale`, RNF-BS-09); no gana escritura alguna —`POST /admin/sync` sigue siendo `config:write`, del administrador— y el auditor no toca `config`. Se ejecuta como `MIG-BS-004` (`004_editor_config_read.up.sql`, un `UPDATE` de una fila, reversible) más la misma fila en `003_seed_roles.sql` para las bases nuevas; el YAML y el frontend no cambian. La prueba pasa a exigir `200`. Los editores con sesión abierta lo ven al volver a entrar (`perms{}` se lee en el login). Guía de roles (`portal-docs/06`) actualizada a 1.1.
+| `MIG_BS_004_EditorConfigRead` · `003_seed_roles.sql` · `AdminSyncEndpointsTests`
+| ✅
 |===
 
 == `MIG-BS-003` — lo que trae
@@ -232,7 +232,7 @@ decide y aquí se dejan escritos (V5-04 en adelante).
 | 📌 *Los códigos de error se inventan sin mirar el frontend.* La primera versión de T-BS-051 salió con `ALREADY_ASSIGNED` y `GROUP_NAME_TAKEN`; el frontend bifurca por `USER_ALREADY_IN_GROUP` y `GROUP_NAME_ALREADY_EXISTS` (`core/api/index.ts`, `API_ERROR_CODES`). Regla desde esta fase: **ningún código de error, nombre de campo ni valor de enumerado sin comprobar antes en `API_ERROR_CODES` y en los `error.code === '…'` de `features/`**. Misma familia: la prueba SEC-BS-04 hizo un segundo `login` del mismo usuario sin recordar RF-02 (sesión única) y se revocó a sí misma el token.
 
 | H5-04
-| 📌 Conflicto contrato/semilla en `config:read` para el editor de contenido (V5-22). No se resolvió aquí porque es una decisión de seguridad; queda abierto para `06_seguridad_autorizacion`.
+| ✅ *Cerrado el 2026-09-23.* Conflicto contrato/semilla en `config:read` para el editor de contenido (V5-22). No se resolvió en la fase porque era una decisión de seguridad; se decidió después (opción A) y se ejecutó como `MIG-BS-004`. Lección: cuando tres artefactos coinciden y uno diverge, la prueba fija la divergencia y la decisión se toma aparte —fue lo que pasó, y el cambio costó una fila.
 |===
 
 include::{root}/_nav.adoc[]

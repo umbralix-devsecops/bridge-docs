@@ -161,7 +161,7 @@ derivado de las migraciones.
 
 | DOM-BS-04 | El esquema propio se modifica *exclusivamente* mediante migraciones de EF Core sobre `BridgeDbContext`. Prohibido aplicar DDL a mano en cualquier entorno.
 | DOM-BS-05 | Toda migración lleva una entrada `MIG-BS-NNN` en `changelog_modelo_datos.adoc`, en el mismo commit.
-| DOM-BS-06 | Si la migración altera la forma del modelo, se emite `modelo_datos_bridge_vN.mermaid` y el anterior pasa a `_historico/`.
+| DOM-BS-06 | Si la migración altera la forma del modelo: aditiva y compatible → *revisión* `x.y` del mismo `modelo_datos_bridge_vX.mermaid`; incompatible (renombrar, eliminar, cambiar tipo o cardinalidad) → *versión* `vN` nueva y el anterior a `_historico/`. Solo datos o índices no tocan el ER. *(Precisada el 2026-09-23, V5-12; texto normativo en `Glosario_IDs`.)*
 | DOM-BS-07 | El SQL de vistas, funciones y permisos se mantiene en archivos `.sql` incrustados como recurso, ejecutados desde la migración.
 |===
 

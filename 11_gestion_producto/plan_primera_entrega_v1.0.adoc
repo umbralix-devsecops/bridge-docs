@@ -165,7 +165,7 @@ privado.
 
 | *Simulador de ingesta* 🆕
 | Un proyecto de consola que construye lotes conformes al contrato a partir de `fixtures.ts`
-  del frontend: *250 productos, 613 versiones, 1.842 recursos*. Sustituye a SinsaTools por
+  del frontend: *250 productos, 752 versiones, 2.525 recursos*. Sustituye a SinsaTools por
   completo para E2E.
 | Ingesta
 |===
