@@ -361,8 +361,8 @@ sections:
         note: "Registro de desvíos de la Fase 4 y disposición de DT-BS-10 índice a índice."
       - path: 11_gestion_producto/verificacion_fase5_plan_vs_ejecucion_v1.0.adoc
         status: vigente
-        version: "1.0"
-        note: "Cotejo previo de la Fase 5: tres contradicciones resueltas (DEC-BS-25..27) y siete silencios. Ejecución pendiente."
+        version: "1.2"
+        note: "Desvíos de la Fase 5. T-BS-050 y T-BS-051 cerradas (V5-01..16); V5-12, 14 y 15 pendientes de confirmación o de contrato."
         note: >
           Registro de desvíos entre lo planeado y lo ejecutado en la Fase 3. Se actualiza al
           cerrar cada tarea de la fase; la fase no se cierra con filas en estado pendiente.

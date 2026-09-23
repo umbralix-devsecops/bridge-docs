@@ -1,8 +1,8 @@
 = Verificación de la Fase 5 — lo planeado frente a lo ejecutado
 :author: Equipo de Desarrollo
-:revnumber: 1.2
-:revdate: 2026-09-22
-:revremark: T-BS-051 escrita (grupos, versiones, miembros); V5-14..16 añadidos. Pendiente dotnet test.
+:revnumber: 1.5
+:revdate: 2026-09-23
+:revremark: Fase 5 cerrada y verificada (229 pruebas). T-BS-050..054; V5-01..22; H5-01..04. Pendientes de decisión o contrato: V5-12, 14, 15, 17, 22.
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -67,36 +67,36 @@ decide y aquí se dejan escritos (V5-04 en adelante).
 | `plan_tareas` → `T-BS-054` y `DEC-BS-07`: «`POST /admin/sync` → `503`»; frontend → sección *Sync History* consume `GET /admin/sync/status`, `GET /admin/sync/logs`, `GET /admin/sync/logs/{id}`; `api_sync.yaml` describe `SYNC_LOG`, `scope: full|delta`, `nextScheduledSync`
 | El plan solo veía el `POST`. El contrato y el frontend siguen describiendo el modelo *pull* que `ADR-BS-006` descartó
 | **Servir la familia desde `ingest_batches`**: el historial de sincronización es el historial de lotes. Estados y contadores tienen correspondencia directa; `triggerType` es siempre `automatic`; `nextScheduledSync` nulo hasta `DEC-BS-09`; `isDataStale` por umbral configurable. `POST` sigue en `503`. El frontend no cambia; `api_sync.yaml` queda anotado para reescribirse sobre lo que existe.
-| `DEC-BS-27`
-| ✅ decidido; ⏳ código
+| `SyncReader`, `AdminSyncController`
+| ✅
 
 | V5-04
 | `api_admin.yaml` → `PATCH /admin/users/{id}` con `role`; `Contrato_JWT`: `perms{}` viaja en el token de acceso
 | Nada sobre qué pasa con las sesiones vigentes al cambiar el rol
 | **Cambiar el rol revoca las sesiones activas del usuario** (`forced`). El token de acceso lleva los permisos resueltos al emitirse; sin revocación, el usuario conservaría el rol viejo hasta el siguiente *refresh* (hasta 15 minutos con más permisos de los que tiene). El *refresh* exige sesión usable, así que la revocación surte efecto en la siguiente petición. Suspender ya lo hacía por contrato.
-| `SuspendUser`, `UpdateUser`
-| ⏳
+| `UserAdminHandler.UpdateAsync`
+| ✅
 
 | V5-05
 | `api_admin.yaml` → `VideoAccessLogDto.accessSource`: `group`, `individual_exception`, `denied`; esquema `access_source`: `group`, `individual_exception`, `denied_revoke`, `denied_none`
 | El contrato tiene tres valores; la base distingue por qué se denegó
 | **La lectura colapsa `denied_revoke` y `denied_none` en `denied`**, como pide el contrato: el frontend no conoce otros valores. La distinción se conserva en la base y se ofrecerá al contrato como campo adicional cuando se revise (`api_admin.yaml` 1.1). No se pierde información, solo no se expone.
-| `CatalogText`-equivalente en `AdminText`
-| ⏳
+| `AuditText.Source`
+| ✅
 
 | V5-06
 | `plan_tareas` → `T-BS-053`: «`api_request_log`, `ext_api_request_log`, `notification_log`»; `api_admin.yaml` → `/admin/logs/requests` (`api_request_log`) y `/admin/logs/video-access` (`video_access_log`)
 | El plan y el contrato no listan las mismas tablas
 | **Manda el contrato**: se exponen `api_request_log` y `video_access_log`. `ext_api_request_log` no se escribe todavía (V3-19, Fase 6) y `notification_log` no tiene consumidor en el frontend. La prueba de `SEC-BS-04` recorre igualmente las cuatro tablas de registro.
-| `T-BS-053`
-| ⏳
+| `AdminLogsController` (dos rutas); prueba SEC-BS-04 sobre las cuatro tablas
+| ✅
 
 | V5-07
 | `RNF-06`, `T-BS-012`: `api_request_log` modelada en la Fase 1
 | Que existe el registro de peticiones
 | **Nadie lo escribe.** Ninguna fase del plan asignó el *middleware* que inserta en `api_request_log`; sin él, `/admin/logs/requests` devolvería siempre vacío. Se incorpora a `T-BS-053` (`RequestLogMiddleware`: método, ruta, estado, latencia, `correlation_id`, IP, `sub` si lo hay; escritura fuera del camino de la respuesta). `video_access_log` sí tiene dueño: la Fase 7.
-| `T-BS-053`
-| ⏳
+| `RequestLogMiddleware`, `RequestLogQueue`, `RequestLogWriterService`
+| ✅
 
 | V5-08
 | `api_admin.yaml` → `GET /admin/users?search=`: «búsqueda por nombre o email»
@@ -108,16 +108,16 @@ decide y aquí se dejan escritos (V5-04 en adelante).
 | V5-09
 | `api_admin.yaml` → `POST /admin/users/{id}/groups` y `POST /admin/groups/{id}/versions`: `400` «ya pertenece / ya está asociada»
 | Un `400` para lo que es un conflicto de estado, no de forma
-| Se respeta el contrato: **`400`** con código propio (`ALREADY_MEMBER`, `ALREADY_GRANTED`), como se hizo en la Fase 3 con `DOM-BS-11`. Cambiarlo a `409` sería más correcto y rompería al frontend por nada.
+| ~~Se respeta el contrato: `400` con código propio~~ **Retirado el 2026-09-22 por V5-15.** Al implementar se comprobó que el frontend ya espera `409` y bifurca por `USER_ALREADY_IN_GROUP`; el «rompería al frontend» de esta fila era falso. Se deja tachado para que se vea que la decisión cambió y por qué.
 | —
-| ⏳
+| ⬜ superado por V5-15
 
 | V5-10
 | `api_admin.yaml` → `MediaExceptionRequest`: `mediaId`, `accessType`; esquema: además `reason`, `expires_at`
 | El contrato no permite dar motivo ni caducidad a una excepción
 | Se aceptan **`reason` y `expiresAt` como opcionales** en la petición: el DTO del frontend sigue válido y quien los mande los guarda. Es la única forma de que `expires_at` —que la Fase 4 ya interpreta (V4-01)— tenga algún productor.
-| —
-| ⏳
+| `MediaExceptionRequest` (`reason`, `expiresAt`)
+| ✅
 
 | V5-11
 | `api_admin.yaml` → `PUT …/suspend`, `DELETE …`, `PATCH …` con `role`
@@ -150,7 +150,7 @@ decide y aquí se dejan escritos (V5-04 en adelante).
 | V5-15
 | `api_admin.yaml` → `POST /admin/groups/{id}/versions` y `POST /admin/users/{id}/groups`: duplicado = **400**
 | Que asignar dos veces es un dato inválido
-| **409 `ALREADY_ASSIGNED`.** Un duplicado es un conflicto con el estado actual, no una petición mal formada; el frontend ya comenta «409 si la versión ya está asignada» en `admin-groups.api.ts`. Mismo criterio para el nombre repetido de grupo: **409 `GROUP_NAME_TAKEN`** (el contrato solo listaba 400).
+| **409, con los códigos que el frontend ya tiene escritos**: `USER_ALREADY_IN_GROUP`, `VERSION_ALREADY_IN_GROUP`, `GROUP_NAME_ALREADY_EXISTS` (`API_ERROR_CODES` en `core/api/index.ts` y las bifurcaciones en `add-group-dialog`, `group-form-dialog`). Y **`INVALID_STATUS_TRANSITION` pasa a 409**: el YAML dice 400 pero `users.actions.ts` lo trata como «otro administrador cambió el estado», que es un conflicto. Un duplicado es conflicto de estado, no dato inválido. Corrige V5-09. **Hallazgo del 2026-09-22:** la primera implementación usó nombres propios (`ALREADY_ASSIGNED`, `GROUP_NAME_TAKEN`) sin mirar el frontend; se alinearon el mismo día.
 | `GroupFailures`
 | ⚠️ contrato pendiente
 
@@ -160,6 +160,48 @@ decide y aquí se dejan escritos (V5-04 en adelante).
 | **Se cumple tal cual**, a diferencia de usuarios (V5-02): ningún FK de auditoría apunta a `groups`; `user_groups` y `group_version_access` son `ON DELETE CASCADE`. Los usuarios que pertenecían siguen existiendo.
 | `GroupAdminHandler.DeleteAsync`
 | ✅
+
+| V5-17
+| `api_admin.yaml` → `UserDto`; `GET /admin/users/{id}`
+| Crear y borrar excepciones, pero ninguna forma de listarlas (GAP-05 del frontend)
+| **`mediaExceptions[]` en el detalle de usuario**, vacío en el listado, con la forma que el frontend ya consume (`mediaId`, `accessType`, `mediaName`, `versionName`, `productName`, `reason`, `expiresAt`, `grantedAt`). Aditivo. **El contrato debe recogerlo.**
+| `UserAdminRepository.GetAsync`
+| ⚠️ contrato pendiente
+
+| V5-18
+| `api_admin.yaml` → `POST /admin/users/{id}/media-exceptions`: `201`; clave primaria `(user_id, media_id)`
+| Qué pasa al repetir sobre el mismo medio
+| **Crea o reemplaza, siempre `201`.** Repetir con el sentido contrario es cambiar de opinión, no un error; el mock del frontend hace exactamente eso. Reemplazo completo: sentido, motivo, caducidad y autor.
+| `UserAdminRepository.UpsertMediaExceptionAsync`
+| ✅
+
+| V5-19
+| `plan_tareas` → `T-BS-054`: «`503` con un mensaje explícito»; contrato: sin código para ese caso
+| Qué código lleva el 503
+| **`SYNC_UNAVAILABLE`** con `Retry-After: 86400` y un mensaje que dice quién empuja el catálogo, por qué no se puede pedir, dónde mirar el último lote y a quién pedir una actualización. El frontend no bifurca por este código: le basta el 503.
+| `AdminSyncController.Trigger`
+| ✅
+
+| V5-20
+| Esquema → `api_request_log.correlation_id uuid NOT NULL`; `CorrelationIdMiddleware` acepta un `X-Correlation-Id` externo de hasta 64 caracteres
+| Qué se guarda cuando el identificador externo no es un UUID
+| **UUID derivado del texto** (los 16 primeros bytes del SHA-256), estable: la misma correlación externa siempre da el mismo UUID y se puede buscar. Los propios —que son UUID— se guardan tal cual. Cambiar la columna a texto era una migración por un caso que hoy nadie ejerce.
+| `RequestLogMiddleware.Correlacion`
+| ✅
+
+| V5-21
+| `api_admin.yaml` → `POST /admin/users/{id}/groups`: «Permisos requeridos» sin especificar el recurso
+| Si es `users:write` o `groups:write`
+| **`groups:write`.** Es la operación de grupo vista desde el otro lado —la ejecuta `GroupAdminHandler`—, y quien puede componer un grupo debe poder componerlo por cualquiera de sus dos extremos. Las excepciones individuales, en cambio, son `users:write`: pertenecen al usuario.
+| `AdminUsersController`
+| ✅
+
+| V5-22
+| `api_sync.yaml` → `GET /admin/sync/status`: «`config:read` (Administrador y Editor de Contenido)»; `SyncStatusResponse.isDataStale`: «visible para administrador y content_editor»; frontend `sync.page.ts`: `can('config:read')`
+| `003_seed_roles.sql`: `content_editor` → `config` **false/false/false**
+| **Manda la semilla.** Los permisos los gobierna `06_seguridad_autorizacion` y su semilla, no un YAML de un recurso concreto; abrir `config:read` al editor es una decisión de seguridad que hay que tomar en el sitio de las decisiones de seguridad, no colarla por una prueba. Hoy el editor recibe `403` en `/admin/sync/status` y no ve `isDataStale`. **La prueba fija lo que hay** para que un cambio se note. Si se decide abrirlo: una fila de `role_permissions` (`MIG-BS-004`) y el YAML queda como está; si no, el YAML y el frontend cambian.
+| `AdminSyncEndpointsTests`
+| ⚠️ decisión pendiente
 |===
 
 == `MIG-BS-003` — lo que trae
@@ -182,6 +224,15 @@ decide y aquí se dejan escritos (V5-04 en adelante).
 
 | H5-01
 | 📌 `api_sync.yaml` entero (versión, `TriggerSyncRequest.scope`, `SYNC_LOG`) es un fósil del modelo *pull*. Con `DEC-BS-27` el frontend queda servido, pero el contrato describe cosas que no existen. Reescribir sobre `ingest_batches` cuando se toque el frontend; mientras, es documentación engañosa para quien llegue nuevo.
+
+| H5-02
+| ⚠️ *Prueba frágil de la Fase 2, corregida.* `PasswordHashingTests.Verificar_no_delata_si_la_contrasena_era_correcta` medía las 40 verificaciones correctas y después las 40 incorrectas, en dos tandas. `dotnet test` ejecuta los cinco proyectos en paralelo y, al crecer la suite de aceptación en esta fase, un pico de CPU cayó sobre la segunda tanda: medianas 195 ms frente a 427 ms, un 119 % con un umbral del 35 %. No era una fuga del hasher —la incorrecta salía *más lenta*, no más rápida—. Ahora las muestras se intercalan (correcta, incorrecta, alternando también el orden del par), de modo que el ruido de carga golpea a las dos series por igual. Con la suite completa: 229 en verde.
+
+| H5-03
+| 📌 *Los códigos de error se inventan sin mirar el frontend.* La primera versión de T-BS-051 salió con `ALREADY_ASSIGNED` y `GROUP_NAME_TAKEN`; el frontend bifurca por `USER_ALREADY_IN_GROUP` y `GROUP_NAME_ALREADY_EXISTS` (`core/api/index.ts`, `API_ERROR_CODES`). Regla desde esta fase: **ningún código de error, nombre de campo ni valor de enumerado sin comprobar antes en `API_ERROR_CODES` y en los `error.code === '…'` de `features/`**. Misma familia: la prueba SEC-BS-04 hizo un segundo `login` del mismo usuario sin recordar RF-02 (sesión única) y se revocó a sí misma el token.
+
+| H5-04
+| 📌 Conflicto contrato/semilla en `config:read` para el editor de contenido (V5-22). No se resolvió aquí porque es una decisión de seguridad; queda abierto para `06_seguridad_autorizacion`.
 |===
 
 include::{root}/_nav.adoc[]

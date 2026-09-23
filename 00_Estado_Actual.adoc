@@ -1,7 +1,7 @@
 = Estado Actual — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 3.2
-:revdate: 2026-09-21
+:revnumber: 3.3
+:revdate: 2026-09-23
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -31,7 +31,7 @@ arquitectura, modelo de datos y contrato de ingesta cerrados y mutuamente cohere
 *Sin bloqueantes externos para arrancar:* el plan de primera entrega
 (`11_gestion_producto/plan_primera_entrega_v1.0.adoc`) está emitido y su camino crítico es
 interno. Lo único con plazo ajeno es el rol de lectura sobre el almacenamiento (`DEC-BS-15`),
-que condiciona la Entrega 2, no la 1. *Código: Fases 0 a 4 cerradas* — cimientos, datos, identidad, ingesta y catálogo; 176 pruebas en verde. Siguiente: Fase 5, administración.
+que condiciona la Entrega 2, no la 1. *Código: Fases 0 a 5 cerradas* — cimientos, datos, identidad, ingesta, catálogo y administración; Fase 5 en `feat/fase-5-admin` pendiente de fusionar a `main`. Siguiente: Fase 6, simulador y aceptación.
 
 == Semáforo por sección
 
@@ -464,6 +464,39 @@ que decidir (V4-01..04). Lo que hay que conocer:
 
 Siguiente: Fase 5, administración (`T-BS-05x`). Antes de escribir código, leer `api_admin.yaml`
 entero contra esquema y semilla, como en la 4.
+====
+
+[IMPORTANT]
+====
+*Fase 5 cerrada el 2026-09-23 — administración.* `/admin/users/**`, `/admin/groups/**`,
+`/admin/logs/**`, `/admin/sync/**` y `POST /auth/set-password`: 30 rutas. Una migración,
+`MIG-BS-003` (`account_setup_tokens`, `users.deleted_at`, `notification_log.payload`; ER 2.1).
+
+Registro: `11_gestion_producto/verificacion_fase5_plan_vs_ejecucion_v1.0.adoc` (V5-01..22).
+El cotejo previo dio tres contradicciones (`DEC-BS-25..27`) y el código añadió otras diez
+decisiones. Lo que hay que conocer:
+
+* *`DEC-BS-25`:* el alta por administrador no envía contraseñas: cuenta `active` con hash
+  inservible, token de invitación de un solo uso (72 h) y correo con el enlace.
+* *`DEC-BS-26`:* `DELETE /admin/users/{id}` es baja lógica con anonimización; el esquema no
+  permite el borrado físico y el correo original vuelve a estar libre.
+* *`DEC-BS-27`:* `/admin/sync/**` se sirve desde `ingest_batches`. `POST /admin/sync` sigue en
+  `503 SYNC_UNAVAILABLE` hasta que SinsaTools exponga la reingesta (`DEC-BS-07`).
+* *V5-07, hueco del plan cerrado:* nadie escribía `api_request_log`. Ahora lo hace
+  `RequestLogMiddleware` (sin *query string*, SEC-BS-04) con un escritor en segundo plano.
+* *Tres divergencias respecto a `api_admin.yaml` v1.0, las tres a favor del frontend ya escrito:*
+  `GET /admin/groups/{id}/members` (V5-14), `mediaExceptions[]` en el detalle de usuario (V5-17)
+  y `409` con los códigos del frontend donde el YAML decía `400` (V5-15). *El contrato debe
+  recogerlas.*
+* *Pendiente de confirmar:* V5-12, ER 2.1 aditivo frente a v3 literal por `DOM-BS-06`; y V5-22,
+  el contrato y el frontend dan `config:read` al editor de contenido y la semilla no. Manda la
+  semilla hasta que se decida en seguridad.
+* *Nuevo:* `07_guias_implementacion/guia_arranque_local_v1.0.adoc`, la primera guía. Sustituye
+  el «Primer arranque» del README.
+
+Siguiente: Fase 6 — `T-BS-060` (extractor de `fixtures.ts`) y `T-BS-061` (el simulador),
+que es lo que hace demostrable la Entrega 1. `T-BS-063` debe hacer que `verify.sh` aplique
+el umbral de cobertura, que hoy solo recoge.
 ====
 
 [IMPORTANT]
