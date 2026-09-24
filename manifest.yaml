@@ -348,6 +348,10 @@ sections:
       - path: 11_gestion_producto/plan_primera_entrega_v1.0.adoc
         status: vigente
         version: "1.0"
+      - path: 11_gestion_producto/plan_fase8_despliegue_azure_v1.0.adoc
+        status: borrador
+        version: "1.0"
+        note: "Fase 8 — despliegue en Azure. D8-01..08 por decidir (recomendado: Container Apps, Bicep, stg+prod, VNet con PostgreSQL privado, ingreso de ingesta aparte con IP de SinsaTools). T-BS-080..089. Datos de entrada I-1..I-6."
       - path: 11_gestion_producto/plan_tareas_bridge_v1.0.adoc
         status: vigente
         version: "1.8"
@@ -361,8 +365,8 @@ sections:
         note: "Registro de desvíos de la Fase 4 y disposición de DT-BS-10 índice a índice."
       - path: 11_gestion_producto/verificacion_fase5_plan_vs_ejecucion_v1.0.adoc
         status: vigente
-        version: "1.7"
-        note: "Desvíos de la Fase 5, cerrada (V5-01..22, H5-01..05). Sin pendientes: V5-12/22 decididos, V5-14/15/17 en api_admin.yaml 1.1.0. H5-05: falta la página /set-password en el frontend."
+        version: "1.8"
+        note: "Desvíos de la Fase 5, cerrada (V5-01..22, H5-01..05). Sin pendientes: V5-12/22 decididos, V5-14/15/17 en api_admin.yaml 1.1.0, H5-05 resuelto en el frontend."
       - path: 11_gestion_producto/verificacion_fase7_plan_vs_ejecucion_v1.0.adoc
         status: vigente
         version: "1.2"

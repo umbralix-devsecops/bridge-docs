@@ -1,0 +1,304 @@
+= Plan de la Fase 8 — despliegue en Azure
+:author: Equipo de Desarrollo
+:revnumber: 1.0
+:revdate: 2026-09-24
+:revremark: Borrador para decisión. Ocho decisiones con recomendación (D8-01..08), datos que hace falta conseguir, y diez tareas (T-BS-080..089).
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:icons: font
+:lang: es
+:root: ..
+:section-id: gestion-producto
+:section-title: Gestión de Producto
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+---
+
+[.lead]
+Las Entregas 1 y 2 están demostradas en local (`e2e-entrega1.sh`, `e2e-entrega2.sh`). Esta fase
+las lleva a Azure. No añade funcionalidad: prepara el servicio para producción, levanta la
+infraestructura como código y automatiza el despliegue. Cierra con la prueba que Azurite no
+puede dar: identidad administrada contra la cuenta real de almacenamiento (`DEC-BS-15`).
+
+== Lo que ya está decidido y condiciona el diseño
+
+[cols="1,4",options="header"]
+|===
+| Fuente | Consecuencia para el despliegue
+
+| `ADR-BS-005` — servicio único
+| Un contenedor de backend y una base PostgreSQL. No hay «portal-backend» aparte: la guía de
+  infraestructura de `portal-docs` (abril de 2025) describe dos backends y está superada en eso.
+
+| ADR-014 del frontend — mismo origen
+| Frontend y API **en el mismo host**, la API bajo `/api/`. Las cookies `refresh_token`
+  (`Path=/api/auth/refresh`) y `pv_media` (`Path=/api/media`) son `SameSite=Strict`: con dos hosts
+  en `*.azurewebsites.net` (Public Suffix List) el navegador no las enviaría y la sesión y el vídeo
+  fallarían. **Es una restricción dura**, no una preferencia.
+
+| Imagen del frontend (`Sin-PortalVideos/Dockerfile`, `nginx/nginx.conf`)
+| Ya existe el ingreso correcto: `nginx` sirve la SPA y hace de proxy de `/api/` al backend
+  quitando el prefijo, con `proxy_buffering off` (vídeo) y `client_max_body_size 10m`
+  (RNF-BS-10). Solo le falta publicar la ruta de ingesta si se elige así (D8-05).
+
+| `ADR-BS-006` — ingesta por empuje
+| SinsaTools **nos llama** a `POST /v1/ingest/catalog`: esa ruta tiene que ser alcanzable desde su
+  red. Nosotros no abrimos nada hacia la suya.
+
+| `ADR-BS-007` + `DEC-BS-15` — acceso a los bytes
+| La cuenta de almacenamiento es **de SinsaTools**. No la creamos ni le ponemos *private
+  endpoint* sin su permiso. Leemos con la identidad administrada del backend y el rol `Storage
+  Blob Data Reader` (mismo tenant) o con una cadena en Key Vault (tenants distintos).
+
+| `ADR-BS-004` — EF Core, fuente única del esquema
+| El esquema de producción solo cambia por migraciones aplicadas desde el pipeline. Prohibido
+  el DDL a mano.
+
+| `ADR-BS-009` + `DEC-BS-18`
+| .NET 10. En contenedor la imagen lleva su propio runtime: `DEC-BS-18` («¿App Service Linux sirve
+  .NET 10?») deja de importar si se elige D8-01 A.
+
+| RNF-BS-01, 08, 09, 11
+| 99,5 % mensual; logs JSON a Azure Monitor; frescura del catálogo observable con alerta; primer
+  byte de streaming p95 < 800 ms.
+|===
+
+== Decisiones
+
+Ocho. Cada una con su recomendación; ninguna está tomada.
+
+[cols="1,2,3,3",options="header"]
+|===
+| # | Pregunta | Opciones | Recomendación y por qué
+
+| D8-01
+| ¿Dónde corren los contenedores?
+| *A.* Azure Container Apps (dos apps en un entorno). *B.* App Service para contenedores (dos
+  Web Apps). *C.* AKS.
+| **A.** Ya tenemos dos imágenes (frontend `nginx`, backend .NET) y la comunicación entre ellas
+  es interna (`http://portal-api`), que es exactamente el modelo de Container Apps. Ingreso con
+  TLS y certificado administrado gratis, revisiones con reparto de tráfico (despliegue sin
+  corte y *rollback* en segundos), restricciones de IP por ingreso (D8-05) y *Jobs* para las
+  migraciones (T-BS-083). B obliga a dos planes o a *sidecars* y hace el mismo origen más
+  frágil; C es desproporcionado para una persona (RNF-BS-07).
+
+| D8-02
+| ¿Cómo se describe la infraestructura?
+| *A.* Bicep. *B.* Terraform. *C.* Azure CLI a mano (lo que trae la guía de 2025).
+| **A.** Solo Azure, sin fichero de estado que custodiar, `what-if` en el pipeline antes de
+  aplicar. C no es reproducible: el primer entorno que se rompa no se sabría rehacer.
+
+| D8-03
+| ¿Cuántos entornos?
+| *A.* `stg` y `prod`, misma plantilla y parámetros distintos. *B.* Solo `prod`.
+| **A**, con `stg` en la escala mínima (réplicas a cero cuando nadie lo usa). Es donde se
+  ensaya cada migración antes de producción y donde SinsaTools puede probar su emisor sin tocar
+  datos reales. Si el presupuesto no lo permite, B con un *slot* de revisión sin tráfico.
+
+| D8-04
+| ¿Nivel de aislamiento de red?
+| *A.* Entorno de Container Apps en VNet; PostgreSQL con acceso privado (sin IP pública); Key
+  Vault con *private endpoint*. *B.* Todo con endpoint público y cortafuegos por IP.
+| **A** para PostgreSQL y Key Vault, que son nuestros y guardan el material sensible. El
+  almacenamiento de SinsaTools queda por endpoint público con RBAC (su cuenta, su decisión:
+  DEC-BS-16). B obliga a IP de salida fija (NAT Gateway) para que el cortafuegos sirva de algo.
+
+| D8-05
+| ¿Por dónde entra la ingesta de SinsaTools?
+| *A.* Mismo host, ruta `/v1/ingest/` publicada por el `nginx` del frontend. *B.* Un segundo
+  ingreso externo del backend (`ingest.<dominio>`) restringido a las IP de SinsaTools. *C.* Todo
+  el backend externo.
+| **B.** La superficie de ingesta tiene su propio esquema de autenticación y audiencia
+  (`SEC-BS-09`); darle un nombre propio con lista de IP permite cerrarla a todo el mundo salvo al
+  emisor sin tocar el portal. El portal sigue entrando solo por el `nginx`. Necesita que
+  SinsaTools nos dé sus IP de salida (petición 4 del documento de solicitudes).
+
+| D8-06
+| ¿Cómo se autentica el backend contra PostgreSQL?
+| *A.* Usuario y contraseña, la cadena en Key Vault. *B.* Entra ID con la identidad
+  administrada (sin contraseña).
+| **A en esta fase**, B como mejora. A no toca código; B exige el proveedor de token de Npgsql y
+  su prueba. La contraseña vive solo en Key Vault y se rota con el procedimiento de T-BS-089.
+
+| D8-07
+| ¿Quién envía el correo? (DEC-01 del portal)
+| *A.* Azure Communication Services Email por su relé SMTP. *B.* Un SMTP corporativo existente.
+  *C.* SendGrid u otro externo.
+| **A**, salvo que exista un SMTP corporativo con dominio ya verificado (B). El Bridge envía por
+  SMTP con MailKit: cualquiera de las tres es configuración, no código. Hace falta verificar el
+  dominio remitente (SPF, DKIM) en cualquier caso.
+
+| D8-08
+| ¿Nombre público?
+| Un subdominio del dominio de la organización para el portal, y otro para la ingesta si D8-05 B.
+| Lo decide la organización. Sin él no hay certificado ni enlace de invitación estable
+  (`Frontend:BaseUrl`).
+|===
+
+== Topología resultante (con las recomendaciones)
+
+[source,mermaid]
+----
+flowchart LR
+    U["Navegador"] -->|"HTTPS portal.&lt;dominio&gt;"| FE
+    ST["Microservicio de\nintegraciones SinsaTools"] -->|"HTTPS ingest.&lt;dominio&gt;\nsolo sus IP"| API
+    subgraph CAE["Container Apps Environment (VNet)"]
+        FE["portal-frontend\nnginx: SPA + /api/ → backend"]
+        API["portal-api\nBridge Service .NET 10"]
+        JOB["Job: migraciones\n(efbundle)"]
+    end
+    FE -->|"http interno"| API
+    API -->|"acceso privado"| PG[("PostgreSQL\nFlexible Server")]
+    JOB --> PG
+    API -->|"private endpoint\nidentidad administrada"| KV["Key Vault"]
+    API -->|"RBAC Blob Data Reader\n(DEC-BS-15)"| BLOB[("Blob Storage\nde SinsaTools")]
+    API -->|"SMTP"| MAIL["Correo (D8-07)"]
+    CAE -->|"stdout JSON"| LAW["Log Analytics\n+ alertas"]
+----
+
+== Lo que hace falta conseguir antes de empezar
+
+[cols="1,3,2",options="header"]
+|===
+| # | Qué | De quién
+
+| I-1 | Suscripción de Azure y *resource group* por entorno, con rol `Owner` (o `Contributor` + `User Access Administrator`) para crear identidades y asignar roles | Organización
+| I-2 | ¿Nuestra suscripción está en el **mismo tenant de Entra ID** que la cuenta de almacenamiento de SinsaTools? Decide el camino de `DEC-BS-15` | Organización + SinsaTools
+| I-3 | Dominio y quién administra su DNS (D8-08) | Organización
+| I-4 | Presupuesto mensual aproximado, para dimensionar y poner la alerta de coste | Organización
+| I-5 | Remitente de correo y quién puede verificar el dominio (D8-07) | Organización
+| I-6 | Las cuatro peticiones a SinsaTools (`bridge-docs/12_integraciones_externas/sinsatools/solicitud_sinsatools_v1.0.adoc`) | SinsaTools
+|===
+
+== Tareas
+
+[cols="1,3,3,1",options="header"]
+|===
+| ID | Tarea | Criterio de aceptación | Depende de
+
+| `T-BS-080`
+| *Cuenta y decisiones.* Cerrar D8-01..08; convenciones de nombre (`<tipo>-portalvideos-<entorno>`);
+  alerta de presupuesto; estimación mensual con la calculadora de Azure para la topología elegida.
+| Decisiones registradas en este documento; alerta de coste activa.
+| I-1..I-5
+
+| `T-BS-081`
+| *Infraestructura como código* (`Sin-PortalBridge/infra/`, Bicep): Log Analytics; VNet y subredes;
+  entorno de Container Apps; ACR; PostgreSQL Flexible (acceso privado, backups 7 días, versión 16);
+  Key Vault (RBAC, *private endpoint*); identidades administradas; las dos apps y el Job;
+  asignaciones de rol (`AcrPull`, `Key Vault Secrets User`). Parámetros por entorno.
+| `az deployment group what-if` limpio sobre un *resource group* vacío y despliegue completo en
+  `stg` desde cero en una sola ejecución.
+| T-BS-080
+
+| `T-BS-082`
+| *El servicio, listo para producción.* Proveedor de configuración de Key Vault con identidad
+  administrada (el paquete ya está referenciado y no se usa); `UseForwardedHeaders` para la IP y
+  el esquema reales detrás del proxy (hoy `RemoteIpAddress` sería la del `nginx`); arranque que
+  **falla** si falta `Jwt:PrivateKeyPem`, `Ingest:ClientSecretHash` o `Storage:AccountUri` en
+  `Production`; sin `ConnectionString` de almacenamiento en producción.
+| Pruebas de configuración en `AcceptanceTests`; `verify.sh` en verde.
+| —
+
+| `T-BS-083`
+| *Migraciones en producción.* `dotnet ef migrations bundle` en el pipeline; Container Apps Job
+  que lo ejecuta contra la base del entorno antes de activar la revisión nueva; nunca desde un
+  portátil (`ADR-BS-004`).
+| La migración de `stg` la aplica el pipeline; un fallo de migración no activa la revisión.
+| T-BS-081
+
+| `T-BS-084`
+| *Despliegue continuo.* GitHub Actions con credencial federada OIDC (sin secretos de Azure en
+  GitHub): `ci.yml` actual → imagen → ACR → Job de migración → revisión nueva con 0 % de tráfico →
+  `/health/ready` → 100 %. `prod` con aprobación manual (*environment protection*). Un workflow
+  por repositorio.
+| Un `push` a `main` llega a `stg` sin intervención; `prod` pide aprobación; *rollback* = activar
+  la revisión anterior, documentado.
+| T-BS-081..083
+
+| `T-BS-085`
+| *Frontend en el entorno.* Variables de `90-render-config.sh` (`PORTAL_API_BASE_URL=/api`, tema);
+  `API_UPSTREAM` al nombre interno del backend; CSP con `connect-src 'self'`; `Frontend:BaseUrl`
+  del backend al dominio público (enlace de invitación).
+| El E2E de las Entregas 1 y 2 pasa contra `stg` (`E2E_BASE_URL=https://portal-stg.<dominio>`).
+| T-BS-084, I-3
+
+| `T-BS-086`
+| *Correo.* Proveedor de D8-07; dominio verificado; `Smtp:*` desde Key Vault.
+| El alta y la invitación llegan a un buzón real desde `stg`.
+| D8-07, I-5
+
+| `T-BS-087`
+| *Observabilidad y alertas.* Consultas guardadas por `X-Correlation-ID`; alertas: catálogo
+  obsoleto (umbral de `DEC-BS-09`), tasa de 5xx, `/health/ready` caído, `429` sostenidos
+  (DT-BS-08), coste.
+| Cada alerta disparada a propósito una vez en `stg` y recibida.
+| T-BS-081
+
+| `T-BS-088`
+| *Puesta en marcha con SinsaTools.* Emitir su credencial de ingesta (el secreto se genera y se
+  entrega una vez; solo el resumen va a Key Vault); ingreso de ingesta con sus IP; primer lote
+  *snapshot* real; rol de lectura del almacenamiento (`DEC-BS-15`); **prueba de humo del proxy
+  contra su cuenta real**; primer administrador.
+| Un medio real se reproduce en `stg` con `206` por identidad administrada; el lote real
+  reconcilia sin errores. Cierra la Entrega 2 en producción (`verificacion_fase7`).
+| T-BS-085, I-6
+
+| `T-BS-089`
+| *Operación.* *Runbook*: desplegar, revertir, restaurar la base desde *backup*, rotar la clave
+  JWT, el secreto de ingesta (`DEC-BS-05`) y la contraseña de PostgreSQL; purga de registros
+  (`DEC-BS-03`).
+| Cada procedimiento ejecutado una vez en `stg`.
+| T-BS-084
+|===
+
+== Orden de ataque
+
+[source,text]
+----
+T-BS-080 ──► T-BS-081 ──► T-BS-083 ──► T-BS-084 ──► T-BS-085 ──► T-BS-088 (humo real)
+                 │                         │
+T-BS-082 ────────┘ (en paralelo, código)   ├──► T-BS-086
+                                           ├──► T-BS-087
+                                           └──► T-BS-089
+----
+
+`T-BS-082` no depende de Azure y se puede hacer ya. `T-BS-088` es la única que depende de
+SinsaTools: por eso las peticiones salen antes de empezar.
+
+== Lo que esta fase deliberadamente no hace
+
+* *No* crea ni configura la cuenta de almacenamiento: es de SinsaTools.
+* *No* activa CDN ni Front Door: la caché del navegador (`private`) es la estrategia de RNF-05;
+  un CDN delante de contenido con control de acceso exige otra decisión.
+* *No* hace escalado horizontal del backend más allá de una réplica mínima: el límite de
+  transferencias es por instancia (DT-BS-08); con varias réplicas habría que revisarlo.
+* *No* implementa Entra ID para PostgreSQL (D8-06 B): queda como mejora.
+
+== Riesgos
+
+[cols="2,3,2",options="header"]
+|===
+| Riesgo | Por qué | Mitigación
+
+| SinsaTools tarda en conceder el rol
+| `DEC-BS-15` es la única dependencia sin buena alternativa (ADR-BS-007 opción B reintroduce
+  acoplamiento en caliente).
+| La petición sale con este plan, no al final; todo lo demás no la necesita.
+
+| Tenants distintos
+| Sin mismo tenant no hay RBAC entre suscripciones.
+| Cadena de conexión en Key Vault (peor: da escritura), o SAS de contenedor de solo lectura con
+  rotación. Se decide con I-2.
+
+| La guía de infraestructura de 2025 induce a error
+| Describe dos backends, App Service, Service Worker y `Storage:Default`.
+| Se marca como superada donde toca al publicar este plan, como se hizo con la del proxy.
+|===
+
+include::{root}/_nav.adoc[]

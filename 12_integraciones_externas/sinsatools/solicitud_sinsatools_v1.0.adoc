@@ -1,0 +1,162 @@
+= Solicitud al equipo de SinsaTools — lo que el Portal de Videos necesita para producción
+:author: Equipo de Desarrollo
+:revnumber: 1.0
+:revdate: 2026-09-24
+:revremark: Primera emisión. Reúne en un solo documento las peticiones con plazo ajeno (DEC-BS-15, Web_Platforms, reingesta) y añade las IP de salida para la ingesta (plan de la Fase 8, D8-05).
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 2
+:sectnums:
+:icons: font
+:lang: es
+:root: ../..
+:section-id: integraciones-externas
+:section-title: 12 — Integraciones Externas
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+---
+
+[.lead]
+El servicio del portal (Bridge Service) está terminado y probado de punta a punta en local:
+recibe el catálogo por la API de ingesta, controla el acceso por grupos y excepciones y sirve
+los vídeos por un proxy que nunca expone la ruta del almacenamiento. Para pasarlo a producción
+dependemos de cinco cosas que solo vuestro equipo puede dar. Este documento las pide todas
+juntas, con lo que necesitamos exactamente, para qué, y qué pasa mientras no llegan.
+
+== Resumen
+
+[cols="1,4,1,2",options="header"]
+|===
+| # | Qué necesitamos | Prioridad | Mientras no llegue
+
+| 1 | Acceso de **solo lectura** a los blobs privados del portal | 🔴 Bloquea | El portal no puede reproducir ningún vídeo privado en producción
+| 2 | Que `storageUri` sea la ruta del blob **sin firma** | 🔴 Bloquea | Los vídeos funcionarían unas horas y después darían error
+| 3 | El `Id` del portal en `Web_Platforms` | 🟠 | No podemos comprobar que cada recurso recibido es nuestro
+| 4 | Las IP públicas de salida del microservicio de integraciones | 🟠 | La API de ingesta tendría que quedar abierta a todo internet
+| 5 | Un endpoint de reingesta a demanda | 🟢 | El botón «Sincronizar» del panel sigue apagado
+|===
+
+== Petición 1 — Lectura del almacenamiento (`DEC-BS-15`)
+
+*Para qué.* El proxy lee cada vídeo con credencial propia y se lo entrega al navegador por
+tramos (`Range`). La credencial no sale nunca de nuestro servicio: el cliente solo recibe bytes.
+
+*Qué pedimos, en este orden de preferencia:*
+
+. *Mismo tenant de Entra ID que nuestra suscripción:* el rol **`Storage Blob Data Reader`**
+  asignado a la **identidad administrada** del servicio del portal, **acotado al contenedor
+  privado** del portal (no a toda la cuenta). Os pasaremos el *principal ID* en cuanto creemos
+  la identidad. Es lo más seguro para los dos: sin secretos que rotar, revocable por vosotros en
+  un clic, y sin permiso de escritura ni de borrado.
+. *Tenants distintos:* una **SAS de contenedor de solo lectura** (`sp=rl`) con caducidad larga
+  y un procedimiento de rotación acordado, que guardaríamos en nuestro Key Vault. Preferimos esto
+  a la cadena de conexión con la clave de la cuenta, que da escritura y borrado sobre todo.
+
+*Qué más necesitamos saber:*
+
+* La URL de la cuenta (`https://<cuenta>.blob.core.windows.net`).
+* Los nombres exactos de los contenedores público y privado del portal. ¿Son contenedores propios
+  del portal o los mismos que usáis para otras plataformas? (`DEC-BS-16`: cuanto más acotado,
+  mejor el rol).
+* ¿La cuenta tiene el acceso de red restringido (cortafuegos, *private endpoints*)? Si es así,
+  necesitaremos que permitáis nuestra salida.
+
+== Petición 2 — Ruta sin firma en `storageUri`
+
+*Para qué.* Hoy el enlace privado que genera la plataforma es una SAS que caduca en unas dos
+horas. Nuestro catálogo se sirve durante semanas: si guardáramos ese enlace, los vídeos
+funcionarían esa tarde y al día siguiente darían `403` sin ningún error que lo delatara.
+
+*Qué pedimos.* Que el campo `storageUri` de cada recurso en los lotes de ingesta sea la ruta
+del blob **sin parámetros de consulta**:
+`https://<cuenta>.blob.core.windows.net/<contenedor>/<ruta>`. Nuestro servicio rechaza hoy
+cualquier `storageUri` con `?` (contrato `ingest_catalog_v1.0.yaml`, regla `DOM-BS-11`), así que
+un lote firmado fallaría con un error claro en vez de estropearse en silencio.
+
+Relacionado (pregunta 1 del mapeo): ¿`File_Sync.PathPrivate` es ya esa ruta, o una URL firmada?
+
+== Petición 3 — El `Id` del portal en `Web_Platforms`
+
+*Para qué.* Acordamos que el portal es una fila más de `Web_Platforms` y que la extracción filtra
+por `Entity_Files.WebPlatformId`. Con el valor, nuestro servicio **rechaza** cualquier recurso de
+otra plataforma (`DOM-BS-13`): si un día la extracción se equivoca de filtro, lo veis en la
+respuesta del lote en lugar de publicar material que no toca.
+
+*Qué pedimos.* El número. Hoy el servicio arranca sin él y avisa en el log de que esa
+comprobación está desactivada.
+
+== Petición 4 — IP públicas de salida del microservicio
+
+*Para qué.* La API de ingesta tendrá un nombre propio (`ingest.<dominio>`) separado del portal.
+Queremos que **solo** acepte conexiones de vuestro microservicio, además de la autenticación por
+credencial que ya tiene.
+
+*Qué pedimos.* La lista de IP (o rangos) públicas de salida desde las que llamará el
+microservicio, en `stg` y en producción, y quién nos avisa si cambian.
+
+*Qué os daremos nosotros:* la URL de ingesta de cada entorno, el `clientId` y el
+`clientSecret` (entregado una sola vez, por el canal que acordemos; nosotros solo guardamos su
+resumen), el contrato `ingest_catalog_v1.0.yaml` y nuestro simulador de ingesta como emisor de
+referencia, que empuja lotes válidos contra la misma API.
+
+== Petición 5 — Reingesta a demanda (`DEC-BS-07`)
+
+*Para qué.* El panel de administración tiene un botón «Sincronizar ahora» para cuando alguien
+publica algo y no quiere esperar al siguiente ciclo. Sin un endpoint vuestro, el botón está
+apagado y el servicio responde `503` con un mensaje que explica por qué.
+
+*Qué pedimos.* Un endpoint al que podamos llamar para que el microservicio haga un empuje nuevo.
+No tiene que devolver datos: solo aceptar la orden (`202`). Necesitamos la URL, con qué credencial
+se llama y qué responde si ya hay un empuje en curso. No es urgente.
+
+== También pendiente del mapeo
+
+Recogido en `mapeo_sinsatools_v1.1.adoc`, §«Preguntas para el equipo de SinsaTools»; no bloquea
+la puesta en producción del servicio pero sí la calidad del catálogo real:
+
+* *Pregunta 4 🔴* — ¿la extracción incluirá los documentos (PDF), además de imágenes y vídeos?
+* *Pregunta 8* — ¿se filtra por `File_Sync.Status = COMPLETED`? Un recurso sin subir no tiene bytes.
+* *Pregunta 9* — valores de `FileType` y `FileGroup`, para la tabla de equivalencias.
+* *Pregunta 3* — categorías raíz de `Categories` para el campo `industry`.
+* *Preguntas 5 y 10* — segundo origen (`Images`) y procedencia de `token`.
+* *`DEC-BS-09`* — ¿cada cuánto empujará el microservicio? De eso sale la alerta de «catálogo
+  desactualizado», que es la alerta más importante del sistema.
+
+== Texto para enviar
+
+[source,text]
+----
+Asunto: Portal de Videos — cinco cosas que necesitamos de SinsaTools para producción
+
+Hola,
+
+El servicio del Portal de Videos está terminado y probado de punta a punta en local: recibe el
+catálogo por la API de ingesta, controla el acceso y sirve los vídeos por un proxy que no expone
+las rutas del almacenamiento. Para desplegarlo en producción necesitamos de vuestra parte:
+
+1. [Bloquea] Lectura de los blobs privados del portal. Preferimos el rol Storage Blob Data
+   Reader, acotado al contenedor privado del portal, sobre la identidad administrada de nuestro
+   servicio (os pasamos el principal ID). Si nuestras suscripciones no están en el mismo tenant,
+   una SAS de contenedor de solo lectura. Necesitamos también la URL de la cuenta, los nombres de
+   los contenedores público y privado, y saber si la cuenta tiene restricciones de red.
+2. [Bloquea] Que storageUri en los lotes sea la ruta del blob sin firma (sin "?sv=..."). Las SAS
+   caducan en horas y el catálogo se sirve durante semanas.
+3. El Id del portal en Web_Platforms.
+4. Las IP públicas de salida del microservicio de integraciones (stg y producción), para
+   restringir la API de ingesta a vosotros.
+5. (Sin prisa) Un endpoint para pedir una reingesta a demanda, para el botón «Sincronizar ahora».
+
+Siguen abiertas además algunas preguntas del mapeo (documentos PDF en la extracción, filtro por
+File_Sync.Status, valores de FileType/FileGroup y la cadencia del empuje). Adjunto el documento
+con el detalle de cada punto.
+
+Por nuestra parte os daremos la URL de ingesta de cada entorno, la credencial del cliente y un
+simulador que empuja lotes de prueba contra la misma API.
+
+Gracias,
+----
+
+include::{root}/_nav.adoc[]

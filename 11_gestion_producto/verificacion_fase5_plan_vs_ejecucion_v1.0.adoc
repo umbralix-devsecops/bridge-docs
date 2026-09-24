@@ -1,8 +1,8 @@
 = Verificación de la Fase 5 — lo planeado frente a lo ejecutado
 :author: Equipo de Desarrollo
-:revnumber: 1.7
+:revnumber: 1.8
 :revdate: 2026-09-24
-:revremark: V5-14, 15 y 17 recogidos en api_admin.yaml 1.1.0; sin pendientes de contrato. H5-05: el frontend no tiene la página /set-password del enlace de invitación.
+:revremark: V5-14, 15 y 17 recogidos en api_admin.yaml 1.1.0; sin pendientes de contrato. H5-05 resuelto: página /auth/set-password en el frontend.
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -235,7 +235,7 @@ decide y aquí se dejan escritos (V5-04 en adelante).
 | ✅ *Cerrado el 2026-09-23.* Conflicto contrato/semilla en `config:read` para el editor de contenido (V5-22). No se resolvió en la fase porque era una decisión de seguridad; se decidió después (opción A) y se ejecutó como `MIG-BS-004`. Lección: cuando tres artefactos coinciden y uno diverge, la prueba fija la divergencia y la decisión se toma aparte —fue lo que pasó, y el cambio costó una fila.
 
 | H5-05
-| ⚠️ *El enlace de invitación no tiene página.* `DEC-BS-25` compone `{Frontend:BaseUrl}/set-password?token=…` y el Bridge expone `POST /auth/set-password` (ya en `api_auth.yaml` 1.1.0), pero el frontend no tiene la ruta `/set-password`: el enlace del correo aterriza en el `**` del enrutador. Un usuario creado por un administrador no puede entrar. Lo encontró la pasada de contratos del 2026-09-24 al comparar rutas del Bridge con rutas del frontend. **Trabajo del frontend**, pequeño: una página con el formulario de contraseña que llame a esa ruta.
+| ✅ *El enlace de invitación no tenía página.* `DEC-BS-25` compone `{Frontend:BaseUrl}/set-password?token=…` y el Bridge expone `POST /auth/set-password` (ya en `api_auth.yaml` 1.1.0), pero el frontend no tiene la ruta `/set-password`: el enlace del correo aterriza en el `**` del enrutador. Un usuario creado por un administrador no puede entrar. Lo encontró la pasada de contratos del 2026-09-24 al comparar rutas del Bridge con rutas del frontend. *Resuelto el 2026-09-24 en el frontend:* `features/auth/pages/set-password` en `/auth/set-password`, fuera del `guestGuard` (el enlace puede abrirse con otra sesión en el navegador), con redirección desde `/set-password` que conserva el token; misma política de contraseña que el registro; `INVALID_TOKEN` oculta el formulario. Cinco pruebas de la página y una de rutas.
 |===
 
 include::{root}/_nav.adoc[]
