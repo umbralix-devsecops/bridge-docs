@@ -1,0 +1,233 @@
+= Verificación de la Fase 7 — lo planeado frente a lo ejecutado
+:author: Equipo de Desarrollo
+:revnumber: 1.1
+:revdate: 2026-09-24
+:revremark: Fase 7 (Entrega 2) demostrada el 2026-09-24: 298 pruebas en verde y e2e-entrega2.sh 4/4 contra el servicio real con Azurite. D7-01..03; V7-01..13; H7-01..04. Pendiente: verify.sh, api_media.yaml 1.1, humo contra Azure real.
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:sectnumlevels: 3
+:icons: font
+:lang: es
+:root: ..
+:section-id: gestion-producto
+:section-title: Gestión de Producto
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+---
+
+[.lead]
+Registro de lo que la ejecución de la Fase 7 —Entrega 2: el proxy de streaming— cambia o fija
+respecto de lo escrito antes. Fuentes: la tabla `T-BS-070…073` del plan, `ADR-BS-007`,
+`api_media.yaml` v1.0 del portal, `Guia_Proxy_Streaming` v1.0, la arquitectura del frontend
+(ADR-012, ADR-013, GAP-01, GAP-02) y su código (`core/media/`, `ngsw-config.json`,
+`interceptors.ts`, `Program.cs` del Bridge). Mismo método que las verificaciones anteriores:
+**grep primero** (H5-03).
+
+== El cotejo previo
+
+El plan de la Fase 7 se escribió antes que el frontend decidiera cómo autoriza un elemento
+multimedia. Al leer el frontend antes de escribir código aparecieron tres desajustes que
+cambian la forma de las tareas (V7-01, V7-02 y la cookie), y el contrato `api_media.yaml` v1.0
+resultó anterior a esas decisiones (V7-04). Las tres decisiones que quedaban abiertas se
+presentaron con opciones y se cerraron antes de empezar (D7-01..03).
+
+== Decisiones de la fase
+
+[cols="1,3,3,1",options="header"]
+|===
+| # | Qué había que decidir | Decisión (2026-09-24) | Registro
+
+| D7-01
+| Cómo se construye la cookie `pv_media` (ADR-012 opción C: «token opaco ligado a sid»)
+| **Opción A: el `sid` firmado, sin tabla.** `base64url(sid ‖ HMAC-SHA256(sid))`, 48 bytes → 64 caracteres. Validar es comprobar la firma y después que la sesión siga viva y la cuenta activa: la misma consulta que hace el *bearer*. Logout, RF-02 y suspensión la invalidan en el acto. Sin migración ni columna. La clave HMAC se **deriva** de la clave RS256 (`RsaSigningKeys.DeriveKey("pv_media")`, HKDF-SHA256): rotar la de los JWT rota las dos, y no hay un secreto más que configurar (V7-10). La opción B —aleatorio con hash en `sessions`— no añadía seguridad: ambas mueren con la sesión.
+| `MediaCookieSigner`, `MediaCookieAuthenticationHandler`
+
+| D7-02
+| Límite de transferencias concurrentes por usuario (`DT-BS-08`)
+| **Opción A: tres simultáneas, solo vídeo.** `TransferLimiter` en memoria, por `user_id`, aplicado a `media_type = video`; imágenes y documentos exentos porque una rejilla de miniaturas pide varias a la vez y son pequeñas, y el proxy también las sirve. La cuarta es `429 TOO_MANY_TRANSFERS` con `Retry-After: 2`. Configurable: `Storage:MaxConcurrentVideoTransfersPerUser`. Un contador por instancia, que es lo que hay (`ADR-BS-005`); con varias instancias el límite sería por instancia: deuda anotada.
+| `TransferLimiter`, `MediaStreamHandler`
+
+| D7-03
+| Granularidad de `video_access_log`
+| **Opción A: una fila por reproducción.** La escribe el pre-flight con el veredicto y su fuente, y el proxy solo en la primera petición del reproductor —sin `Range` o desde el byte 0— y en toda denegación. Un vídeo de 150 MB en rangos de 1 MB son ~150 peticiones y **dos** filas, no ciento cincuenta. `bytes_served` lleva los bytes de esa primera petición; `range_request` si la traía.
+| `IVideoAccessLogWriter`, `MediaAccessHandler`, `MediaStreamHandler`
+|===
+
+== Desvíos y decisiones
+
+[cols="1,2,2,3,1,1",options="header"]
+|===
+| # | Dónde estaba escrito | Qué decía | Qué se hace, y por qué | Registro | Estado
+
+| V7-01
+| `plan_tareas` → `T-BS-070`: «metadatos y veredicto»
+| El pre-flight devuelve metadatos
+| **Solo el veredicto, sin cuerpo:** `204` / `403 ACCESS_DENIED` / `404 MEDIA_NOT_FOUND`. Es lo que el frontend implementó (`media-access.api.ts`) y lo que ADR-012 describe; los metadatos ya los da `/catalog/versions/{id}/media`. Manda el frontend. Registra la fila de D7-03. Con *bearer*: lo llama el cliente HTTP, no el elemento.
+| `MediaController.AccessAsync`
+| ✅
+
+| V7-02
+| `plan_tareas` → `T-BS-073`: «Service Worker contra la URL estable del proxy»; `Guia_Proxy_Streaming` y `api_media.yaml`: `Cache-Control: public, max-age=604800` «para el Service Worker»
+| Un Service Worker cachea los medios
+| **No hay Service Worker para medios (ADR-013 del frontend; `ngsw-config.json` lo dice literalmente).** La caché es la HTTP nativa del navegador, que sí soporta `Range`/206. `T-BS-073` pasa a ser *las cabeceras del proxy*: `Cache-Control: private, max-age=604800` —`public` era inseguro: un intermediario podría guardar material con control de acceso (GAP-02)—, `ETag` del blob, `If-None-Match` → `304`, y `Clear-Site-Data: "cache"` en el logout. Frontend: cero trabajo.
+| `MediaController.StreamAsync`, `AuthController.LogoutAsync`
+| ✅
+
+| V7-03
+| `api_media.yaml`, `API_ERROR_CODES` del frontend
+| Ningún código para el límite de transferencias
+| **Código nuevo `TOO_MANY_TRANSFERS` (429 + `Retry-After`).** Regla H5-03: no inventar códigos sin mirar el frontend; se miró y no existe porque la situación no estaba prevista. El `<video>` no lee el cuerpo, así que no rompe nada; el contrato y `API_ERROR_CODES` deben recogerlo. **Pendiente de contrato.**
+| `ErrorCodes.TooManyTransfers`
+| 📌 contrato
+
+| V7-04
+| `api_media.yaml` v1.0
+| `BearerAuth` solo; `Cache-Control: public`; «el Service Worker cachea»; sin `/media/{id}/access`; sin `304` ni `429`
+| **El contrato es anterior a ADR-012/013 y a GAP-01/02.** Lo implementado sigue al frontend: cookie `pv_media` (o *bearer*) en `/stream`, pre-flight `/access` con *bearer*, caché privada, `304`, `416` con `bytes */total`, `429`. `api_media.yaml` debe pasar a 1.1 con eso; `portal.types.ts` se regenera del YAML. Misma familia que V5-14/15/17. **Pendiente de contrato.**
+| —
+| 📌 contrato
+
+| V7-05
+| Frontend `media-viewer.store.ts`; `api_media.yaml` («`403` al usuario sin acceso»)
+| El visor muestra «Access denied» a quien no tiene acceso
+| **Por la pantalla ese estado es inalcanzable:** el visor resuelve el medio desde `/catalog/versions/{id}/media`, que ya viene filtrada por acceso (V4-04), así que para quien no tiene acceso el medio «no existe» y el estado es `not_found`. `denied` solo saldría si el acceso cambiara entre listar y ver. No es un error de nadie —la información que se da es la misma— pero la suite E2E de la Entrega 2 comprueba `not-found` *o* `denied`, y el `403 ACCESS_DENIED` se comprueba por la API. Anotado para el frontend.
+| `bridge-streaming.e2e.ts`
+| 📌 frontend
+
+| V7-06
+| `IMediaStorageProvider` (Fase 0): `Task<MediaStreamResult?> OpenReadAsync(container, path, range, ct)`
+| Un puerto con dos salidas: bytes o `null`
+| **El puerto gana estado y validador:** `OpenReadAsync(container, path, range, ifNoneMatch, ct)` → `MediaOpenResult { Ok, NotFound, NotModified, RangeNotSatisfiable }`. Las tres últimas son respuestas HTTP normales (`404`, `304`, `416`), no fallos, y no se modelan como excepciones. `MediaStreamResult` gana `RangeStart` para componer `Content-Range`. Ningún tipo del SDK asoma (`EST-BS-02`, prueba de arquitectura).
+| `IMediaStorageProvider`
+| ✅
+
+| V7-07
+| `StorageUriResolver`: tres proveedores (`azure-blob`, `http`, `file`)
+| El catálogo puede apuntar a cualquiera
+| **El proxy solo sirve `azure-blob`.** Un recurso con otro `storage_provider` se responde como `404`: no hay adaptador detrás y el frontend siempre pasa por el proxy. Si SinsaTools llegara a emitir HTTP genérico habría que decidir si se sirve —y con qué credencial— o se rechaza en la ingesta. Anotado.
+| `MediaStreamHandler`
+| ✅
+
+| V7-08
+| `Guia_Proxy_Streaming` v1.0: `LocalStorageService` + `Storage:Default = local` para desarrollo; `S3StorageService`
+| Un adaptador por proveedor, y uno de disco para desarrollar
+| **Azurite sustituye al adaptador de disco.** El de disco nunca iría a producción y dejaría `AzureBlobStorageService` sin probar hasta desplegar; Azurite ejecuta el SDK real (`DownloadStreamingAsync` con `HttpRange`, `ETag`, `416`, `304`) en `docker-compose` y en Testcontainers. `Storage:Default` no existe: `Storage:ConnectionString` (Azurite, o Key Vault) y, sin ella, `DefaultAzureCredential` contra `Storage:AccountUri` (identidad administrada, `DEC-BS-15`). S3 no se implementa: no hay requisito. La guía del portal se corrige (`public` → `private`, sin SW, sin `LocalStorageService`).
+| `AzureBlobStorageProvider`, `docker-compose.yml`
+| ✅ (guía: 📌)
+
+| V7-09
+| `appsettings.json`: `Storage:MaxConcurrentTransfers: 8`
+| Un límite global sin usar
+| **Se sustituye por `Storage:MaxConcurrentVideoTransfersPerUser: 3`** (D7-02). Nadie leía el anterior.
+| `appsettings.json`
+| ✅
+
+| V7-10
+| ADR-012 del frontend: «token opaco ligado a sid»
+| No dice cómo se produce ni con qué clave
+| **Derivada de la RS256, no un secreto nuevo** (D7-01). `RsaSigningKeys.DeriveKey(propósito)` con HKDF-SHA256 sobre la clave privada PKCS#8. Consecuencia: rotar `Jwt:PrivateKeyPem` invalida las cookies de medios vivas a la vez que los tokens, que es exactamente lo que se quiere. `SEC-BS-11`: la clave no sale del proceso.
+| `RsaSigningKeys`
+| ✅
+
+| V7-11
+| `IngestSimulator.csproj`: «sin paquetes: HttpClient y System.Text.Json bastan»
+| El simulador no arrastra paquetes
+| **Un paquete, `Azure.Storage.Blobs`, para `upload-blobs`** (`T-BS-074`): sube a Azurite los bytes de cada recurso con los archivos de muestra del frontend (`public/mock`). Es el papel que en producción hace SinsaTools al subir el material, no una llamada al servicio: el simulador sigue hablando con el Bridge solo por HTTP. Idempotente; `--only-products VL-001,VL-002,VL-003` para la demo.
+| `BlobUploader`
+| ✅
+
+| V7-13
+| `bridge-streaming.e2e.ts` (primera versión): «tras el salto, el elemento pide otro rango»
+| Que un *seek* siempre produce una petición nueva
+| **Quien parte el vídeo es el navegador, y solo si le hace falta.** El vídeo de muestra pesa 284 KB: Chrome lo pidió con `bytes=0-`, el `206` se lo trajo entero y el salto se resolvió desde el búfer sin tocar la red; la prueba esperó 30 s una petición que nunca iba a existir. Se cambia lo que se mide: que el reproductor se recoloca y sigue sin error, y que un rango intermedio pedido desde el propio contexto del navegador (misma cookie) responde `206` con `Content-Range` desde ese byte. Vale igual con 284 KB que con 150 MB. El comportamiento con archivos grandes lo demuestran las pruebas de aceptación de .NET con un vídeo sintético de 3 MB.
+| `bridge-streaming.e2e.ts`
+| ✅
+
+| V7-12
+| `plan_tareas` → Fase 7: `T-BS-070..073`
+| Cuatro tareas, sin criterio de aceptación de la Entrega 2
+| **Se añade `T-BS-074`: la aceptación de la Entrega 2 de punta a punta** —`e2e-entrega2.sh`: compose con Azurite, migraciones, API, simulador (`demo` + `upload-blobs`), frontend real, Playwright reproduce un vídeo, comprueba `206` con `Content-Range`, `Cache-Control: private`, `ETag`, hace *seek*, y comprueba que otro usuario recibe `403` por la API y ni un byte por el proxy—. La Entrega 1 no se demostraba sola y la 2 tampoco debía.
+| `tools/e2e-entrega2.sh`, `e2e/bridge-streaming.e2e.ts`
+| ✅
+|===
+
+== Lo que trae la fase
+
+* **`GET /media/{id}/access`** (`T-BS-070`): veredicto por recurso con su fuente —`MediaAccessReader`,
+  la regla de `MediaAccessQueries` resuelta para uno, compartiendo sus dos subconsultas para
+  que no diverjan—; `204` / `403` / `404`; fila en `video_access_log`.
+* **Cookie `pv_media`** en el login y el refresh; borrada en el logout con `Clear-Site-Data`.
+  Esquema de autenticación `MediaCookie`, solo en `/media/{id}/stream`, unido al *bearer*:
+  `[RequirePermission(videos, read)]` no distingue de dónde vino la identidad.
+* **`GET /media/{id}/stream`** (`T-BS-071`): acceso → plaza → bytes, todo en la misma petición
+  (`SEC-BS-12`). `Range` propagado como `HttpRange`, `206` + `Content-Range` + `Accept-Ranges`;
+  `416` con `bytes */total`; `304`; `Content-Type` del blob, o del origen, o de la extensión
+  (`MediaContentTypes`: un `<video>` con `octet-stream` no reproduce); `Content-Disposition:
+  inline`; copia directa al cuerpo sin bufferizar (`DT-BS-08`). Ninguna cabecera revela
+  contenedor ni ruta (`SEC-BS-10`, comprobado).
+* **`AzureBlobStorageProvider`**: conexión perezosa —la Entrega 1 no la exige—; `404`/`304`/`416`
+  del servicio como estado.
+* **`TransferLimiter`** (`T-BS-072`, D7-02) y **caché privada** (`T-BS-073`, V7-02).
+* **Azurite** en `docker-compose.yml` (puerto 10000, volumen `azurite-data`) y en los dos
+  proyectos de prueba por Testcontainers.
+* **Simulador `upload-blobs`** y **`e2e-entrega2.sh`** (`T-BS-074`).
+* **Pruebas.** Unitarias: `MediaCookieSignerTests`, `TransferLimiterTests`,
+  `MediaContentTypesTests`, `MediaAccessHandlerTests`, `MediaStreamHandlerTests`. Integración:
+  `AzureBlobStorageProviderTests` contra Azurite (entero, rango cerrado, abierto, `416` con
+  total, `304`, `W/`, ausente, sin configuración). Aceptación: `MediaAccessEndpointsTests` (las
+  cuatro fuentes del veredicto, retirado, caducada, auditor, cookie no vale en el pre-flight,
+  logout borra la cookie) y `MediaStreamEndpointsTests` (cookie, `206`, `416`, `304`, *bearer*,
+  SVG sin tipo, `401` con cookie alterada y tras RF-02, `403` registrado, `404` sin blob, una
+  fila por varios rangos, `429` y devolución de la plaza). La puerta de cobertura exige el 100 %
+  en `MediaAccessReader`, `MediaAccessHandler`, `MediaStreamHandler` y `MediaCookieSigner`.
+
+== Cómo se usa
+
+[source,bash]
+----
+docker compose up -d postgres mailpit azurite
+# Storage:ConnectionString = "UseDevelopmentStorage=true" en appsettings.Development.json (guía §2.4)
+SIM_CLIENT_SECRET=… dotnet run --project tools/IngestSimulator -- demo
+dotnet run --project tools/IngestSimulator -- upload-blobs --only-products VL-001,VL-002,VL-003 \
+  --samples ../Sin-PortalVideos/public/mock
+# La Entrega 2 de punta a punta (incluye la 1):
+SIM_CLIENT_SECRET=… ./tools/e2e-entrega2.sh
+----
+
+== Resultado
+
+2026-09-24: `dotnet test` **298 en verde** (5 proyectos). `tools/e2e-entrega2.sh` **4/4** contra el servicio real: 250/752/2.525 reconciliados, 27 blobs de la demo en Azurite en 0,4 s, la Entrega 1 sigue en verde y la Entrega 2 reproduce el vídeo por el proxy con `206` + `Content-Range`, `Cache-Control: private`, `ETag`, `video/webm` y ninguna cabecera que delate el almacenamiento; el usuario sin acceso recibe `403 ACCESS_DENIED` por la API y no pide un byte al proxy. **La Entrega 2 queda demostrada en local.** Falta `verify.sh` (formato y puerta de cobertura) antes de fusionar.
+
+== Lo que Azurite no demuestra
+
+Azurite no emula la identidad administrada ni Entra ID (solo clave compartida y SAS), ni
+latencia, ni *throttling*, ni niveles de acceso. Queda como tarea explícita de cierre de la
+Entrega 2, cuando `DEC-BS-15` conceda el rol: **una prueba de humo contra una cuenta de
+Storage real** —el servicio con `Storage:AccountUri` y sin `ConnectionString`, un blob, un
+`Range`— antes de dar por cerrada la fase en producción.
+
+== Hallazgos
+
+[cols="1,5",options="header"]
+|===
+| # | Hallazgo
+
+| H7-01
+| 📌 *El plan de una fase escrito antes que las decisiones del otro repositorio caduca sin avisar.* Tres de cuatro tareas cambiaron de forma al leer el frontend (V7-01, V7-02, cookie). Regla que ya existía (H5-03) y que esta vez se aplicó antes de escribir: leer el frontend y sus ADR es el primer paso de cada fase, no la corrección de después.
+
+| H7-02
+| 📌 *Los contratos del portal van por detrás del frontend.* `api_media.yaml` v1.0 describe un diseño (Bearer, SW, `public`) que el frontend ya descartó en ADR-012/013. Con V5-14/15/17 son ya seis puntos pendientes de contrato. Conviene una pasada única sobre `api_admin.yaml` y `api_media.yaml` antes de la Fase 8, y regenerar `portal.types.ts`.
+
+| H7-03
+| ⚠️ *RF-02 contra Playwright en paralelo.* Con dos archivos de aceptación, Playwright abrió cuatro *workers* y cada uno hizo su login del visualizador por la API en `beforeAll`; la sesión única revocó a los anteriores y sus peticiones siguientes dieron `401`, también en la suite de la Entrega 1 que ayer pasaba sola. Contra el servicio real se corre con `--workers=1` (los dos scripts). Es el mismo mecanismo que V6-08/V5 ya habían encontrado dentro de una prueba, ahora entre pruebas.
+
+| H7-04
+| ⚠️ *Sin compilador en el entorno de redacción.* El código se escribió sin `dotnet build`. Al compilar: 12 errores de analizadores en cinco tandas (CA1819, CA2000, CA1054/56, CA1822, xUnit1051, CS1573 ×2, CS0108), todos de forma, ninguno de lógica. Al probar, tres supuestos falsos sobre librerías: `Base64Url.TryDecodeFromChars` lanza `FormatException` con caracteres inválidos (se valida antes con `IsValid`); el SDK de Azure no lanza en un `304`, devuelve un `NoBodyResponse` cuyo `.Value` lanza (se mira `GetRawResponse().Status`); y el `403` de `RequirePermission` no lleva cuerpo. Después: 298 pruebas en verde.
+|===
+
+include::{root}/_nav.adoc[]

@@ -1,8 +1,8 @@
 = Guía de arranque local — Bridge Service v1.0
 :author: Equipo de Desarrollo
-:revnumber: 1.1
-:revdate: 2026-09-23
-:revremark: §7 pasa del curl al simulador (demo, seed-users, seed, grant); verificación con la puerta de cobertura y e2e-entrega1.sh.
+:revnumber: 1.2
+:revdate: 2026-09-24
+:revremark: Fase 7: Azurite en el compose, Storage:ConnectionString (§2.4), upload-blobs y e2e-entrega2.sh.
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -101,6 +101,22 @@ echo "resumen=$resumen"
 
 (El `.example` trae el equivalente en PowerShell.) El **resumen** va a `Ingest:ClientSecretHash` en `appsettings.Development.json`, sustituyendo a `<pega aqui el resumen>`. El **secreto** lo guardas tú: es lo que presentará el cliente de ingesta en §7. `ClientId` puede quedarse en `ingest-simulator-local`.
 
+=== El almacenamiento de recursos: Azurite (`T-BS-071`)
+
+El proxy de streaming lee los bytes de Azure Blob Storage; en local, de **Azurite**, su emulador oficial, que el `compose` levanta. El `.example` ya trae la cadena:
+
+[source,json]
+----
+"Storage": {
+  "ConnectionString": "UseDevelopmentStorage=true",
+  "AccountUri": "http://localhost:10000/devstoreaccount1",
+  "PublicContainer": "media-public",
+  "PrivateContainer": "media-private"
+}
+----
+
+Si tu `appsettings.Development.json` es anterior a la Fase 7, añade la línea `ConnectionString`. Sin ella el servicio arranca igual —la Entrega 1 no toca el almacenamiento— y el primer `GET /media/{id}/stream` falla con un mensaje que dice qué falta. En Azure **no** hay cadena: la identidad administrada del servicio con el rol `Storage Blob Data Reader` sobre la cuenta (`DEC-BS-15`), y solo `AccountUri` en configuración.
+
 === Enlace de invitación (`DEC-BS-25`)
 
 `Frontend:BaseUrl` ya viene como `http://localhost:4200` en el `.example`. Con él se compone `…/set-password?token=…` del correo que recibe un usuario creado por administrador. Si falta, `POST /admin/users` falla con un mensaje explícito y el arranque avisa.
@@ -109,7 +125,7 @@ echo "resumen=$resumen"
 
 [source,bash]
 ----
-docker compose up -d postgres mailpit
+docker compose up -d postgres mailpit azurite
 docker compose ps
 ----
 
@@ -121,11 +137,12 @@ Espera a que `postgres` esté `healthy`. Qué hay:
 
 | `postgres` (16-alpine) | 5432 | La base. Volumen `postgres-data`: sobrevive a `down`; `down -v` la borra.
 | `mailpit` | 1025 SMTP · **8025 web** | Buzón de desarrollo. Acepta todo y no entrega nada. Ahí aparecen los correos de registro, aprobación e invitación: `http://localhost:8025`.
+| `azurite` | 10000 | Azure Blob Storage en local (`T-BS-071`). Cuenta `devstoreaccount1`, credencial pública por diseño. Volumen `azurite-data`. Los contenedores `media-public` y `media-private` los crea el simulador (`upload-blobs`).
 | `api` | 8080 | La API **en contenedor**. Para desarrollar no la uses: `dotnet run` (§5) recarga y depura; el contenedor sirve para probar el `Dockerfile`.
 |===
 
 [TIP]
-`docker compose up -d` sin nombres levanta también `api`, que compila la imagen (minutos) y necesita `JWT_PRIVATE_KEY_PEM` e `INGEST_CLIENT_SECRET_HASH` en un `.env`. Para el día a día, levanta solo `postgres` y `mailpit`.
+`docker compose up -d` sin nombres levanta también `api`, que compila la imagen (minutos) y necesita `JWT_PRIVATE_KEY_PEM` e `INGEST_CLIENT_SECRET_HASH` en un `.env`. Para el día a día, levanta `postgres`, `mailpit` y `azurite`.
 
 == Base de datos: migraciones y semilla
 
@@ -275,11 +292,23 @@ npm start          # ng serve con proxy.conf.json → https://localhost:7001, re
 Es lo mismo que ejecuta la CI, en el mismo orden: `restore`, `format --verify-no-changes`, `build` en Release con avisos como errores, pruebas de arquitectura, todas las pruebas con cobertura, **la puerta de cobertura** (`tools/CoverageGate`: 80 % global y 100 % en las clases críticas de `EST-BS-08`, tumba el build) y `gitleaks` si está instalado. Si esto pasa y la CI falla, el que está mal es el script.
 
 La Entrega 1 de punta a punta —base, API real, simulador, frontend sin mock y Playwright sobre el
-criterio de aceptación (`T-BS-062`)—:
+criterio de aceptación (`T-BS-062`)—, y la Entrega 2 —lo mismo más Azurite, los blobs de la demo
+y Playwright reproduciendo un vídeo por el proxy (`T-BS-074`)—:
 
 [source,bash]
 ----
 SIM_CLIENT_SECRET='<el secreto de §2.3>' ./tools/e2e-entrega1.sh      # KEEP=1 deja API y frontend levantados
+SIM_CLIENT_SECRET='<el secreto de §2.3>' ./tools/e2e-entrega2.sh      # incluye la Entrega 1
+----
+
+Para reproducir a mano en el frontend hacen falta los bytes en Azurite; el simulador los sube
+con los archivos de muestra del frontend (idempotente):
+
+[source,bash]
+----
+dotnet run --project tools/IngestSimulator -- upload-blobs --samples ../Sin-PortalVideos/public/mock
+# solo la demo (VL-001..003), mucho más rápido:
+dotnet run --project tools/IngestSimulator -- upload-blobs --only-products VL-001,VL-002,VL-003 --samples ../Sin-PortalVideos/public/mock
 ----
 
 Solo pruebas, en desarrollo:
@@ -295,11 +324,11 @@ dotnet test
 
 | `UnitTests` | Nada. Solo ve `Application`.
 | `ArchitectureTests` | Nada. Regla de dependencia, puertos sin `IQueryable`, nombre y correlatividad de migraciones.
-| `IntegrationTests` | **Docker corriendo.** Testcontainers levanta su propio PostgreSQL 16 —no usa el del `compose`— y ejecuta `SchemaParityTests`: migraciones contra DDL derivado, recuentos 18 / 14 / 58.
-| `AcceptanceTests` | **Docker corriendo.** Host real con `WebApplicationFactory` sobre otro PostgreSQL de Testcontainers; recorre autenticación, ingesta, catálogo con control de acceso y administración por HTTP.
+| `IntegrationTests` | **Docker corriendo.** Testcontainers levanta su propio PostgreSQL 16 —no usa el del `compose`— y ejecuta `SchemaParityTests`: migraciones contra DDL derivado, recuentos 18 / 14 / 58. Y un Azurite propio para `AzureBlobStorageProviderTests`.
+| `AcceptanceTests` | **Docker corriendo.** Host real con `WebApplicationFactory` sobre otro PostgreSQL y otro Azurite de Testcontainers; recorre autenticación, ingesta, catálogo con control de acceso, administración y el proxy de medios por HTTP.
 |===
 
-La primera ejecución descarga `postgres:16-alpine` para Testcontainers y tarda; después, ~1 minuto.
+La primera ejecución descarga `postgres:16-alpine` y `azurite:3.34.0` para Testcontainers y tarda; después, ~1 minuto.
 
 == Problemas habituales
 

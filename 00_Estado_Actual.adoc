@@ -1,7 +1,7 @@
 = Estado Actual — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 3.6
-:revdate: 2026-09-23
+:revnumber: 3.7
+:revdate: 2026-09-24
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -31,7 +31,7 @@ arquitectura, modelo de datos y contrato de ingesta cerrados y mutuamente cohere
 *Sin bloqueantes externos para arrancar:* el plan de primera entrega
 (`11_gestion_producto/plan_primera_entrega_v1.0.adoc`) está emitido y su camino crítico es
 interno. Lo único con plazo ajeno es el rol de lectura sobre el almacenamiento (`DEC-BS-15`),
-que condiciona la Entrega 2, no la 1. *Código: Fases 0 a 6 cerradas.* **La Entrega 1 está demostrada sin SinsaTools** (2026-09-23): `tools/e2e-entrega1.sh` levanta base, API real, simulador (250/752/2.525 en 4 s), frontend sin mock y Playwright sobre el criterio de aceptación, en verde. Fase 6 en `feat/fase-6-simulador`, pendiente de fusionar a `main`. Siguiente: Fase 7 (Entrega 2) con Azurite en local; producción espera `DEC-BS-15`.
+que condiciona la Entrega 2, no la 1. *Código: Fases 0 a 6 cerradas y en `main`; Fase 7 (Entrega 2) demostrada el 2026-09-24 en `feat/fase-7-streaming` (298 pruebas, `e2e-entrega2.sh` 4/4), pendiente de `verify.sh` y fusión.* **La Entrega 1 está demostrada sin SinsaTools** (2026-09-23, `tools/e2e-entrega1.sh` en verde). La Entrega 2 —pre-flight, proxy con `Range`/`206`, cookie `pv_media`, caché privada, límite por usuario— corre en local contra Azurite; producción espera `DEC-BS-15`.
 
 == Semáforo por sección
 
@@ -353,7 +353,7 @@ problema desapareció. Sus números quedan quemados.
 | DT-BS-04 | Sin métrica de deriva frente a SinsaTools. *Mitigada en parte* por la foto completa de `RF-BS-14` | Medio — era Alto
 | DT-BS-06 | El changelog del modelo depende de un gate humano | Medio
 | DT-BS-07 | 🆕 El `sizeBytes` obtenido por `HEAD` no se revalida | Bajo
-| DT-BS-08 | 🆕 El proxy de streaming ocupa un hilo por transferencia, sin límite de tamaño | Medio
+| DT-BS-08 | El proxy de streaming ocupa un hilo por transferencia, sin límite de tamaño. *Mitigada el 2026-09-24 (D7-02):* copia directa sin bufferizar y tres transferencias de vídeo simultáneas por usuario (`429`). Queda: el límite es por instancia | Bajo
 |===
 
 Dadas de baja: `DT-BS-01`, `DT-BS-03`, `DT-BS-05`.
@@ -500,6 +500,34 @@ decisiones. Lo que hay que conocer:
 Siguiente: Fase 6 — `T-BS-060` (extractor de `fixtures.ts`) y `T-BS-061` (el simulador),
 que es lo que hace demostrable la Entrega 1. `T-BS-063` debe hacer que `verify.sh` aplique
 el umbral de cobertura, que hoy solo recoge.
+====
+
+[IMPORTANT]
+====
+*Fase 7 demostrada el 2026-09-24 — Entrega 2, el proxy de streaming.* 298 pruebas en verde; `tools/e2e-entrega2.sh` 4/4 contra el servicio real con Azurite (pendiente `verify.sh` y fusión a `main`).
+`GET /media/{id}/access` (`204`/`403`/`404`, sin cuerpo: manda el frontend, V7-01),
+`GET /media/{id}/stream` (cookie `pv_media` o *bearer*; `Range` → `206` + `Content-Range`;
+`416`; `304`; `Cache-Control: private` + `ETag`; `429` a la cuarta transferencia de vídeo por
+usuario), cookie `pv_media` en login/refresh y borrada en logout con `Clear-Site-Data`,
+`AzureBlobStorageProvider` sobre el SDK real, Azurite en `docker-compose` y Testcontainers,
+simulador `upload-blobs`, `tools/e2e-entrega2.sh` y `bridge-streaming.e2e.ts`. Sin migración:
+la fase no toca el esquema.
+
+Registro: `11_gestion_producto/verificacion_fase7_plan_vs_ejecucion_v1.0.adoc` (D7-01..03,
+V7-01..12). Lo que hay que conocer:
+
+* *D7-01:* `pv_media` es el `sid` firmado con HMAC, clave derivada de la RS256; sin tabla. Muere
+  con la sesión (logout, RF-02, suspensión).
+* *D7-02:* tres transferencias de vídeo simultáneas por usuario; imágenes y documentos exentos.
+* *D7-03:* una fila de `video_access_log` por reproducción (pre-flight + primera petición del
+  reproductor + toda denegación), no por rango.
+* *V7-02:* **no hay Service Worker para medios** (ADR-013 del frontend); `T-BS-073` son las
+  cabeceras de caché del proxy, y `public` pasa a `private`.
+* *V7-04 / V7-03:* `api_media.yaml` v1.0 es anterior a ADR-012/013: debe recoger la cookie, el
+  pre-flight, `304`, `416`, `429 TOO_MANY_TRANSFERS` y la caché privada. **Pendiente de
+  contrato**, con V5-14/15/17.
+* *Azurite no demuestra la identidad administrada:* prueba de humo contra una cuenta real
+  antes de cerrar la Entrega 2 en producción, cuando `DEC-BS-15` conceda el rol.
 ====
 
 [IMPORTANT]

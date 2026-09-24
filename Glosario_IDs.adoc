@@ -1,7 +1,7 @@
 = Glosario de IDs y trazabilidad — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 2.8
-:revdate: 2026-09-23
+:revnumber: 2.9
+:revdate: 2026-09-24
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -174,7 +174,7 @@ Cada eslabón debe poder recorrerse en ambos sentidos:
 | DT-BS-04 | Sin métrica de deriva frente a SinsaTools. Mitigada en parte por la foto completa | Medio
 | DT-BS-06 | Escribir la entrada del changelog sigue siendo humano. Reducido el 2026-09-18: el *identificador* ya lo exige el build, así que el olvido es visible en el nombre del archivo | Bajo
 | DT-BS-07 | ⬜ *Retirada el 2026-09-17.* `Files.Size` viaja en el lote; no hay `HEAD` que revalidar | —
-| DT-BS-08 | 🆕 El proxy de streaming ocupa un hilo por transferencia, sin límite de tamaño | Medio
+| DT-BS-08 | El proxy de streaming ocupa un hilo por transferencia, sin límite de tamaño. *Mitigada el 2026-09-24 (D7-02, `verificacion_fase7`):* copia directa sin bufferizar y tres transferencias de vídeo simultáneas por usuario (`429 TOO_MANY_TRANSFERS`). Queda: el límite es por instancia | Bajo
 | DT-BS-09 | 🆕 Cuatro reglas del estándar de código dependen de revisión humana, y el equipo es de una persona: no hay segundo par de ojos | Medio
 | DT-BS-10 | ✅ *Cerrada el 2026-09-21 en `T-BS-042`.* Eran **14**, no 17, índices por convención. Se quita `ForeignKeyIndexConvention` del contexto: desde `MIG-BS-002` todo índice está declarado a mano con su motivo. Ocho retirados (auditoría sin consulta, `replaced_by_session_id` que la cadena no usa, dos sin consumidor), tres renombrados como deliberados, tres de las particiones declarados también en EF. 64 → 56. Disposición índice a índice en `verificacion_fase4` | —
 | DT-BS-12 | 🆕 El contrato de ingesta promete «10 intentos **fallidos** por minuto y `clientId`», y eso no es un límite de tasa sino un bloqueo por intentos fallidos: un limitador decide *antes* de ejecutar, cuando todavía no sabe si la petición va a fallar, y particionar por `clientId` obligaría a leer el cuerpo en el *middleware*. Lo implementado es el otro límite del contrato, 50 por minuto e IP. Contra un secreto de 256 bits generado por nosotros el bloqueo aporta poco; hacerlo bien con varias instancias exige estado compartido | Bajo

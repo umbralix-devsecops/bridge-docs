@@ -72,7 +72,7 @@ root_documents:
   - path: Glosario_IDs.adoc
     title: Glosario de IDs
     status: vigente
-    version: "2.8"
+    version: "2.9"
   - path: Mapa_Subproyectos.adoc
     title: Mapa de subproyectos
     status: vigente
@@ -363,6 +363,10 @@ sections:
         status: vigente
         version: "1.6"
         note: "Desvíos de la Fase 5, cerrada (V5-01..22, H5-01..04). V5-12 y V5-22 decididos el 2026-09-23 (opción A; MIG-BS-004). Pendientes de contrato: V5-14, 15, 17."
+      - path: 11_gestion_producto/verificacion_fase7_plan_vs_ejecucion_v1.0.adoc
+        status: vigente
+        version: "1.1"
+        note: "Fase 7 (Entrega 2) demostrada: 298 pruebas, e2e-entrega2.sh 4/4. D7-01..03; V7-01..13; H7-01..04. Pendiente: verify.sh, api_media.yaml 1.1, humo contra Azure real."
       - path: 11_gestion_producto/verificacion_fase6_plan_vs_ejecucion_v1.0.adoc
         status: vigente
         version: "1.1"

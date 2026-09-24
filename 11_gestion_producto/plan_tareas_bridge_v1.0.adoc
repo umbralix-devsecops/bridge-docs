@@ -475,6 +475,8 @@ construir un lote válido, el contrato está mal escrito.
 
 Se lista para que se vea el encaje, no para hacerla ahora.
 
+NOTE: *Ejecutada el 2026-09-24.* Tres de las cuatro tareas cambiaron de forma al leer el frontend antes de escribir: `T-BS-070` devuelve solo el veredicto (V7-01), `T-BS-073` no es un Service Worker sino las cabeceras de caché del proxy (V7-02), y la autorización del `<video>` es la cookie `pv_media` (ADR-012 del frontend, D7-01). Se añadió `T-BS-074`, la aceptación de la Entrega 2 de punta a punta. Registro completo en `verificacion_fase7_plan_vs_ejecucion_v1.0.adoc`.
+
 [cols="1,3,1",options="header"]
 |===
 | ID | Tarea | Precondición
