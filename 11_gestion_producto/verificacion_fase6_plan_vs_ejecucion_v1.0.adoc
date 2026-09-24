@@ -1,7 +1,7 @@
 = Verificación de la Fase 6 — lo planeado frente a lo ejecutado
 :author: Equipo de Desarrollo
-:revnumber: 1.1
-:revdate: 2026-09-23
+:revnumber: 1.2
+:revdate: 2026-09-24
 :revremark: Fase 6 cerrada el 2026-09-23: seed 250/752/2525 contra el servicio real, grant 9 versiones, Playwright 2/2 en verde. Entrega 1 demostrada sin SinsaTools. V6-01..10, H6-01..04.
 :doctype: article
 :toc: left
@@ -67,7 +67,7 @@ las tres clases que `EST-BS-08` nombra al 100 %: no existen con esos nombres (V6
 | Tres nombres de clase
 | **Son nombres de la fase de diseño; las clases reales se llaman de otra forma.** Correspondencia: `MediaAccessEvaluator` → `Application.Catalog.MediaAccess` + `Infrastructure.Persistence.Catalog.MediaAccessQueries`; `SessionService` → `LoginCommandHandler` + `RefreshCommandHandler` + `LogoutCommandHandler`; `PermissionResolver` → `PermissionMap`. La puerta exige el 100 % a las seis y **falla si alguna no aparece en los informes**: un umbral sobre una clase ausente pasa en verde y no vale nada (el propio `ci.yml` lo advertía). `EST-BS-08` debe actualizar los nombres.
 | `tools/CoverageGate/Program.cs`
-| ⚠️ estándar pendiente
+| ✅ `EST-BS-08` reescrita el 2026-09-24 (`estandares_codigo` 1.6)
 
 | V6-05
 | `plan_tareas` → `T-BS-063`: «`verify.sh`: … umbral 80 % global y 100 % en tres clases»; `ci.yml` ya tenía el 80 % con `reportgenerator` + `grep`

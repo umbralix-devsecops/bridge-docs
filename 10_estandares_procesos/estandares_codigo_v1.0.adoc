@@ -1,8 +1,8 @@
 = Estándares de código — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 1.5
-:revdate: 2026-09-21
-:revremark: EST-BS-14 reescrita (la forma del error es la del contrato, no ProblemDetails), EST-BS-13 y EST-BS-19 matizadas, y las cinco reglas de analizador que la Fase 2 obligó a apagar.
+:revnumber: 1.6
+:revdate: 2026-09-24
+:revremark: EST-BS-08 con los nombres reales de las clases críticas (V6-04) y las cuatro de la Fase 7; la puerta de cobertura es la fuente de la lista.
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -130,10 +130,24 @@ Estas no son negociables: cada una proviene de una `SEC-BS` ya vigente.
 | ID | Regla | Cómo se comprueba
 
 | `EST-BS-08`
-| *Cobertura mínima global del 80 %, y del 100 % en `MediaAccessEvaluator`, `SessionService`
-  y `PermissionResolver`.* Un fallo en esos tres es una fuga de contenido o una sesión
-  secuestrada; en el resto es un bug.
-| Umbral en el pipeline, por ensamblado y por clase
+| *Cobertura mínima global del 80 % en `src/`, y del 100 % en las clases críticas.* Un fallo en
+  ellas es una fuga de contenido o una sesión secuestrada; en el resto es un bug. *(Reescrita el
+  2026-09-24, V6-04: la versión anterior nombraba `MediaAccessEvaluator`, `SessionService` y
+  `PermissionResolver`, clases de diseño que el código nunca tuvo.)* Las clases críticas, por
+  función:
+
+  * *Acceso a un medio:* `Application.Catalog.MediaAccess`,
+    `Infrastructure.Persistence.Catalog.MediaAccessQueries` y `MediaAccessReader`,
+    `Application.Media.MediaAccessHandler` y `MediaStreamHandler`.
+  * *Sesión:* `Application.Identity.LoginCommandHandler`, `RefreshCommandHandler`,
+    `LogoutCommandHandler` y `MediaCookieSigner`.
+  * *Permisos:* `Application.Identity.PermissionMap`.
+
+  La lista vigente es la de `tools/CoverageGate/Program.cs`; una clase que desaparece o se
+  renombra hace fallar la puerta, así que esta tabla y el código no pueden divergir sin que se
+  note.
+| `tools/CoverageGate` en `verify.sh`, `verify.ps1` y la CI: une los informes Cobertura de las
+  cinco suites línea a línea y tumba el build
 
 | `EST-BS-09`
 | Las pruebas de integración usan *PostgreSQL real con Testcontainers*. **Prohibido
@@ -427,7 +441,7 @@ partes de backend no.
 | .NET 10 LTS (`ADR-BS-009`). .NET 8 muere el 10 de noviembre de 2026.
 
 | «Cobertura mínima 80 %»
-| ✅ Sigue vigente como suelo, con el 100 % añadido en las tres clases de `EST-BS-08`.
+| ✅ Sigue vigente como suelo, con el 100 % añadido en las clases críticas de `EST-BS-08`.
 
 | Ramas, flujo de PR, «el CI ejecuta los mismos comandos»
 | ✅ Vigente sin cambios.

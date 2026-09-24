@@ -1,8 +1,8 @@
 = Verificación de la Fase 7 — lo planeado frente a lo ejecutado
 :author: Equipo de Desarrollo
-:revnumber: 1.1
+:revnumber: 1.2
 :revdate: 2026-09-24
-:revremark: Fase 7 (Entrega 2) demostrada el 2026-09-24: 298 pruebas en verde y e2e-entrega2.sh 4/4 contra el servicio real con Azurite. D7-01..03; V7-01..13; H7-01..04. Pendiente: verify.sh, api_media.yaml 1.1, humo contra Azure real.
+:revremark: Fase 7 (Entrega 2) demostrada el 2026-09-24: 298 pruebas en verde y e2e-entrega2.sh 4/4 contra el servicio real con Azurite. D7-01..03; V7-01..13; H7-01..04. verify.sh en verde y en main. api_media.yaml 1.1.0 publicado. Pendiente: humo contra Azure real.
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -82,15 +82,15 @@ presentaron con opciones y se cerraron antes de empezar (D7-01..03).
 | `api_media.yaml`, `API_ERROR_CODES` del frontend
 | Ningún código para el límite de transferencias
 | **Código nuevo `TOO_MANY_TRANSFERS` (429 + `Retry-After`).** Regla H5-03: no inventar códigos sin mirar el frontend; se miró y no existe porque la situación no estaba prevista. El `<video>` no lee el cuerpo, así que no rompe nada; el contrato y `API_ERROR_CODES` deben recogerlo. **Pendiente de contrato.**
-| `ErrorCodes.TooManyTransfers`
-| 📌 contrato
+| `ErrorCodes.TooManyTransfers` · `api_media.yaml` 1.1.0 · `API_ERROR_CODES`
+| ✅
 
 | V7-04
 | `api_media.yaml` v1.0
 | `BearerAuth` solo; `Cache-Control: public`; «el Service Worker cachea»; sin `/media/{id}/access`; sin `304` ni `429`
 | **El contrato es anterior a ADR-012/013 y a GAP-01/02.** Lo implementado sigue al frontend: cookie `pv_media` (o *bearer*) en `/stream`, pre-flight `/access` con *bearer*, caché privada, `304`, `416` con `bytes */total`, `429`. `api_media.yaml` debe pasar a 1.1 con eso; `portal.types.ts` se regenera del YAML. Misma familia que V5-14/15/17. **Pendiente de contrato.**
-| —
-| 📌 contrato
+| `api_media.yaml` **1.1.0** (y `api_auth.yaml` 1.1.0 para las cookies)
+| ✅
 
 | V7-05
 | Frontend `media-viewer.store.ts`; `api_media.yaml` («`403` al usuario sin acceso»)
@@ -118,7 +118,7 @@ presentaron con opciones y se cerraron antes de empezar (D7-01..03).
 | Un adaptador por proveedor, y uno de disco para desarrollar
 | **Azurite sustituye al adaptador de disco.** El de disco nunca iría a producción y dejaría `AzureBlobStorageService` sin probar hasta desplegar; Azurite ejecuta el SDK real (`DownloadStreamingAsync` con `HttpRange`, `ETag`, `416`, `304`) en `docker-compose` y en Testcontainers. `Storage:Default` no existe: `Storage:ConnectionString` (Azurite, o Key Vault) y, sin ella, `DefaultAzureCredential` contra `Storage:AccountUri` (identidad administrada, `DEC-BS-15`). S3 no se implementa: no hay requisito. La guía del portal se corrige (`public` → `private`, sin SW, sin `LocalStorageService`).
 | `AzureBlobStorageProvider`, `docker-compose.yml`
-| ✅ (guía: 📌)
+| ✅ (guía 1.1 con aviso de vigencia)
 
 | V7-09
 | `appsettings.json`: `Storage:MaxConcurrentTransfers: 8`
@@ -201,7 +201,7 @@ SIM_CLIENT_SECRET=… ./tools/e2e-entrega2.sh
 
 == Resultado
 
-2026-09-24: `dotnet test` **298 en verde** (5 proyectos). `tools/e2e-entrega2.sh` **4/4** contra el servicio real: 250/752/2.525 reconciliados, 27 blobs de la demo en Azurite en 0,4 s, la Entrega 1 sigue en verde y la Entrega 2 reproduce el vídeo por el proxy con `206` + `Content-Range`, `Cache-Control: private`, `ETag`, `video/webm` y ninguna cabecera que delate el almacenamiento; el usuario sin acceso recibe `403 ACCESS_DENIED` por la API y no pide un byte al proxy. **La Entrega 2 queda demostrada en local.** Falta `verify.sh` (formato y puerta de cobertura) antes de fusionar.
+2026-09-24: `dotnet test` **298 en verde** (5 proyectos). `tools/e2e-entrega2.sh` **4/4** contra el servicio real: 250/752/2.525 reconciliados, 27 blobs de la demo en Azurite en 0,4 s, la Entrega 1 sigue en verde y la Entrega 2 reproduce el vídeo por el proxy con `206` + `Content-Range`, `Cache-Control: private`, `ETag`, `video/webm` y ninguna cabecera que delate el almacenamiento; el usuario sin acceso recibe `403 ACCESS_DENIED` por la API y no pide un byte al proxy. **La Entrega 2 queda demostrada en local.** `verify.sh` en verde (formato y puerta de cobertura, con las cuatro clases nuevas al 100 %); fusionado a `main` (`8749715`).
 
 == Lo que Azurite no demuestra
 
