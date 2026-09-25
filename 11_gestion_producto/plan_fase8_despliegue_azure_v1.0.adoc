@@ -1,8 +1,8 @@
 = Plan de la Fase 8 — despliegue en Azure
 :author: Equipo de Desarrollo
-:revnumber: 1.0
-:revdate: 2026-09-24
-:revremark: Borrador para decisión. Ocho decisiones con recomendación (D8-01..08), datos que hace falta conseguir, y diez tareas (T-BS-080..089).
+:revnumber: 1.1
+:revdate: 2026-09-25
+:revremark: Borrador para decisión. Ocho decisiones con recomendación (D8-01..08), datos que hace falta conseguir, y diez tareas (T-BS-080..089). 1.1: en T-BS-082, UseForwardedHeaders ya está hecho (T-BS-092); queda configurarlo para la topología.
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -199,7 +199,14 @@ flowchart LR
 | `T-BS-082`
 | *El servicio, listo para producción.* Proveedor de configuración de Key Vault con identidad
   administrada (el paquete ya está referenciado y no se usa); `UseForwardedHeaders` para la IP y
-  el esquema reales detrás del proxy (hoy `RemoteIpAddress` sería la del `nginx`); arranque que
+  el esquema reales detrás del proxy, *ya hecho en `T-BS-092`* (2026-09-25, plan de mejoras
+  V9-05). Queda configurarlo: `ForwardedHeaders:KnownNetworks` con la subred de infraestructura
+  del entorno de Container Apps, y `ForwardLimit` con al menos los saltos reales (3 con la
+  topología recomendada: ingreso del frontend, `nginx` e ingreso interno del backend). Pasarse no
+  es un riesgo, porque la lectura se detiene en la primera dirección que no es de un proxy
+  conocido; quedarse corto sí, porque todos los clientes compartirían el límite de 20 logins
+  por minuto. Se comprueba en `stg`: `api_request_log.ip_address` tiene que mostrar la IP del
+  cliente. Además, un arranque que
   **falla** si falta `Jwt:PrivateKeyPem`, `Ingest:ClientSecretHash` o `Storage:AccountUri` en
   `Production`; sin `ConnectionString` de almacenamiento en producción.
 | Pruebas de configuración en `AcceptanceTests`; `verify.sh` en verde.

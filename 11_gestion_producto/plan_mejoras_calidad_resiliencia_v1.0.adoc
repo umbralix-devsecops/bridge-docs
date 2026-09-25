@@ -1,0 +1,544 @@
+= Plan de mejoras — calidad y resiliencia del Bridge
+:author: Equipo de Desarrollo
+:revnumber: 1.1
+:revdate: 2026-09-25
+:revremark: Bloque A ejecutado el 2026-09-25 con D9-02 y D9-03 en A (§ Ejecución del bloque A), pendiente de la verificación en Windows. D9-01, D9-04 y D9-05 siguen abiertas; los bloques B y C no tienen «Go».
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:icons: font
+:lang: es
+:root: ..
+:section-id: gestion-producto
+:section-title: Gestión de Producto
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+---
+
+[.lead]
+Este plan convierte en tareas las mejoras del informe de calidad del 2026-09-25
+(`10_estandares_procesos/informe_calidad_bridge_2026-09-25.md`). No añade funcionalidad salvo
+en T-BS-091, que depende de D9-02. Su objetivo es que el servicio llegue a producción (Fase 8)
+sin los tres huecos de resiliencia detectados y con el estándar de código alineado con la
+práctica. *Numeración:* se usa el bloque `T-BS-09x` porque es el siguiente libre. **Se ejecuta
+antes de la Fase 8, o intercalado con ella, no después.**
+
+== Ejecución del bloque A — 2026-09-25
+
+[NOTE]
+====
+*Decisiones tomadas el 2026-09-25:* D9-02 *A* (reenviar invitación), D9-03 *A* (20 peticiones
+por minuto en el login y 5 cada 10 minutos en el registro) y los dos contratos, con backend y
+frontend, en la misma ronda. Siguen abiertas D9-01, D9-04 y D9-05: los bloques B y C no tienen
+«Go».
+====
+
+.Lo que se hizo
+[cols="1,5",options="header"]
+|===
+| Tarea | Resultado
+
+| `T-BS-090`
+| Cola con reintentos y reserva. `MIG-BS-005` añade `attempt_count`, `next_attempt_at`,
+  `lease_id`, `lease_expires_at` y el índice parcial `ix_notification_log_queued`. El drenador
+  toma una fila por sentencia, la atiende y la confirma antes de tomar la siguiente. Con un
+  fallo transitorio, la fila se reprograma con la espera que le toca. Con uno permanente, o en
+  el sexto intento, queda en `failed`. Si el servicio se apaga a mitad de un envío, la fila
+  sigue reservada y vuelve a la cola cuando vence la reserva (10 min). Cierra `DT-BS-11`.
+
+| `T-BS-091`
+| `POST /admin/users/{userId}/invitation` responde `202`, o `409 INVITATION_NOT_APPLICABLE` si
+  ya no hay invitación pendiente. `api_admin` 1.2.0 añade `UserDto.invitationPending`. En el
+  frontend, la ficha del usuario muestra el botón «Resend invitation» solo cuando
+  `invitationPending` es verdadero, con un aviso para el éxito y otro para el `409`.
+
+| `T-BS-092`
+| Ventana deslizante por IP (cinco segmentos, sin cola) en `/auth/login` y `/auth/register`.
+  `api_auth` 1.2.0 añade el `429 RATE_LIMITED` con `Retry-After`, y las dos pantallas tienen su
+  mensaje. `UseForwardedHeaders` va primero en la tubería y solo cree a los proxies conocidos
+  (`ForwardedHeaders:KnownNetworks`, `ForwardLimit`).
+
+| `T-BS-093`
+| Dos comprobaciones, `storage` y `notifications`, con la etiqueta `deps` y `Degraded` como
+  estado de fallo: entran en `/health` y nunca en `/health/ready`. La del almacenamiento sondea
+  el contenedor privado (*Get Container Properties*), guarda el resultado un minuto y no espera
+  más de diez segundos.
+
+| `T-BS-094`
+| `Smtp:TimeoutSeconds` (30, por operación de MailKit) y `Storage:NetworkTimeoutSeconds` (30,
+  el `Retry.NetworkTimeout` del SDK). Si faltan o no son enteros positivos, se usa el valor por
+  omisión.
+
+| `T-BS-095`
+| El *middleware* de excepciones trata una `OperationCanceledException` con `RequestAborted`
+  cancelado como una petición abandonada: la registra en `Information` y no intenta responder
+  un `500`. El log de peticiones de Serilog también la baja a `Information`.
+|===
+
+.Desvíos respecto de lo planeado
+[cols="1,1,5",options="header"]
+|===
+| # | Tarea | Desvío y motivo
+
+| V9-01
+| `T-BS-090`
+| *Cuatro columnas, no tres, y sin `RETURNING`.* `locked_until` se parte en `lease_id` y
+  `lease_expires_at`. `ExecuteSqlInterpolated` de EF Core devuelve solo el número de filas
+  afectadas, así que la fila tomada se lee después por su reserva. Si la estrategia de
+  reintentos repitiera la sentencia tras un corte de conexión, una segunda fila podría quedar
+  con la misma reserva: se atiende la primera y la otra vuelve a la cola cuando vence.
+
+| V9-02
+| `T-BS-090`
+| *Seis intentos, no cinco.* Las cinco esperas del plan dan el primer intento y cinco
+  reintentos, en unas 8,6 h (1 + 5 + 30 + 120 + 360 min). El texto de la tarea está corregido.
+
+| V9-03
+| `T-BS-090`
+| *Permanente es menos que «un 5xx».* Solo son permanentes una dirección que no se puede
+  interpretar y un `5xx` al aceptar el destinatario (el buzón no existe). Un `5xx` al
+  remitente, al mensaje o en la autenticación casi siempre es configuración nuestra: con
+  reintentos, el correo sale en cuanto se corrige, y mientras tanto `/health` da `Degraded`.
+  Límite conocido: un `550` por relé denegado llega como rechazo del destinatario y se trata
+  como permanente.
+
+| V9-04
+| `T-BS-091`
+| *Los tokens vivos se anulan, no se consumen.* Una invitación está pendiente si la cuenta la
+  creó un administrador, nunca inició sesión y no tiene ningún token usado. Consumir los tokens
+  anteriores habría hecho parecer aceptada la invitación, así que se adelanta su caducidad
+  (`RevokeLiveAsync`). El `409` cubre más casos que «ya fijó la contraseña»: también el
+  autorregistro, la cuenta que ya inició sesión y la que no está activa. Para que el botón sepa
+  cuándo mostrarse, el contrato gana `UserDto.invitationPending`. No hizo falta esperar a
+  `T-BS-097`: el método nuevo entra en el puerto y en el manejador que ya existían.
+
+| V9-05
+| `T-BS-092`
+| *Las cabeceras reenviadas se adelantaron* (esa parte de `T-BS-082`), como el plan permitía.
+  Por omisión solo se confía en el propio equipo, que es lo correcto en local. En Azure hay que
+  configurar las redes y los saltos, y así se añadió a `T-BS-082` en el plan de la Fase 8. Sin
+  eso, todas las peticiones llegarían con la IP del ingreso y el límite de un cliente sería el
+  de todos. El mismo cambio corrige la IP que guardan `api_request_log`, `video_access_log` y
+  las sesiones, y la del límite del token de ingesta, que ya era por IP. `Retry-After` se
+  envía siempre: si el limitador no da la espera, un minuto.
+
+| V9-06
+| `T-BS-093`
+| *La cola se degrada por dos señales, no por la antigüedad del pendiente más viejo.* Basta una
+  fila en reintento, que ya prueba que el envío está fallando (su edad no dice nada: puede
+  estar esperando su hora), o una fila sin intentar desde hace más de 15 minutos, que indica
+  que no hay drenador. Esta comprobación no tiene caché: son dos recuentos sobre el índice
+  parcial.
+
+| V9-07
+| `T-BS-095`
+| *Falta la prueba automática del «hecho cuando».* Para comprobar que no queda ninguna entrada
+  `Error` hay que capturar el *sink* de Serilog en el host de pruebas y abortar a mitad de una
+  respuesta larga. Queda pendiente; hasta entonces se comprueba a mano (ver abajo).
+|===
+
+.Verificación
+[cols="2,1,4",options="header"]
+|===
+| Qué | Estado | Nota
+
+| `Application`
+| ✅
+| Compila sin avisos (`TreatWarningsAsErrors`, `AnalysisMode All`) y `dotnet format` no
+  propone cambios.
+
+| `Api`
+| ✅
+| Compila sin avisos en un arnés que sustituye las tres piezas que dependen de paquetes que no
+  se pudieron restaurar. `Program.cs` se compiló por fragmentos. `dotnet format` no propone
+  cambios.
+
+| `Infrastructure` y las pruebas .NET
+| ⬜
+| *Sin compilar.* El entorno donde se escribieron no llega a nuget.org, así que solo se
+  revisaron a mano. Las compila y ejecuta `verify.sh`.
+
+| `MIG-BS-005`
+| ⬜
+| Por generar con `dotnet ef` (entrada `MIG-BS-005` de `changelog_modelo_datos`).
+  `SchemaParityTests` ya espera 59 índices.
+
+| Frontend
+| ✅
+| `npm run verify` en verde: lint, estilos, contraste, `openapi:check`, 376 pruebas en 72
+  archivos y build. Queda un aviso de lint previo y ajeno al bloque en `search-refine.html`,
+  que llegó con la fusión de `origin/test`.
+
+| E2E
+| ⬜
+| `e2e-entrega1.sh` y `e2e-entrega2.sh`. Los dos suben los límites por variable de entorno.
+|===
+
+.Comprobación manual de T-BS-095 y de la cola
+. Con la API y el frontend levantados, abrir un vídeo y cerrar la pestaña a mitad de la
+  reproducción. El log debe mostrar «El cliente abandonó la petición…» en `Information`, y
+  ningún `Error`.
+. `docker compose stop mailpit` y crear un usuario desde la administración. En
+  `notification_log`, la invitación queda `queued`, con `attempt_count` 1 y `next_attempt_at`
+  un minuto más tarde. `/health` responde `Degraded` y `/health/ready`, `Healthy`.
+. `docker compose start mailpit`. La invitación sale en su siguiente intento.
+
+== Correcciones al informe
+
+Al preparar este plan revisé con más detalle cuatro hallazgos del informe. Estas correcciones
+prevalecen sobre lo que dice el informe:
+
+[cols="1,4",options="header"]
+|===
+| Hallazgo | Corrección
+
+| R-2 (estado en memoria)
+| *Sube de prioridad.* Aunque el backend tenga una sola réplica, el despliegue de T-BS-084 levanta
+  la revisión nueva con 0 % de tráfico mientras la anterior sigue viva. Durante esa ventana hay
+  **dos drenadores de notificaciones** y el correo puede salir duplicado (DT-BS-11). Se resuelve
+  junto con R-1, en la misma migración (T-BS-090).
+
+| R-3 (auditoría en el streaming)
+| *Baja de prioridad.* La base ya está en el camino crítico por la autenticación de la cookie y
+  la decisión de acceso: sin base no hay reproducción, con o sin registro. Escribir el registro
+  no añade un modo de fallo relevante. Queda como decisión escrita (D9-04), sin código.
+
+| R-5 (salud de dependencias)
+| *El informe se equivocaba de lugar.* El almacenamiento **no** debe entrar en `/health/ready`: si
+  la cuenta de SinsaTools falla, la plataforma sacaría de servicio al backend entero (login,
+  catálogo, administración) y T-BS-084 no podría activar ninguna revisión. Va como `Degraded` en
+  `/health`, para alertas (T-BS-093).
+
+| R-7 (reintento del refresh)
+| *Ya está resuelto en el frontend.* `SessionRefreshService` hace un único refresh a la vez entre
+  pestañas (Web Locks + BroadcastChannel) y no reintenta. Solo queda dejar escrita la regla
+  (T-BS-096).
+|===
+
+== Decisiones
+
+Cinco decisiones, cada una con su recomendación. *D9-02 y D9-03 se tomaron el 2026-09-25, las
+dos en A*; D9-01, D9-04 y D9-05 siguen abiertas.
+
+[cols="1,2,3,3",options="header"]
+|===
+| # | Pregunta | Opciones | Recomendación y por qué
+
+| D9-01
+| ¿Qué hacemos con EST-BS-19 (código en inglés) y EST-BS-20 (un tipo público por archivo), que el
+  código no cumple?
+| *A.* Enmendar las reglas para que digan lo que se practica. *B.* Adecuar el código: renombrar
+  lo privado al inglés y partir 50 archivos. *A+.* A más una prueba de arquitectura que haga
+  cumplir EST-BS-20 enmendada.
+| **A+.** Los desvíos no dañan la mantenibilidad: son grupos cohesivos (puerto + sus DTO) y
+  nombres privados. B cuesta cientos de cambios sin beneficio y ensucia el historial. La prueba
+  convierte una regla de revisión humana en una del build, lo que reduce DT-BS-09 (equipo de
+  una persona).
+
+| D9-02
+| ¿Agregamos «reenviar invitación»?
+| *A.* Sí: `POST /admin/users/{id}/invitation`, contrato `api_admin` 1.2.0 y botón en la ficha del
+  usuario. *B.* No por ahora.
+| **A.** El enlace caduca a las 72 h y hoy no hay forma de emitir otro. La alternativa es dar de
+  baja y volver a crear al usuario, lo que pierde sus grupos y excepciones. `cu_auth` (CU-AUTH-002,
+  FA-03) ya prevé que «el administrador puede reenviar el correo». *Requiere la aprobación del
+  contrato* (REST-BS-06).
+
+| D9-03
+| ¿Limitamos las peticiones a `/auth/login` y `/auth/register`?
+| *A.* Sí, por IP real (después de `UseForwardedHeaders`, T-BS-082), con `429 RATE_LIMITED` y
+  `Retry-After` en el contrato `api_auth` 1.2.0. Valores propuestos: login 20/min, registro 5 cada
+  10 min. *B.* No; se acepta el riesgo y se documenta.
+| **A.** Son los únicos endpoints anónimos caros. Cada login calcula un hash de contraseña
+  (decenas de ms de CPU, también para emails inexistentes, por el señuelo) y cada registro manda
+  un correo a una dirección arbitraria, lo que expone la reputación del dominio remitente. *No se
+  hace bloqueo por email*: permitiría a un atacante bloquear la cuenta de un tercero. Los valores
+  son ajustables por configuración.
+
+| D9-04
+| La auditoría de reproducción, ¿*fail-closed* o *fail-open*?
+| *A.* *Fail-closed*, como hoy: si no se puede registrar, no se reproduce. *B.* *Fail-open*: se
+  reproduce y se registra en diferido.
+| **A.** Ver la corrección de R-3: no añade un modo de fallo real y el registro es el que pide
+  RF-14. Se registra como `DEC-BS-28`. B solo se justificaría si aparecieran fallos de escritura
+  con la base disponible.
+
+| D9-05
+| ¿Qué bloques se ejecutan ahora?
+| *A.* Bloques A (resiliencia) y B (estándar). *B.* A + B + C (refactor sin cambio de
+  comportamiento). *C.* Solo A.
+| **B.** El bloque C cuesta alrededor de un día, no cambia comportamiento y las pruebas lo cubren:
+  el 100 % en las clases críticas lo vigila. Hacerlo ahora evita mezclar refactors con los
+  cambios de despliegue de la Fase 8. Si hay prisa por la Fase 8, C es lo primero que se aplaza.
+|===
+
+== Tareas
+
+Tamaño: *S* = hasta 2 h, *M* = medio día a un día, en mi tiempo de implementación. A eso se suma
+tu verificación (`verify.sh`, `npm run verify`, E2E) y los commits.
+
+=== Bloque A — Resiliencia antes de producción
+
+[cols="1,4,3,1,1",options="header"]
+|===
+| ID | Tarea y por qué | Hecho cuando | Tamaño | Depende de
+
+| `T-BS-090`
+| *Outbox con reintentos y reserva* (R-1, R-2, cierra DT-BS-11).
+  Migración `MIG-BS-005` en `notification_log`: `attempt_count`, `next_attempt_at`, `locked_until`
+  (ejecutado: `lease_id` y `lease_expires_at`, V9-01).
+  Reserva atómica con `UPDATE … FOR UPDATE SKIP LOCKED … RETURNING`: una sola sentencia, así que es
+  compatible con `EnableRetryOnFailure`. Sin tocar el enum de estados. Esperas exponenciales de 1 min,
+  5 min, 30 min, 2 h y 6 h: seis intentos (el primero y cinco reintentos) en unas 8,6 h, dentro de
+  las 72 h del enlace. El adaptador SMTP
+  distingue el fallo permanente (5xx) del transitorio (4xx, red, timeout) con una excepción propia
+  del puerto (EST-BS-02). Se guarda cada correo justo después de enviarlo, no al final de la tanda.
+  El payload se borra solo al llegar al estado final. +
+  _Por qué:_ hoy un fallo transitorio del SMTP pierde la invitación para siempre, y el despliegue
+  con dos revisiones duplica correos.
+| Con Mailpit detenido, la invitación queda `queued` con `attempt_count` creciente y sale sola al
+  volver. En una prueba de integración con dos drenadores simultáneos, ninguna fila se envía dos
+  veces. Un 5xx deja la fila en `failed` al primer intento.
+| M
+| —
+
+| `T-BS-091`
+| *Reenviar invitación* (D9-02). Endpoint de administración: consume los tokens vivos (ya existe
+  `ConsumeAllForUserAsync`), emite uno nuevo y encola el correo. `409` si la cuenta ya fijó su
+  contraseña. Contrato `api_admin` 1.2.0 y botón en la ficha del usuario (Sin-PortalVideos). +
+  _Por qué:_ un enlace caducado no tiene otra salida que la baja.
+| `202` y el enlace anterior deja de servir. `openapi:check` en verde en el frontend. El botón
+  aparece solo para cuentas sin contraseña.
+| M
+| D9-02 A, T-BS-090, T-BS-097
+
+| `T-BS-092`
+| *Límite de peticiones en login y registro* (D9-03). Políticas de ventana deslizante por IP en
+  `/auth/login` y `/auth/register`, con valores en configuración. Contrato `api_auth` 1.2.0 y
+  mensaje en las dos pantallas del frontend. +
+  _Por qué:_ ver D9-03. *Sin T-BS-082 sería contraproducente:* detrás del `nginx`, todas las
+  peticiones llegan con la misma IP y el límite bloquearía a todos a la vez.
+| La petición 21 en un minuto desde una IP recibe `429 RATE_LIMITED` con `Retry-After`. Dos IP
+  distintas en `X-Forwarded-For` no se afectan entre sí.
+| S
+| D9-03 A, T-BS-082 (parte de cabeceras reenviadas)
+
+| `T-BS-093`
+a| *Salud de dependencias sin tumbar el servicio* (R-5 corregido). Dos comprobaciones con estado
+`Degraded` y caché de 60 s, en `/health` y fuera de `/health/ready`:
+
+* el almacenamiento, con una lectura mínima compatible con el rol de solo lectura;
+* la cola de notificaciones, que se degrada si el correo pendiente más antiguo supera 15 min.
+
+La cola se comprueba en lugar de conectar al SMTP: no consume la cuota del proveedor y mide lo
+que de verdad importa.
+
+_Por qué:_ hoy una caída de Blob o del correo no se ve hasta que un usuario se queja. Es la
+entrada de las alertas de T-BS-087.
+| Con Azurite detenido: `/health/ready` sigue `Healthy` y `/health` pasa a `Degraded`, y el log
+  dice qué dependencia falla. Lo mismo con la cola atascada.
+| S
+| T-BS-090 (edad de la cola)
+
+| `T-BS-094`
+| *Timeouts explícitos* (R-6). `Smtp:TimeoutSeconds` (30) y `Storage:NetworkTimeoutSeconds` (30)
+  en configuración, en lugar de los valores del SDK (2 min y 100 s). +
+  _Por qué:_ una lectura de Blob colgada retiene una de las 3 plazas de transferencia del usuario,
+  y un SMTP colgado frena el drenador.
+| Valores leídos de la configuración, con prueba. Sin la clave, se usa el valor por omisión.
+| S
+| —
+
+| `T-BS-095`
+| *Cancelaciones como información* (R-8). Una `OperationCanceledException` con `RequestAborted`
+  cancelado no se registra como `Error` ni intenta responder `500`, ni en el middleware ni en el
+  log de peticiones de Serilog. +
+  _Por qué:_ cerrar la pestaña o saltar en el video no es un error, y ese ruido tapa las alertas
+  reales de T-BS-087.
+| Una prueba de aceptación que aborta la petición no deja ninguna entrada de nivel `Error`.
+| S
+| —
+|===
+
+=== Bloque B — Estándar y documentación
+
+[cols="1,4,3,1,1",options="header"]
+|===
+| ID | Tarea y por qué | Hecho cuando | Tamaño | Depende de
+
+| `T-BS-096`
+a| *Alinear lo escrito con lo practicado* (C-1, C-2, C-4, C-6, R-3, R-7). Incluye:
+
+* `estandares_codigo` 1.7:
+** EST-BS-19 enmendada: lo público en inglés, lo privado libre.
+** EST-BS-20 enmendada: se admite «puerto + sus records» y `*Model.cs`; se parten
+`Entities/Enums.cs`, `Entities/Identity.cs` e `IngestAndAudit.cs`.
+** Regla de comentarios: el porqué va en el código y la historia en la verificación de fase.
+* Prueba de arquitectura para EST-BS-20, si D9-01 es A+.
+* Corrección del comentario de `UserAdminHandler` y `LoginCommandHandler`: la revocación va
+antes, a propósito.
+* `DEC-BS-28` (D9-04) y la regla «sin reintentos automáticos de `/auth/refresh`».
+* Informe 1.1 con las correcciones de arriba.
+
+_Por qué:_ una regla que el código no cumple enseña a ignorar las demás.
+| Documentos actualizados. `verify.sh` en verde con la prueba nueva.
+| S
+| D9-01, D9-04
+|===
+
+=== Bloque C — Código limpio sin cambio de comportamiento
+
+[cols="1,4,3,1,1",options="header"]
+|===
+| ID | Tarea y por qué | Hecho cuando | Tamaño | Depende de
+
+| `T-BS-097`
+| *Segregar los puertos de administración* (ISP). `IUserAdminReader` y `IUserAdminStore`,
+  `IGroupAdminReader` y `IGroupAdminStore`. Una misma clase implementa los dos, como ya pasa en
+  auditoría. +
+  _Por qué:_ los controladores solo leen, pero hoy reciben los 16 métodos, incluidos los de
+  escritura.
+| Los controladores dependen solo de los *Reader* y los manejadores de los *Store*. Pruebas en
+  verde sin tocar sus aserciones.
+| S
+| —
+
+| `T-BS-098`
+| *Una sola fábrica de respuestas de error* (C-5), que sustituye a los `Error(...)`, `NoEncontrado`
+  e `Invalido` repetidos en cinco controladores. +
+  _Por qué:_ un cambio de formato de error hoy se hace en cinco sitios.
+| Ningún controlador define su propio `Error(...)`. Pruebas de aceptación en verde sin tocar sus
+  aserciones: el cuerpo de la respuesta es idéntico.
+| S
+| —
+
+| `T-BS-099`
+| *Métodos y constructores* (C-3, C-7). Se parte `MediaStreamHandler.StreamAsync` en «reservar
+  plaza», «abrir blob» y «registrar reproducción». `Login`, `Logout`, `Refresh` y `Register` pasan
+  a constructor primario. +
+  _Por qué:_ el método más largo del servicio está en una clase crítica, y dos estilos de
+  constructor obligan a leer dos veces.
+| `StreamAsync` queda en 35 líneas o menos. Cobertura del 100 % intacta en las clases críticas de
+  EST-BS-08.
+| S
+| —
+|===
+
+== Ajustes a la Fase 8
+
+No son tareas nuevas: amplían tareas que ya existen en `plan_fase8_despliegue_azure_v1.0.adoc`.
+Se aplican al documento de la Fase 8 con el «Go».
+
+[cols="1,4",options="header"]
+|===
+| Tarea | Se agrega
+
+| `T-BS-081`
+| `maxReplicas: 1` explícito en la app del backend (R-2): hoy solo se habla de réplica mínima.
+
+| `T-BS-082`
+| Patrón *Options* con `ValidateOnStart` como mecanismo del «arranque que falla si falta
+  configuración» (C-8). `ManagedIdentityCredential` en Azure y `DefaultAzureCredential` solo en
+  local (R-10). La parte de cabeceras reenviadas *se adelantó en T-BS-092*; en la Fase 8 queda
+  configurarla para la topología real (V9-05). Aplicado al plan de la Fase 8 el 2026-09-25.
+
+| `T-BS-087`
+| Alertas sobre el `Degraded` de T-BS-093 y sobre filas `failed` del outbox.
+|===
+
+== Orden de ataque
+
+[source,text]
+----
+T-BS-096 (estándar) ──► T-BS-097 ──► T-BS-098 ──► T-BS-099        (bloque C, sin comportamiento)
+                                          │
+T-BS-090 (outbox) ──► T-BS-093 (salud)    │
+T-BS-094, T-BS-095 (sueltas)              │
+                                          ▼
+T-BS-091 (reenviar) ◄── aprobación del contrato api_admin 1.2.0 + T-BS-097
+T-BS-092 (límites)  ◄── aprobación del contrato api_auth 1.2.0 + cabeceras de T-BS-082
+----
+
+Las tareas que no dependen de nadie (090, 094, 095, 096, 097) pueden ir en cualquier orden.
+Propongo arrancar por T-BS-096 porque cierra D9-01 y fija las reglas con las que se escribe el
+resto. Los cambios de contrato de T-BS-091 y T-BS-092 salen juntos, en una sola ronda de
+aprobación.
+
+*Esfuerzo total:* alrededor de 4 días de implementación con los tres bloques, o 3 sin el
+bloque C, más tu verificación. Habrá un commit por tarea en cada repositorio que toque:
+`Sin-PortalBridge`, `bridge-docs` y, para 091 y 092, `Sin-PortalVideos` y `portal-docs`.
+
+== Lo que este plan deliberadamente no hace
+
+Cada punto lleva el disparador que lo reabriría.
+
+[cols="2,3,3",options="header"]
+|===
+| No se hace | Por qué | Se reabre si…
+
+| Circuit breaker / Polly general
+| Las dependencias son PostgreSQL (crítica, sin alternativa), Blob (el SDK ya reintenta) y SMTP
+  (aislado por el outbox).
+| El Bridge empieza a *llamar* por HTTP a otro servicio: entonces `AddStandardResilienceHandler()`.
+
+| Estrategia por proveedor de almacenamiento
+| Hay uno solo.
+| Hace falta servir medios `http` o `file`.
+
+| Caché de la decisión de acceso
+| No hay medición que la pida.
+| T-BS-087 muestra presión en la base o latencia alta en `/media/{id}/stream`.
+
+| MediatR, dominio rico, repositorio genérico
+| Añaden indirección sin beneficio a este tamaño. MediatR, además, pasó a licencia comercial en 2025.
+| —
+
+| Índice único de sesión activa (R-9)
+| La carrera exige dos logins del mismo usuario en el mismo milisegundo. Se registra como `DT-BS-13`.
+| La auditoría muestra dos sesiones activas de un mismo usuario.
+
+| Ventana de gracia en el refresh (R-7)
+| El frontend ya evita el caso común.
+| Aparecen cierres de sesión inesperados.
+
+| Barrido de los 5.000 comentarios
+| Costo alto y riesgo de borrar un porqué valioso.
+| — (se aplica la regla nueva al tocar cada archivo)
+
+| Partir `UserAdminHandler` y `AuthController`
+| Hoy son cohesivos.
+| Se les agregan órdenes nuevas.
+
+| *Timeout* global de peticiones
+| Hay que excluir el streaming, y sin consultas lentas conocidas no compensa.
+| Aparecen consultas lentas.
+|===
+
+== Riesgos
+
+[cols="2,3,2",options="header"]
+|===
+| Riesgo | Por qué | Mitigación
+
+| La aprobación del contrato se demora
+| T-BS-091 y T-BS-092 tocan `api_admin` y `api_auth` (REST-BS-06).
+| El resto del plan no depende de ellas. Los dos cambios se piden en una sola ronda.
+
+| La migración del outbox en una base con filas
+| `MIG-BS-005` agrega columnas a `notification_log`.
+| Columnas con valor por omisión y sin reescritura de la tabla. Se ensaya en `stg` (T-BS-083).
+
+| Correo duplicado por caída del proceso
+| Si el proceso muere entre el envío y el guardado, el correo sale dos veces (*at-least-once*).
+| La ventana es de milisegundos y queda documentada. Nunca más ocurre por dos drenadores.
+
+| El refactor rompe un contrato
+| T-BS-098 toca todas las respuestas de error.
+| Las pruebas de aceptación comparan los cuerpos y no se tocan sus aserciones.
+|===
+
+include::{root}/_nav.adoc[]

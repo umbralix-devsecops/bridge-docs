@@ -1,8 +1,8 @@
 = Guía de arranque local — Bridge Service v1.0
 :author: Equipo de Desarrollo
-:revnumber: 1.2
-:revdate: 2026-09-24
-:revremark: Fase 7: Azurite en el compose, Storage:ConnectionString (§2.4), upload-blobs y e2e-entrega2.sh.
+:revnumber: 1.3
+:revdate: 2026-09-25
+:revremark: Bloque A del plan de mejoras: límites de login y registro en local (§2.6), /health puede dar Degraded, MIG-BS-004 y MIG-BS-005, recuentos 18 / 14 / 59.
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -121,6 +121,22 @@ Si tu `appsettings.Development.json` es anterior a la Fase 7, añade la línea `
 
 `Frontend:BaseUrl` ya viene como `http://localhost:4200` en el `.example`. Con él se compone `…/set-password?token=…` del correo que recibe un usuario creado por administrador. Si falta, `POST /admin/users` falla con un mensaje explícito y el arranque avisa.
 
+=== Límites de login y registro (`T-BS-092`)
+
+`POST /auth/login` admite 20 peticiones por minuto e IP, y `POST /auth/register`, 5 cada diez minutos (`api_auth.yaml` 1.2.0). Pasado el tope, la respuesta es `429 RATE_LIMITED` con `Retry-After`. En local todo llega desde la misma IP, así que el `.example` los sube:
+
+[source,json]
+----
+"Auth": {
+  "RateLimit": {
+    "LoginRequestsPerMinutePerIp": 1000,
+    "RegisterRequestsPer10MinutesPerIp": 1000
+  }
+}
+----
+
+Si tu `appsettings.Development.json` es anterior al 2026-09-25, añade la sección. Sin ella valen los de producción, y una tanda de pruebas a mano o de Playwright contra una API que arrancaste tú acaba en `429`. `dev-up.sh`, `e2e-entrega1.sh` y `e2e-entrega2.sh` no dependen de esto: fijan los dos valores por variable de entorno.
+
 == Levantar la infraestructura
 
 [source,bash]
@@ -152,14 +168,14 @@ dotnet restore
 dotnet ef database update -p src/BridgeService.Infrastructure -s src/BridgeService.Api
 ----
 
-`dotnet ef` no arranca la aplicación: usa `AppDbContextFactory`, que fija Development y lee la cadena de `appsettings.Development.json`. Aplica en orden `MIG-BS-001` (esquema, particiones, GIN, **semilla de 4 roles y 24 permisos** desde `003_seed_roles.sql`), `MIG-BS-002` (índices) y `MIG-BS-003` (administración de usuarios).
+`dotnet ef` no arranca la aplicación: usa `AppDbContextFactory`, que fija Development y lee la cadena de `appsettings.Development.json`. Aplica en orden `MIG-BS-001` (esquema, particiones, GIN, **semilla de 4 roles y 24 permisos** desde `003_seed_roles.sql`), `MIG-BS-002` (índices), `MIG-BS-003` (administración de usuarios), `MIG-BS-004` (`config:read` del editor) y `MIG-BS-005` (reintentos de la cola de notificaciones).
 
 Comprobación rápida:
 
 [source,bash]
 ----
 docker compose exec postgres psql -U bridge -d bridge -c "SELECT name FROM roles ORDER BY 1;"
-docker compose exec postgres psql -U bridge -d bridge -c "SELECT count(*) FROM __efmigrationshistory;"   # → 3
+docker compose exec postgres psql -U bridge -d bridge -c "SELECT count(*) FROM __efmigrationshistory;"   # → 5
 ----
 
 [IMPORTANT]
@@ -176,9 +192,11 @@ Escucha en `https://localhost:7001` y `http://localhost:7000` (`launchSettings.j
 
 [source,bash]
 ----
-curl -k https://localhost:7001/health          # → Healthy
+curl -k https://localhost:7001/health          # → Healthy, o Degraded (ver abajo)
 curl -k https://localhost:7001/health/ready    # comprueba la base
 ----
+
+`/health` también mira el almacenamiento y la cola de correo (`T-BS-093`). Si Azurite no está levantado, si falta el contenedor privado o si hay correos reintentándose, responde `Degraded`, que sigue siendo un `200`, y el log dice qué dependencia falla. `/health/ready` solo mira la base: una caída del almacenamiento no saca al servicio de rotación.
 
 [NOTE]
 Si `dotnet run` protesta por el certificado HTTPS de desarrollo: `dotnet dev-certs https --trust` una vez. El frontend usa `secure: false` en su proxy, así que le da igual.
@@ -324,7 +342,7 @@ dotnet test
 
 | `UnitTests` | Nada. Solo ve `Application`.
 | `ArchitectureTests` | Nada. Regla de dependencia, puertos sin `IQueryable`, nombre y correlatividad de migraciones.
-| `IntegrationTests` | **Docker corriendo.** Testcontainers levanta su propio PostgreSQL 16 —no usa el del `compose`— y ejecuta `SchemaParityTests`: migraciones contra DDL derivado, recuentos 18 / 14 / 58. Y un Azurite propio para `AzureBlobStorageProviderTests`.
+| `IntegrationTests` | **Docker corriendo.** Testcontainers levanta su propio PostgreSQL 16 —no usa el del `compose`— y ejecuta `SchemaParityTests`: migraciones contra DDL derivado, recuentos 18 / 14 / 59. Y un Azurite propio para `AzureBlobStorageProviderTests`.
 | `AcceptanceTests` | **Docker corriendo.** Host real con `WebApplicationFactory` sobre otro PostgreSQL y otro Azurite de Testcontainers; recorre autenticación, ingesta, catálogo con control de acceso, administración y el proxy de medios por HTTP.
 |===
 
@@ -340,13 +358,15 @@ La primera ejecución descarga `postgres:16-alpine` y `azurite:3.34.0` para Test
 | `login` devuelve 500 y el log habla de `Jwt:PrivateKeyPem` | Falta la clave en user-secrets (§2.2). `dotnet user-secrets list --project src/BridgeService.Api` la muestra.
 | `POST /v1/auth/token` → 401 | El `clientSecret` no corresponde al `ClientSecretHash` configurado. Regenera el par (§2.3) y pega el **resumen**, no el secreto.
 | `POST /v1/ingest/catalog` → 422 por `storageUri` | La cuenta o el contenedor no coinciden con `Storage:*`, o la URI lleva *query string*. Mira el detalle del ítem en `GET /v1/ingest/{batchId}`.
-| `POST /admin/users` → 500 `Frontend:BaseUrl` | Falta la clave (§2.4).
+| `POST /admin/users` → 500 `Frontend:BaseUrl` | Falta la clave (§2.5).
 | `IntegrationTests` / `AcceptanceTests` fallan en el arranque del contenedor | Docker no está corriendo, o Testcontainers no encuentra el socket. `docker ps` primero.
 | `dotnet build` falla por `IDE0005`, `CA*`, `CS157x` | Es a propósito: avisos = errores (`EST-BS`). Arregla el aviso, no lo silencies.
 | `index.lock` en `.git` | Otro proceso de git dejó el candado. Comprueba que no hay ninguno y bórralo.
 | `seed-users` sale con código 3 | Es lo esperado la primera vez: `admin@portal.dev` nace pendiente. Ejecuta el `UPDATE` que imprime y repite.
 | `seed` → «Los recuentos NO cuadran» | Algún lote quedó `partial`: mira las líneas «·» que imprime (entidad y motivo) y `GET /v1/ingest/{ingestId}`. Lo habitual: `Storage:AccountUri` distinto del `--storage-account` del simulador (`DEC-BS-22`).
-| Un correo no llega | No llega a ningún sitio: mira `http://localhost:8025`. Si tampoco está ahí, `notification_log` guarda el estado (`queued` / `sent` / `failed` con `error_detail`).
+| Un correo no llega | No llega a ningún sitio: mira `http://localhost:8025`. Si tampoco está ahí, `notification_log` guarda el estado (`queued` / `sent` / `failed` con `error_detail`). Una fila `queued` con `attempt_count` mayor que cero se está reintentando: sale sola en cuanto Mailpit vuelve, en su `next_attempt_at` (`T-BS-090`).
+| `POST /auth/login` o `/auth/register` → `429 RATE_LIMITED` en local | Tu `appsettings.Development.json` no tiene la sección `Auth:RateLimit` y valen los límites de producción (§2.6). Añádela, o espera lo que dice `Retry-After`.
+| `SchemaParityTests` falla con 58 índices en vez de 59, o por las columnas de `notification_log` | Falta generar `MIG-BS-005` o regenerar el DDL derivado: `dotnet ef migrations add MIG_BS_005_NotificationRetries …` y `tools/regenerar_ddl_derivado.sh` (`changelog_modelo_datos`, entrada `MIG-BS-005`).
 |===
 
 == Trazabilidad

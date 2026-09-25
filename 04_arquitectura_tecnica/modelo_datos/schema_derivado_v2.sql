@@ -475,7 +475,11 @@ CREATE TABLE public.notification_log (
     error_detail text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     sent_at timestamp with time zone,
-    payload jsonb
+    payload jsonb,
+    attempt_count integer DEFAULT 0 NOT NULL,
+    lease_expires_at timestamp with time zone,
+    lease_id uuid,
+    next_attempt_at timestamp with time zone
 );
 
 
@@ -938,6 +942,13 @@ CREATE INDEX ix_ingest_recent ON public.ingest_batches USING btree (received_at 
 --
 
 CREATE INDEX ix_media_version ON public.catalog_media USING btree (version_id, "position") WHERE active;
+
+
+--
+-- Name: ix_notification_log_queued; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_notification_log_queued ON public.notification_log USING btree (created_at) WHERE (status = 'queued'::public.notification_status);
 
 
 --

@@ -72,7 +72,7 @@ root_documents:
   - path: Glosario_IDs.adoc
     title: Glosario de IDs
     status: vigente
-    version: "2.9"
+    version: "2.10"
   - path: Mapa_Subproyectos.adoc
     title: Mapa de subproyectos
     status: vigente
@@ -165,9 +165,9 @@ sections:
         version: "1.0"
       - path: 04_arquitectura_tecnica/modelo_datos/modelo_datos_bridge_v2.mermaid
         status: vigente
-        version: "2"
+        version: "2.2"
         type: mermaid-er
-        note: "Base unica PostgreSQL 16: 17 tablas, 14 tipos enumerados, 40 indices sobre las tablas padre."
+        note: "Base unica PostgreSQL 16: 18 tablas (desde MIG-BS-003), 14 tipos enumerados y 59 indices contando los de las particiones (desde MIG-BS-005). Revisiones aditivas 2.1 (MIG-BS-003) y 2.2 (MIG-BS-005: reintentos y reserva de notification_log)."
         supersedes: 04_arquitectura_tecnica/modelo_datos/_historico/modelo_datos_bridge_v1.mermaid
       - path: 04_arquitectura_tecnica/modelo_datos/_historico/modelo_datos_bridge_v1.mermaid
         status: historico
@@ -250,7 +250,7 @@ sections:
     documents:
       - path: 07_guias_implementacion/guia_arranque_local_v1.0.adoc
         status: vigente
-        version: "1.1"
+        version: "1.3"
         note: >
           Levantar el servicio por primera vez: requisitos, secretos en user-secrets, compose,
           migraciones, primer administrador, siembra manual del catálogo, frontend, verify.
@@ -350,8 +350,12 @@ sections:
         version: "1.0"
       - path: 11_gestion_producto/plan_fase8_despliegue_azure_v1.0.adoc
         status: borrador
-        version: "1.0"
+        version: "1.1"
         note: "Fase 8 — despliegue en Azure. D8-01..08 por decidir (recomendado: Container Apps, Bicep, stg+prod, VNet con PostgreSQL privado, ingreso de ingesta aparte con IP de SinsaTools). T-BS-080..089. Datos de entrada I-1..I-6."
+      - path: 11_gestion_producto/plan_mejoras_calidad_resiliencia_v1.0.adoc
+        status: vigente
+        version: "1.1"
+        note: "Mejoras del informe de calidad del 2026-09-25. T-BS-090..099. Bloque A (T-BS-090..095) ejecutado el 2026-09-25 con D9-02 y D9-03 en A, pendiente de verificación en Windows; desvíos V9-01..07. D9-01, D9-04 y D9-05 abiertas; bloques B y C sin Go. Se ejecuta antes de la Fase 8 o intercalado."
       - path: 11_gestion_producto/plan_tareas_bridge_v1.0.adoc
         status: vigente
         version: "1.8"

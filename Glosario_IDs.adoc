@@ -1,7 +1,7 @@
 = Glosario de IDs y trazabilidad — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 2.9
-:revdate: 2026-09-24
+:revnumber: 2.10
+:revdate: 2026-09-25
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -178,7 +178,7 @@ Cada eslabón debe poder recorrerse en ambos sentidos:
 | DT-BS-09 | 🆕 Cuatro reglas del estándar de código dependen de revisión humana, y el equipo es de una persona: no hay segundo par de ojos | Medio
 | DT-BS-10 | ✅ *Cerrada el 2026-09-21 en `T-BS-042`.* Eran **14**, no 17, índices por convención. Se quita `ForeignKeyIndexConvention` del contexto: desde `MIG-BS-002` todo índice está declarado a mano con su motivo. Ocho retirados (auditoría sin consulta, `replaced_by_session_id` que la cadena no usa, dos sin consumidor), tres renombrados como deliberados, tres de las particiones declarados también en EF. 64 → 56. Disposición índice a índice en `verificacion_fase4` | —
 | DT-BS-12 | 🆕 El contrato de ingesta promete «10 intentos **fallidos** por minuto y `clientId`», y eso no es un límite de tasa sino un bloqueo por intentos fallidos: un limitador decide *antes* de ejecutar, cuando todavía no sabe si la petición va a fallar, y particionar por `clientId` obligaría a leer el cuerpo en el *middleware*. Lo implementado es el otro límite del contrato, 50 por minuto e IP. Contra un secreto de 256 bits generado por nosotros el bloqueo aporta poco; hacerlo bien con varias instancias exige estado compartido | Bajo
-| DT-BS-11 | 🆕 La cola de notificaciones no reserva las filas que toma: `notification_log` tiene tres estados —`queued`, `sent`, `failed`— y ninguno significa «en curso». Con una instancia da igual; con dos, las dos leen las mismas filas y el correo sale duplicado. Resolverlo exige migrar el enumerado | Bajo
+| DT-BS-11 | ✅ *Cerrada el 2026-09-25 en `T-BS-090`.* La cola de notificaciones no reservaba las filas que tomaba, y con dos procesos a la vez —las dos revisiones de un despliegue— el correo salía duplicado. Ahora la toma es una sola sentencia `UPDATE … FOR UPDATE SKIP LOCKED` que deja una reserva con caducidad (`lease_id`, `lease_expires_at`, `MIG-BS-005`). *No hizo falta migrar el enumerado:* la reserva es un dato aparte, no un estado. Entrega al menos una vez: si el proceso muere entre el envío y el guardado, el correo puede salir dos veces | —
 |===
 
 .Decisiones abiertas

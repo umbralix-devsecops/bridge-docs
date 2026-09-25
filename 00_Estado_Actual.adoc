@@ -1,7 +1,7 @@
 = Estado Actual — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 3.9
-:revdate: 2026-09-24
+:revnumber: 3.10
+:revdate: 2026-09-25
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -31,7 +31,7 @@ arquitectura, modelo de datos y contrato de ingesta cerrados y mutuamente cohere
 *Sin bloqueantes externos para arrancar:* el plan de primera entrega
 (`11_gestion_producto/plan_primera_entrega_v1.0.adoc`) está emitido y su camino crítico es
 interno. Lo único con plazo ajeno es el rol de lectura sobre el almacenamiento (`DEC-BS-15`),
-que condiciona la Entrega 2, no la 1. *Código: Fases 0 a 7 cerradas y en `main` (`8749715`, 298 pruebas, `verify.sh` y `e2e-entrega2.sh` en verde).* *Contratos del portal alineados el 2026-09-24:* `api_media`, `api_admin` y `api_auth` 1.1.0, `api_sync` 1.0.1; ninguna ruta del servicio queda fuera de un YAML. **Siguiente: Fase 8, despliegue en Azure** — `11_gestion_producto/plan_fase8_despliegue_azure_v1.0.adoc` (ocho decisiones por cerrar, T-BS-080..089) — y las cinco peticiones a SinsaTools en `12_integraciones_externas/sinsatools/solicitud_sinsatools_v1.0.adoc`, que deben salir ya. **La Entrega 1 está demostrada sin SinsaTools** (2026-09-23, `tools/e2e-entrega1.sh` en verde). La Entrega 2 —pre-flight, proxy con `Range`/`206`, cookie `pv_media`, caché privada, límite por usuario— corre en local contra Azurite; producción espera `DEC-BS-15`.
+que condiciona la Entrega 2, no la 1. *Código: Fases 0 a 7 cerradas y en `main` (`8749715`, 298 pruebas, `verify.sh` y `e2e-entrega2.sh` en verde).* *Bloque A del plan de mejoras implementado el 2026-09-25* (`11_gestion_producto/plan_mejoras_calidad_resiliencia_v1.0.adoc`, T-BS-090..095): cola de correo con reintentos y reserva, que cierra `DT-BS-11`; reenvío de la invitación; límites en login y registro por IP real; salud de dependencias en `Degraded`; tiempos de espera explícitos; cancelaciones del cliente como información. *Falta verificarlo en Windows y generar `MIG-BS-005`.* Los bloques B y C esperan decisión. *Contratos del portal:* `api_admin` y `api_auth` **1.2.0** (2026-09-25), `api_media` 1.1.0, `api_sync` 1.0.1; ninguna ruta del servicio queda fuera de un YAML. **Siguiente: Fase 8, despliegue en Azure** — `11_gestion_producto/plan_fase8_despliegue_azure_v1.0.adoc` (ocho decisiones por cerrar, T-BS-080..089) — y las cinco peticiones a SinsaTools en `12_integraciones_externas/sinsatools/solicitud_sinsatools_v1.0.adoc`, que deben salir ya. **La Entrega 1 está demostrada sin SinsaTools** (2026-09-23, `tools/e2e-entrega1.sh` en verde). La Entrega 2 —pre-flight, proxy con `Range`/`206`, cookie `pv_media`, caché privada, límite por usuario— corre en local contra Azurite; producción espera `DEC-BS-15`.
 
 == Semáforo por sección
 

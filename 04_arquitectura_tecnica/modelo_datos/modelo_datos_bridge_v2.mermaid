@@ -1,5 +1,5 @@
 %% Modelo de datos del Bridge Service
-%% Version: 2.1 · Fecha: 2026-09-22 (2.0: 2026-09-16)
+%% Version: 2.2 · Fecha: 2026-09-25 (2.1: 2026-09-22 · 2.0: 2026-09-16)
 %% Motor: PostgreSQL 16 (Azure Database for PostgreSQL Flexible Server)
 %% Gobernado por: ADR-BS-001, ADR-BS-002, ADR-BS-004, ADR-BS-005, ADR-BS-006
 %% .
@@ -7,6 +7,9 @@
 %% 2.1 (MIG-BS-003, Fase 5): + ACCOUNT_SETUP_TOKENS, users.deleted_at, notification_log.payload.
 %%     Revision aditiva del mismo modelo, no version nueva: ninguna relacion ni columna
 %%     existente cambia (interpretacion de DOM-BS-06 registrada en verificacion_fase5 V5-12).
+%% 2.2 (MIG-BS-005, T-BS-090): notification_log + attempt_count, next_attempt_at, lease_id,
+%%     lease_expires_at, e indice parcial ix_notification_log_queued. Aditiva: tres columnas
+%%     anulables y una con valor por omision 0; nada existente cambia.
 %% .
 %% Supera a modelo_datos_bridge_v1.mermaid (el cache de lectura de un servicio que leia
 %% un SQL Server remoto) y absorbe modelo_datos_v3.mermaid de portal-docs. Es el UNICO
@@ -283,6 +286,10 @@ erDiagram
         timestamptz created_at
         timestamptz sent_at
         jsonb payload "datos para la plantilla; se pone a NULL al enviar o fallar (puede llevar el enlace de invitacion)"
+        integer attempt_count "intentos hechos, 0 al encolar; lo sube cada cierre (T-BS-090)"
+        timestamptz next_attempt_at "tras un fallo transitorio, no antes de; NULL = en la pasada siguiente"
+        uuid lease_id "reserva del drenador que la tomo"
+        timestamptz lease_expires_at "vencida, la fila vuelve a la cola: entrega al menos una vez"
     }
 
 %% ── INDICES REQUERIDOS ────────────────────────────────────────────────
@@ -302,6 +309,7 @@ erDiagram
 %% INGEST_BATCHES UNIQUE (snapshot_id, sequence) WHERE mode='snapshot'
 %% INGEST_ITEMS (batch_id) WHERE operation='error'       -> solo los fallos se consultan
 %% EXT_API_REQUEST_LOG (created_at DESC)                 -> diagnostico de la ingesta
+%% NOTIFICATION_LOG (created_at) WHERE status='queued'   -> toma del drenador y salud de la cola
 %% .
 %% ── REGLAS ────────────────────────────────────────────────────────────
 %% 1. La clave natural de CATALOG_MEDIA es (origin, ext_media_id), NUNCA ext_media_id

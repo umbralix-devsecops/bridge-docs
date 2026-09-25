@@ -1,8 +1,8 @@
 = Historial de cambios del modelo de datos — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 2.7
-:revdate: 2026-09-23
-:revremark: MIG-BS-004 (EditorConfigRead): content_editor gana config:read (V5-22, opción A). Solo datos; ER sigue en 2.1. DOM-BS-06 precisado: revisión x.y si es aditivo y compatible, versión nueva si rompe (V5-12, opción A).
+:revnumber: 2.8
+:revdate: 2026-09-25
+:revremark: MIG-BS-005 (NotificationRetries): reintentos y reserva de la cola de notificaciones (T-BS-090, cierra DT-BS-11). Cuatro columnas y un índice parcial en notification_log; ER 2.2. La migración se genera con dotnet ef (ver la entrada).
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -471,6 +471,66 @@ habría salido vacía: se escribió a mano con su `.Designer.cs` idéntico al de
 (mismo modelo destino). El sello y el nombre siguen la convención; `MigrationChangelogTests`
 la reconoce como `MIG_BS_004`.
 
+=== MIG-BS-005 — NotificationRetries
+
+[cols="1,3"]
+|===
+| *Migración EF* | `MIG_BS_005_NotificationRetries`
+| *Contexto* | `AppDbContext`
+| *Fecha* | 2026-09-25 (sello: el que asigne `dotnet ef migrations add`; ver *Notas de despliegue*)
+| *Versión del ER* | `modelo_datos_bridge_v2.mermaid` **2.2** (revisión aditiva; V5-12)
+| *Reversibilidad* | ✅ Total (`Down` borra el índice y las cuatro columnas; se pierden el recuento de intentos, la hora del siguiente y las reservas vivas)
+| *Impacto en datos* | Ninguno sobre filas existentes: tres columnas anulables y `attempt_count` con valor por omisión `0`
+| *Ventana* | No. En PostgreSQL 16, `ADD COLUMN` anulable o con un valor por omisión constante no reescribe la tabla, y el índice es parcial sobre las filas `queued`, que son pocas
+| *Motivada por* | `T-BS-090` · cierra `DT-BS-11` · `RF-06` · `T-BS-093`
+|===
+
+*Qué hace:*
+
+* `notification_log.attempt_count integer NOT NULL DEFAULT 0` — intentos de envío hechos. Lo
+  incrementa cada cierre de la fila: enviada, reprogramada o fallida.
+* `notification_log.next_attempt_at timestamptz NULL` — tras un fallo transitorio, la fila no
+  se vuelve a intentar antes de esta hora. Las esperas son de 1 min, 5 min, 30 min, 2 h y 6 h:
+  seis intentos (el primero y cinco reintentos) en unas 8,6 h, dentro de las 72 h del enlace
+  de invitación (`NotificationDeliverySettings`).
+* `notification_log.lease_id uuid NULL` y `lease_expires_at timestamptz NULL` — la reserva del
+  drenador. La toma es una sola sentencia,
+  `UPDATE … WHERE id = (SELECT … ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED)`, y es
+  compatible con `EnableRetryOnFailure` porque no abre transacción (V3-20): dos drenadores no
+  pueden tomar la misma fila. La reserva dura 10 minutos. Si el proceso muere con la fila
+  tomada, la fila vuelve a la cola al vencer la reserva: la entrega es *al menos una vez*.
+* `ix_notification_log_queued` — `(created_at) WHERE status = 'queued'`. Sirve la toma, que
+  busca la `queued` más antigua, y los recuentos de la salud de la cola (`T-BS-093`). Es
+  parcial porque las enviadas, que son casi todas, no hacen falta en él.
+
+*Por qué:* hasta aquí, un fallo del SMTP marcaba la fila como `failed` al primer intento y la
+invitación se perdía. Además, con dos procesos a la vez —las dos revisiones que conviven
+durante un despliegue (`T-BS-084`)— los dos leían las mismas filas y el correo salía
+duplicado (`DT-BS-11`). *No hizo falta migrar el enumerado de estados*, que era lo que
+`DT-BS-11` daba por necesario: la reserva es un dato aparte, no un estado.
+
+*Al revertir se pierde:* el recuento de intentos y la hora del siguiente. Las filas que
+estaban en reintento se intentan en la pasada siguiente y, con el código anterior, un fallo
+las deja en `failed` al primer intento. Las reservas vivas desaparecen, y da igual: el código
+anterior no las lee. *El código anterior funciona sobre el esquema nuevo*, porque no nombra
+las columnas y `attempt_count` tiene valor por omisión. Por eso revertir una versión del
+servicio no obliga a revertir la migración.
+
+*Recuentos esperados:* 18 tablas (=), 14 enums (=), 59 índices (+1:
+`ix_notification_log_queued`), 24 permisos (=). `SchemaParityTests` ya espera 59.
+
+*Notas de despliegue:* *la migración todavía no está generada*. Hace falta `dotnet ef`, que no
+estaba disponible en el entorno donde se escribió el cambio del modelo, igual que con
+`MIG-BS-001`. Pasos:
+
+. `dotnet ef migrations add MIG_BS_005_NotificationRetries` (orden completa en el README de
+  `Persistence/Migrations/`).
+. Leerla operación a operación antes de aplicarla (H4-05). Tiene que traer **cuatro
+  `AddColumn` y un `CreateIndex` con filtro**, y nada más.
+. `dotnet ef database update` y `tools/regenerar_ddl_derivado.sh`, que reescribe
+  `schema_derivado_v2.sql`.
+. Completar aquí el sello con el del archivo generado.
+
 == Versiones del modelo ER
 
 NOTE: Regla de numeración (DOM-BS-06, V5-12): *revisión* `x.y` para cambios aditivos y
@@ -502,6 +562,12 @@ de solo datos o solo índices no cambia ninguno de los dos.
 | Revisión aditiva por `MIG-BS-003`: `account_setup_tokens`, `users.deleted_at`,
   `notification_log.payload`. Ninguna relación ni columna existente cambia, por eso no es
   v3 (V5-12).
+| ✅ Vigente
+
+| v2.2
+| `modelo_datos_bridge_v2.mermaid` (mismo archivo, cabecera 2.2)
+| Revisión aditiva por `MIG-BS-005`: cuatro columnas de `notification_log` para los reintentos
+  y la reserva del drenador (`T-BS-090`). Ninguna relación ni columna existente cambia.
 | ✅ Vigente
 |===
 
