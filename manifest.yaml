@@ -72,7 +72,7 @@ root_documents:
   - path: Glosario_IDs.adoc
     title: Glosario de IDs
     status: vigente
-    version: "2.10"
+    version: "2.11"
   - path: Mapa_Subproyectos.adoc
     title: Mapa de subproyectos
     status: vigente
@@ -293,13 +293,17 @@ sections:
     documents:
       - path: 10_estandares_procesos/estandares_codigo_v1.0.adoc
         status: vigente
-        version: "1.7"
+        version: "1.8"
         note: >
-          EST-BS-00..27. La 1.7 (2026-09-25) añade EST-BS-00, la regla sobre las reglas: las
+          EST-BS-00..27. 1.7 (2026-09-25): EST-BS-00, la regla sobre las reglas —las
           convenciones ceden con la justificación escrita en el sitio, las salvaguardas solo
-          con una ADR, y a la tercera excepción igual la regla se enmienda.
+          con una ADR, y a la tercera excepción igual la regla se enmienda—. 1.8 (mismo día,
+          T-BS-096): EST-BS-19 (lo público en inglés), EST-BS-20 (tipo principal o archivo de
+          datos; la comprueba SourceFileLayoutTests), EST-BS-22 (sin historia en los
+          comentarios) y CA1031 admitida en los bordes.
       - path: 10_estandares_procesos/informe_calidad_bridge_2026-09-25.md
         status: vigente
+        version: "1.1"
         note: >
           Informe de SOLID, código limpio, patrones y resiliencia del 2026-09-25. Sus mejoras son
           las tareas de 11_gestion_producto/plan_mejoras_calidad_resiliencia_v1.0.adoc.
@@ -366,8 +370,8 @@ sections:
         note: "Fase 8 — despliegue en Azure. D8-01..08 por decidir (recomendado: Container Apps, Bicep, stg+prod, VNet con PostgreSQL privado, ingreso de ingesta aparte con IP de SinsaTools). T-BS-080..089. Datos de entrada I-1..I-6."
       - path: 11_gestion_producto/plan_mejoras_calidad_resiliencia_v1.0.adoc
         status: vigente
-        version: "1.1"
-        note: "Mejoras del informe de calidad del 2026-09-25. T-BS-090..099. Bloque A (T-BS-090..095) ejecutado el 2026-09-25 con D9-02 y D9-03 en A, pendiente de verificación en Windows; desvíos V9-01..07. D9-01, D9-04 y D9-05 abiertas; bloques B y C sin Go. Se ejecuta antes de la Fase 8 o intercalado."
+        version: "1.2"
+        note: "Mejoras del informe de calidad del 2026-09-25. T-BS-090..099. Bloques A (T-BS-090..095) y B (T-BS-096) ejecutados el 2026-09-25 con D9-01 A+ y D9-02..04 A; desvíos V9-01..12. El A pasó verify.sh; el B está pendiente. Bloque C sin Go. Se ejecuta antes de la Fase 8 o intercalado."
       - path: 11_gestion_producto/plan_tareas_bridge_v1.0.adoc
         status: vigente
         version: "1.8"

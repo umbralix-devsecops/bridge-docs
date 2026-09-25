@@ -1,8 +1,8 @@
 = Estándares de código — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 1.7
+:revnumber: 1.8
 :revdate: 2026-09-25
-:revremark: EST-BS-00, cuándo y cómo cede una regla: las convenciones ceden con la justificación escrita en el sitio, las salvaguardas solo con una ADR, y a la tercera excepción igual la regla se enmienda.
+:revremark: T-BS-096 (D9-01 A+). EST-BS-19: lo público en inglés y lo privado libre. EST-BS-20: un tipo principal y los tipos de datos de su firma, o un archivo de datos; lo comprueba SourceFileLayoutTests. EST-BS-22: sin historia en los comentarios. CA1031 admitida en los bordes. 1.7: EST-BS-00.
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -102,8 +102,8 @@ grep -rn "Justification =" src tests
 La enmienda cambia el texto de la regla en este documento, sube su versión y, si la regla se
 comprueba con algo, cambia también la comprobación. El precedente es `EST-BS-14`: dejó de pedir
 `ProblemDetails` porque el contrato y el frontend usaban otra forma, y se reescribió la regla
-en vez de forzar el código. `EST-BS-19` y `EST-BS-20` están en el mismo caso (C-1 y C-2 del
-informe de calidad del 2026-09-25), y su enmienda es `T-BS-096`, pendiente de D9-01.
+en vez de forzar el código. `EST-BS-19`, `EST-BS-20` y la excepción a `CA1031` se enmendaron
+igual el 2026-09-25 (`T-BS-096`, D9-01 A+; C-1 y C-2 del informe de calidad).
 
 === Cuándo manda la regla
 
@@ -349,23 +349,55 @@ infraestructura.
   `.editorconfig`; no se discute en revisión.
 
 | `EST-BS-19`
-| *El código en inglés, los comentarios y la documentación en español.* Aplica también a
-  nombres de tabla, columna y migración. *Ampliada el 2026-09-21:* además, **todo texto que
-  pueda llegarle a un cliente va en inglés** —los `message` de la API, los mensajes de
-  validación y el cuerpo de los correos—. Los diagnósticos dirigidos a quien desarrolla o
-  despliega siguen en español, porque son documentación: el texto de
-  `RsaSigningKeys` que explica cómo generar la clave con `openssl` lo lee quien monta el
-  entorno, no un cliente.
+| *Lo público, en inglés; lo privado, libre; los comentarios y la documentación, en español.*
+  En inglés va todo lo que se ve desde fuera del tipo: tipos, miembros públicos y protegidos,
+  contratos, tablas, columnas y migraciones. Lo privado —campos, métodos privados, variables
+  locales y los parámetros de un constructor primario, que la inyección de dependencias
+  resuelve por tipo— puede ir en español. *Enmendada el 2026-09-25 (D9-01, C-1 del informe
+  de calidad):* la regla pedía todo el código en inglés, y lo privado estaba en español en todo
+  el servicio. Renombrarlo era mucho movimiento sin beneficio, así que la regla recoge la
+  práctica (`EST-BS-00`).
+
+  **Todo texto que pueda llegarle a un cliente va en inglés** (ampliada el 2026-09-21): los
+  `message` de la API, los mensajes de validación y el cuerpo de los correos. Los diagnósticos
+  dirigidos a quien desarrolla o despliega siguen en español, porque son documentación: el
+  texto de `RsaSigningKeys` que explica cómo generar la clave con `openssl` lo lee quien monta
+  el entorno, no un cliente.
 
 | `EST-BS-20`
-| Un archivo, un tipo público. El nombre del archivo es el del tipo.
+| *Un archivo, un tipo principal, y el archivo se llama como él.* A su lado pueden ir los tipos
+  de datos de su firma —records, enums y clases estáticas— que se nombran en él o en otro de
+  sus acompañantes: lo que un puerto recibe y devuelve, el resultado de un manejador. Una clase
+  con comportamiento, u otra interfaz, va en su propio archivo.
+
+  Los *archivos de datos* no tienen tipo principal: agrupan los records, enums y clases
+  estáticas de un área o de un caso de uso, y lo dicen con la terminación del nombre: `Model`,
+  `Contracts`, `Command`, `Commands` o `Queries` (`AdminModel.cs`, `AuthContracts.cs`,
+  `LoginCommand.cs`). Aplica a `src/`; en `tests/`, una clase de pruebas convive con sus dobles
+  y sus fábricas.
+
+  *Se comprueba:* `SourceFileLayoutTests`, en `ArchitectureTests`, falla el build y dice qué
+  archivo incumple y por qué. *Enmendada el 2026-09-25 (D9-01 A+, C-2 del informe de
+  calidad):* decía «un archivo, un tipo público», y 50 de 141 archivos la incumplían. Casi
+  todos eran grupos cohesivos, que ahora admite. Los que no lo eran se partieron: las
+  entidades, sus configuraciones y cinco archivos de puertos. Y se renombraron dos archivos
+  cuyo único tipo tenía otro nombre.
 
 | `EST-BS-21`
 | Sin regiones. Una clase que necesita `#region` para leerse necesita partirse.
 
 | `EST-BS-22`
-| Un comentario explica *por qué*, nunca *qué*. Un comentario que parafrasea la línea
-  siguiente se borra en revisión.
+| *Un comentario explica por qué, nunca qué, y no cuenta la historia.* Un comentario que
+  parafrasea la línea siguiente se borra en revisión. Lo que había antes, cuándo cambió o en
+  qué versión o fase entró va a la verificación de fase, a la ADR o al changelog. En el código
+  queda, si hace falta, el identificador que lleva hasta allí (`V5-15`, `T-BS-090`,
+  `DEC-BS-25`). Así,
+  `// 409 (api_admin.yaml 1.1.0; 400 hasta la 1.0.0): el frontend lo trata como un conflicto (V5-15).`
+  queda en `// 409 y no 400: el frontend lo trata como un conflicto (V5-15).`
+
+  *Ampliada el 2026-09-25 (C-4 y C-6 del informe de calidad):* un comentario histórico se
+  desactualiza sin que el compilador avise, y había uno que ya contradecía al código. No hay
+  barrido de los comentarios existentes: la regla se aplica al tocar cada archivo.
 |===
 
 === Base de datos
@@ -472,7 +504,7 @@ listan aquí porque un `severity = none` sin explicación es indistinguible de l
   con su ruta de campo, y `Storage:AccountUri` es un prefijo que se compara de forma literal.
   Va en `.editorconfig` y no en `[SuppressMessage]` porque sobre los parámetros posicionales de
   un *record* la regla se emite en el parámetro y en la propiedad sintetizada a la vez, y el
-  destino `[property:]` no la calla. `Catalog.cs`, que es una clase, sí la suprime con el
+  destino `[property:]` no la calla. `CatalogMedia`, que es una clase, sí la suprime con el
   atributo. En el resto del código las dos reglas siguen en *error*.
 
 | `CA1303`
@@ -496,13 +528,36 @@ Y dos que **no** se apagaron, porque tenían razón y el arreglo era el correcto
 Los `[SuppressMessage]` puntuales llevan su justificación en el propio atributo y no se
 repiten aquí: `CA1056` en `CatalogMedia.StorageUri` (`DOM-BS-10` exige el URI íntegro y
 `System.Uri` normaliza), `CA1711` en `RolePermission` y `UserMediaException` (vocabulario de
-dominio fijado en los requerimientos y en la base), y `CA1031` en los bordes donde capturar
-todo es la función del código. Son ocho supresiones en siete sitios: el manejador global de
-excepciones; los tres servicios de fondo (el drenador de notificaciones, el barrido de ingesta
-y el escritor de registros, este con una segunda al apagar); el manejador del lote de ingesta,
-que tiene que dejar el lote en `failed` con su motivo; el despacho de cada notificación; y la
-sonda de salud del almacenamiento.
+dominio fijado en los requerimientos y en la base), y `CA1031` en los bordes que admite la
+tabla siguiente.
 ====
+
+== Analizadores con excepciones admitidas
+
+`EST-BS-00` aplicada a los analizadores: cuando la misma excepción a una regla se repite, se
+escribe aquí en qué casos se admite. El analizador sigue en *error* en el resto del código, y
+cada sitio lleva su `[SuppressMessage]` con la justificación.
+
+[cols="1,4",options="header"]
+|===
+| Regla | Dónde se admite
+
+| `CA1031`
+a|
+«No capturar excepciones generales.» Se admite en los *bordes* cuya función es que un fallo no
+escape de ellos:
+
+* el manejador global de excepciones;
+* el bucle de cada servicio de fondo —drenador de notificaciones, barrido de ingesta, escritor
+de registros—, también en su último intento al apagar;
+* el manejador del lote de ingesta, que tiene que dejar el lote en `failed` con su motivo;
+* el despacho de cada notificación, que la reprograma o la cierra en `failed`;
+* las sondas de salud, cuyo contrato es no lanzar nunca y devolver lo que pasó.
+
+Filtrar por tipo en esos sitios obligaría a enumerar los fallos de Npgsql, de MailKit o del SDK
+de Azure, y el primero que faltara tumbaría el proceso. *Admitida el 2026-09-25:* eran ya ocho
+supresiones del mismo tipo, en siete sitios.
+|===
 
 == Correcciones a la guía de onboarding del portal
 

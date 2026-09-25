@@ -1,6 +1,34 @@
 # Informe de calidad de código — Bridge Service
 
-**Fecha:** 2026-09-25 · **Alcance:** `Sin-PortalBridge/src` (Api, Application, Infrastructure), rama `feat/fase-7-streaming` · **Tipo:** revisión estática, sin cambios en el código.
+**Fecha:** 2026-09-25 · **Versión:** 1.1 · **Alcance:** `Sin-PortalBridge/src` (Api, Application, Infrastructure), rama `feat/fase-7-streaming` · **Tipo:** revisión estática, sin cambios en el código.
+
+---
+
+## 0. Correcciones y estado (versión 1.1)
+
+Al convertir este informe en tareas (`11_gestion_producto/plan_mejoras_calidad_resiliencia_v1.0.adoc`) revisé cuatro hallazgos con más detalle. **Estas correcciones prevalecen sobre lo que dicen las secciones de abajo**, que se dejan como se escribieron.
+
+| Hallazgo | Corrección |
+|---|---|
+| R-2 (estado en memoria) | **Sube de prioridad.** Aunque haya una sola réplica, el despliegue levanta la revisión nueva mientras la anterior sigue viva, y en esa ventana hay dos drenadores de notificaciones. |
+| R-3 (auditoría en el streaming) | **Baja de prioridad.** La base ya está en el camino crítico por la cookie y la decisión de acceso, así que escribir el registro no añade un modo de fallo. Se decidió *fail-closed*: `DEC-BS-28`. |
+| R-5 (salud de dependencias) | **Iba en el sitio equivocado.** El almacenamiento **no** debe entrar en `/health/ready`: una caída de la cuenta de SinsaTools sacaría de servicio todo el backend. Va como `Degraded` en `/health`. |
+| R-7 (reintento del refresh) | **Ya estaba resuelto en el frontend**, que hace una sola renovación a la vez y no reintenta. Quedó escrito como regla: `DEC-BS-29`. |
+
+**Estado al 2026-09-25**, tras los bloques A y B del plan:
+
+| Hallazgo | Estado |
+|---|---|
+| R-1, R-2 (drenadores) | ✅ `T-BS-090`: reintentos con espera creciente y reserva de filas (`MIG-BS-005`). Los límites en memoria siguen siendo por instancia; el plan de mejoras pide fijar una sola réplica en `T-BS-081`, en la Fase 8. |
+| R-3 | ✅ `DEC-BS-28`, *fail-closed*. |
+| R-4 | ✅ `T-BS-092`: límites en `/auth/login` y `/auth/register` por IP real. Sin bloqueo por email, a propósito. |
+| R-5 | ✅ `T-BS-093`, con la corrección de arriba. |
+| R-6 | ✅ `T-BS-094` (SMTP y almacenamiento). El de los comandos de Npgsql sigue en su valor por omisión. |
+| R-7 | ✅ `DEC-BS-29`. |
+| R-8 | ✅ `T-BS-095`. |
+| C-1, C-2 | ✅ `T-BS-096`: `EST-BS-19` y `EST-BS-20` enmendadas, archivos sin cohesión partidos y `SourceFileLayoutTests` en el build. |
+| C-4, C-6 | ✅ `T-BS-096`: `EST-BS-22` sin historia en los comentarios; comentarios de `UserAdminHandler` y `LoginCommandHandler` corregidos. |
+| C-3, C-5, C-7, R-9, R-10 y los puertos de administración (ISP) | ⬜ Bloque C del plan y Fase 8, sin decidir. |
 
 ---
 
