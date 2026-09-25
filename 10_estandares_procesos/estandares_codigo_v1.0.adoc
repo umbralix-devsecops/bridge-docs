@@ -1,8 +1,8 @@
 = Estándares de código — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 1.6
-:revdate: 2026-09-24
-:revremark: EST-BS-08 con los nombres reales de las clases críticas (V6-04) y las cuatro de la Fase 7; la puerta de cobertura es la fuente de la lista.
+:revnumber: 1.7
+:revdate: 2026-09-25
+:revremark: EST-BS-00, cuándo y cómo cede una regla: las convenciones ceden con la justificación escrita en el sitio, las salvaguardas solo con una ADR, y a la tercera excepción igual la regla se enmienda.
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -37,6 +37,94 @@ están señaladas como tales.
 
 `EST-BS-NN` — regla de estándar de código. Se declara aquí; `EST-BS-01` y `EST-BS-02` vienen
 de `ADR-BS-008` y `EST-BS-27` de `ADR-BS-009`; se repiten abajo para que la lista esté completa.
+`EST-BS-00` es la regla sobre las reglas: dice cuándo y cómo se aparta el código de las demás.
+
+== Cuándo una regla cede: `EST-BS-00`
+
+[IMPORTANT]
+====
+*`EST-BS-00` — la calidad del código manda sobre la letra de una regla.* Este estándar existe
+para que el código sea fácil de leer, de cambiar y de probar. Si cumplir una regla lo empeora
+en un caso concreto, la regla cede. Pero cede de la forma que se describe aquí, que no es lo
+mismo que ignorarla: una regla que el código incumple en silencio enseña a ignorar las demás.
+====
+
+=== Qué reglas pueden ceder
+
+[cols="1,3,2",options="header"]
+|===
+| Tipo | Reglas | Cómo cede
+
+| *Convenciones.* Su valor es la consistencia.
+| Estructura de las pruebas (`EST-BS-10`), resultados frente a excepciones (`EST-BS-12`),
+  asincronía (`EST-BS-15`, `EST-BS-16`), nomenclatura y forma (`EST-BS-18` a `EST-BS-22`),
+  configuración de entidades y de proyecto (`EST-BS-26`, `EST-BS-27`), y los analizadores que
+  no protegen ninguna salvaguarda.
+| Con la justificación escrita en el sitio donde ocurre.
+
+| *Salvaguardas.* Protegen contra fallos caros: una fuga de contenido, una sesión secuestrada,
+  un esquema que diverge o un contrato roto.
+| Arquitectura (`EST-BS-01` a `EST-BS-04`), seguridad (`EST-BS-05` a `EST-BS-07` y
+  `EST-BS-13`, con las `SEC-BS` de las que vienen), cobertura (`EST-BS-08`), pruebas contra
+  PostgreSQL real (`EST-BS-09`), matriz de casos de las reglas de precedencia (`EST-BS-11`),
+  forma de los errores (`EST-BS-14`), proxy sin búfer (`EST-BS-17`), esquema y migraciones
+  (`EST-BS-23` a `EST-BS-25`), y los contratos (`REST-BS-06`).
+| Solo con una ADR. Primero se cambia la regla y después el código, nunca al revés.
+|===
+
+=== Cómo se hace una excepción
+
+. *Se escribe en el sitio, no en otro documento.* Si la regla la vigila un analizador, se usa
+  `[SuppressMessage("…", "CAxxxx", Justification = "…")]` sobre el miembro, o
+  `#pragma warning disable` con un comentario sobre el bloque más pequeño posible. Si no hay
+  analizador, se escribe un comentario con esta forma, para que una búsqueda lo encuentre:
+  `// Excepción a EST-BS-NN: <lo que se gana>.`
+. *La justificación nombra lo que costaría cumplir la regla.* «Así queda más claro» no basta.
+  Sí bastan «partirlo obliga a abrir cuatro archivos para entender una firma» o «capturar todo
+  es la función de este bucle: un fallo de envío no puede parar el drenador».
+. *Se usa el alcance más pequeño posible.* Mejor un miembro que un archivo, y mejor un archivo
+  que el proyecto. Apagar una regla en `.editorconfig` ya no es una excepción, es enmendarla:
+  va a la tabla de <<_analizadores_apagados_con_su_motivo,analizadores apagados>>, con su
+  motivo.
+
+=== Cuándo la excepción pasa a ser la regla
+
+*A la tercera excepción igual, la regla se enmienda.* Tres casos iguales ya no son una
+excepción, son la práctica, y una regla que no la recoge se queda en papel. Las excepciones se
+encuentran con una búsqueda:
+
+[source,bash]
+----
+grep -rn "Excepción a EST-BS" src tests
+grep -rn "Justification =" src tests
+----
+
+La enmienda cambia el texto de la regla en este documento, sube su versión y, si la regla se
+comprueba con algo, cambia también la comprobación. El precedente es `EST-BS-14`: dejó de pedir
+`ProblemDetails` porque el contrato y el frontend usaban otra forma, y se reescribió la regla
+en vez de forzar el código. `EST-BS-19` y `EST-BS-20` están en el mismo caso (C-1 y C-2 del
+informe de calidad del 2026-09-25), y su enmienda es `T-BS-096`, pendiente de D9-01.
+
+=== Cuándo manda la regla
+
+*Si no hay una diferencia clara de calidad, se sigue la regla.* La consistencia también es
+calidad: un estilo previsible se lee antes que tres estilos «mejores». Y «calidad» no es la
+preferencia de quien escribe, sino menos esfuerzo para leer, cambiar o probar el código; una
+justificación que no puede señalar ese esfuerzo no justifica nada.
+
+SOLID y el código limpio son heurísticas, no leyes, y también empeoran el código si se aplican
+sin medida: una interfaz por cada clase, clases de tres líneas, capas de mediación que no
+resuelven nada. Por eso existe <<_lo_que_este_estándar_deliberadamente_no_fija,lo que este
+estándar deliberadamente no fija>>. Invocar un principio no basta como justificación: hay que
+decir qué mejora en este código.
+
+[CAUTION]
+====
+*Con un equipo de una persona, nadie revisa la justificación* (`DT-BS-09`). Por eso tiene que
+quedar escrita y encontrarse con una búsqueda: así se puede revisar después, aunque quien la
+revise sea el mismo que la escribió. `EST-BS-00` no falla el build; es una regla de proceso,
+como las de ramas y commits, y no juzga el código sino cómo se registra la excepción.
+====
 
 == Base ejecutable
 
@@ -175,7 +263,8 @@ arquitectura de tres servicios; hoy es inviable.
 ni búsqueda por GIN — que es justo lo que `T-BS-013` tiene que verificar. Una suite en memoria
 pasaría en verde sobre un esquema que PostgreSQL rechaza.
 
-Ver §6 para el resto de correcciones a ese documento.
+Ver <<_correcciones_a_la_guía_de_onboarding_del_portal,las correcciones a la guía de
+onboarding>> para el resto.
 ====
 
 === Errores y resultados
@@ -407,9 +496,12 @@ Y dos que **no** se apagaron, porque tenían razón y el arreglo era el correcto
 Los `[SuppressMessage]` puntuales llevan su justificación en el propio atributo y no se
 repiten aquí: `CA1056` en `CatalogMedia.StorageUri` (`DOM-BS-10` exige el URI íntegro y
 `System.Uri` normaliza), `CA1711` en `RolePermission` y `UserMediaException` (vocabulario de
-dominio fijado en los requerimientos y en la base), y `CA1031` en los dos únicos sitios donde
-capturar todo es la función del código: el manejador global de excepciones y el bucle del
-drenador de notificaciones.
+dominio fijado en los requerimientos y en la base), y `CA1031` en los bordes donde capturar
+todo es la función del código. Son ocho supresiones en siete sitios: el manejador global de
+excepciones; los tres servicios de fondo (el drenador de notificaciones, el barrido de ingesta
+y el escritor de registros, este con una segunda al apagar); el manejador del lote de ingesta,
+que tiene que dejar el lote en `failed` con su motivo; el despacho de cada notificación; y la
+sonda de salud del almacenamiento.
 ====
 
 == Correcciones a la guía de onboarding del portal

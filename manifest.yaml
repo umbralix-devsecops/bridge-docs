@@ -289,10 +289,22 @@ sections:
     slug: estandares_procesos
     anchor: _estandares-procesos
     title: Estándares y procesos
-    status: pendiente
+    status: parcial
+    documents:
+      - path: 10_estandares_procesos/estandares_codigo_v1.0.adoc
+        status: vigente
+        version: "1.7"
+        note: >
+          EST-BS-00..27. La 1.7 (2026-09-25) añade EST-BS-00, la regla sobre las reglas: las
+          convenciones ceden con la justificación escrita en el sitio, las salvaguardas solo
+          con una ADR, y a la tercera excepción igual la regla se enmienda.
+      - path: 10_estandares_procesos/informe_calidad_bridge_2026-09-25.md
+        status: vigente
+        note: >
+          Informe de SOLID, código limpio, patrones y resiliencia del 2026-09-25. Sus mejoras son
+          las tareas de 11_gestion_producto/plan_mejoras_calidad_resiliencia_v1.0.adoc.
     planned:
       - guia_onboarding_v1.0.adoc     # prioridad elevada: equipo de 1 persona
-      - estandares_codigo_v1.0.adoc
       - estandares_dod_v1.0.adoc
       - estandares_dor_v1.0.adoc
 
@@ -304,7 +316,7 @@ sections:
     documents:
       - path: 11_gestion_producto/adr/adr-000_indice.adoc
         status: vigente
-        version: "2.0"
+        version: "2.2"
       - path: 11_gestion_producto/adr/adr-bs-001_cache_postgresql_propio.adoc
         status: aceptada
         version: "1.1"

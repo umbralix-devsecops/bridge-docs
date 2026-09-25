@@ -1,7 +1,7 @@
 = ADR-000 — Índice de decisiones de arquitectura
 :author: Equipo de Desarrollo
-:revnumber: 2.1
-:revdate: 2026-09-17
+:revnumber: 2.2
+:revdate: 2026-09-25
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -166,7 +166,8 @@ Tomadas al definir el proyecto. No se reabren salvo que un ADR las supere.
 Estos números no se reutilizan (`Glosario_IDs`, regla 1):
 
 * *ADR:* `ADR-BS-003` — descartada, el archivo se conserva.
-* *Estándares:* ninguno quemado todavía (`EST-BS-01..27` emitidos el 2026-09-17).
+* *Estándares:* ninguno quemado todavía (`EST-BS-01..27` emitidos el 2026-09-17; `EST-BS-00`,
+  la regla sobre las excepciones, el 2026-09-25).
 * *Requerimientos funcionales:* `RF-BS-03`, `RF-BS-04`, `RF-BS-07`, `RF-BS-09`, `RF-BS-10`,
   `RF-BS-11`.
 * *No funcionales:* `RNF-BS-05`.

@@ -1,6 +1,6 @@
 = Estado Actual — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 3.10
+:revnumber: 3.11
 :revdate: 2026-09-25
 :doctype: article
 :toc: left
@@ -48,7 +48,7 @@ que condiciona la Entrega 2, no la 1. *Código: Fases 0 a 7 cerradas y en `main`
 | 07 | Guías de implementación | ⬜ Pendiente | Ingesta, proxy de streaming y evaluación de acceso
 | 08 | Testing | ⬜ Pendiente |
 | 09 | Infraestructura y despliegue | ⬜ Pendiente | *Ya no bloqueada:* no hay conectividad corporativa que resolver
-| 10 | Estándares y procesos | 🟡 Parcial | `estandares_codigo_v1.0.adoc` emitido (`EST-BS-01..27`). Faltan DoD y DoR
+| 10 | Estándares y procesos | 🟡 Parcial | `estandares_codigo_v1.0.adoc` emitido (`EST-BS-00..27`; `EST-BS-00`, cuándo y cómo cede una regla, desde la 1.7 del 2026-09-25). Faltan DoD y DoR
 | 11 | Gestión de producto | ✅ Completa | 9 ADR (uno descartado) + plan de primera entrega + plan de tareas `T-BS-001..063`
 | 12 | Integraciones externas | 🟡 Parcial | `sinsatools/mapeo_sinsatools_v1.1.adoc` emitido: mapeo campo a campo del ER contra el contrato, con 9 preguntas abiertas al emisor
 |===

@@ -373,7 +373,8 @@ entrada de las alertas de T-BS-087.
 | `T-BS-096`
 a| *Alinear lo escrito con lo practicado* (C-1, C-2, C-4, C-6, R-3, R-7). Incluye:
 
-* `estandares_codigo` 1.7:
+* `estandares_codigo` 1.8 (la 1.7, del 2026-09-25, ya añadió `EST-BS-00`: cuándo y cómo cede
+una regla; las enmiendas de abajo siguen su procedimiento):
 ** EST-BS-19 enmendada: lo público en inglés, lo privado libre.
 ** EST-BS-20 enmendada: se admite «puerto + sus records» y `*Model.cs`; se parten
 `Entities/Enums.cs`, `Entities/Identity.cs` e `IngestAndAudit.cs`.
