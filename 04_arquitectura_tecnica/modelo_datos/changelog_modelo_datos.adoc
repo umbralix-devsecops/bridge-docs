@@ -2,7 +2,7 @@
 :author: Equipo de Desarrollo
 :revnumber: 2.8
 :revdate: 2026-09-25
-:revremark: MIG-BS-005 (NotificationRetries): reintentos y reserva de la cola de notificaciones (T-BS-090, cierra DT-BS-11). Cuatro columnas y un índice parcial en notification_log; ER 2.2. La migración se genera con dotnet ef (ver la entrada).
+:revremark: MIG-BS-005 (NotificationRetries, sello 20260925133116): reintentos y reserva de la cola de notificaciones (T-BS-090, cierra DT-BS-11). Cuatro columnas y un índice parcial en notification_log; ER 2.2. SchemaParityTests en verde con 18 / 14 / 59.
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -477,7 +477,7 @@ la reconoce como `MIG_BS_004`.
 |===
 | *Migración EF* | `MIG_BS_005_NotificationRetries`
 | *Contexto* | `AppDbContext`
-| *Fecha* | 2026-09-25 (sello: el que asigne `dotnet ef migrations add`; ver *Notas de despliegue*)
+| *Fecha* | 2026-09-25 (sello `20260925133116`)
 | *Versión del ER* | `modelo_datos_bridge_v2.mermaid` **2.2** (revisión aditiva; V5-12)
 | *Reversibilidad* | ✅ Total (`Down` borra el índice y las cuatro columnas; se pierden el recuento de intentos, la hora del siguiente y las reservas vivas)
 | *Impacto en datos* | Ninguno sobre filas existentes: tres columnas anulables y `attempt_count` con valor por omisión `0`
@@ -519,17 +519,14 @@ servicio no obliga a revertir la migración.
 *Recuentos esperados:* 18 tablas (=), 14 enums (=), 59 índices (+1:
 `ix_notification_log_queued`), 24 permisos (=). `SchemaParityTests` ya espera 59.
 
-*Notas de despliegue:* *la migración todavía no está generada*. Hace falta `dotnet ef`, que no
-estaba disponible en el entorno donde se escribió el cambio del modelo, igual que con
-`MIG-BS-001`. Pasos:
-
-. `dotnet ef migrations add MIG_BS_005_NotificationRetries` (orden completa en el README de
-  `Persistence/Migrations/`).
-. Leerla operación a operación antes de aplicarla (H4-05). Tiene que traer **cuatro
-  `AddColumn` y un `CreateIndex` con filtro**, y nada más.
-. `dotnet ef database update` y `tools/regenerar_ddl_derivado.sh`, que reescribe
-  `schema_derivado_v2.sql`.
-. Completar aquí el sello con el del archivo generado.
+*Notas de despliegue:* el cambio del modelo se escribió en un entorno sin `dotnet ef`, como el
+de `MIG-BS-001`. La migración se generó después con
+`dotnet ef migrations add MIG_BS_005_NotificationRetries`. Leída operación a operación
+(H4-05), trae **cuatro `AddColumn` y un `CreateIndex` con filtro**, nada más:
+`attempt_count` con `defaultValue: 0`, tres columnas anulables e `ix_notification_log_queued`
+con `status = 'queued'`. El `Down` borra el índice y las cuatro columnas.
+`schema_derivado_v2.sql` se regeneró con `tools/regenerar_ddl_derivado.sh`. Verificado el
+2026-09-25: `verify.sh` en verde, con `SchemaParityTests` en 18 / 14 / 59.
 
 == Versiones del modelo ER
 
