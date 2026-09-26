@@ -1,8 +1,8 @@
 = Solicitud al equipo de SinsaTools — lo que el Portal de Videos necesita para producción
 :author: Equipo de Desarrollo
-:revnumber: 1.0
-:revdate: 2026-09-24
-:revremark: Primera emisión. Reúne en un solo documento las peticiones con plazo ajeno (DEC-BS-15, Web_Platforms, reingesta) y añade las IP de salida para la ingesta (plan de la Fase 8, D8-05).
+:revnumber: 1.1
+:revdate: 2026-09-25
+:revremark: La Petición 5 tiene ya contrato propuesto (reingest_catalog_v1.0.yaml), y se corrige que el botón estuviera apagado: se muestra y responde 503. La 1.0, del 2026-09-24, reunía en un solo documento las peticiones con plazo ajeno (DEC-BS-15, Web_Platforms, reingesta) y las IP de salida para la ingesta (D8-05).
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -36,7 +36,7 @@ juntas, con lo que necesitamos exactamente, para qué, y qué pasa mientras no l
 | 2 | Que `storageUri` sea la ruta del blob **sin firma** | 🔴 Bloquea | Los vídeos funcionarían unas horas y después darían error
 | 3 | El `Id` del portal en `Web_Platforms` | 🟠 | No podemos comprobar que cada recurso recibido es nuestro
 | 4 | Las IP públicas de salida del microservicio de integraciones | 🟠 | La API de ingesta tendría que quedar abierta a todo internet
-| 5 | Un endpoint de reingesta a demanda | 🟢 | El botón «Sincronizar» del panel sigue apagado
+| 5 | Un endpoint de reingesta a demanda | 🟢 | «Sincronizar ahora» sigue respondiendo que la sincronización no está disponible
 |===
 
 == Petición 1 — Lectura del almacenamiento (`DEC-BS-15`)
@@ -105,12 +105,17 @@ referencia, que empuja lotes válidos contra la misma API.
 == Petición 5 — Reingesta a demanda (`DEC-BS-07`)
 
 *Para qué.* El panel de administración tiene un botón «Sincronizar ahora» para cuando alguien
-publica algo y no quiere esperar al siguiente ciclo. Sin un endpoint vuestro, el botón está
-apagado y el servicio responde `503` con un mensaje que explica por qué.
+publica algo y no quiere esperar al siguiente ciclo. Sin un endpoint vuestro, el botón
+responde que la sincronización no está disponible (`503`), con un mensaje que explica por qué.
 
 *Qué pedimos.* Un endpoint al que podamos llamar para que el microservicio haga un empuje nuevo.
 No tiene que devolver datos: solo aceptar la orden (`202`). Necesitamos la URL, con qué credencial
 se llama y qué responde si ya hay un empuje en curso. No es urgente.
+
+*Contrato propuesto (2026-09-25).* Para no dejar el diseño a ciegas, va adjunto el contrato que
+propone el portal, `reingest_catalog_v1.0.yaml`. Su descripción explica el comportamiento
+(G-1 a G-8). Se pide implementarlo, o decir qué se cambiaría. Lo que importa es el
+comportamiento, más que los nombres.
 
 == También pendiente del mapeo
 
@@ -148,6 +153,7 @@ las rutas del almacenamiento. Para desplegarlo en producción necesitamos de vue
 4. Las IP públicas de salida del microservicio de integraciones (stg y producción), para
    restringir la API de ingesta a vosotros.
 5. (Sin prisa) Un endpoint para pedir una reingesta a demanda, para el botón «Sincronizar ahora».
+   Adjuntamos el contrato que proponemos (reingest_catalog_v1.0.yaml).
 
 Siguen abiertas además algunas preguntas del mapeo (documentos PDF en la extracción, filtro por
 File_Sync.Status, valores de FileType/FileGroup y la cadencia del empuje). Adjunto el documento

@@ -1,8 +1,8 @@
 = Plan de tareas — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 1.8
-:revdate: 2026-09-21
-:revremark: Fases 0 a 4 cerradas. La Fase 4 cierra DT-BS-10 con MIG-BS-002 y deja siete desvíos y cinco hallazgos en verificacion_fase4_plan_vs_ejecucion_v1.0.adoc.
+:revnumber: 1.9
+:revdate: 2026-09-25
+:revremark: Se añade T-BS-055, consumir la reingesta de SinsaTools, con su contrato propuesto (reingesta_sinsatools_v1.0.adoc); espera a SinsaTools. La 1.8 cerraba las Fases 0 a 4 (DT-BS-10, MIG-BS-002).
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -62,7 +62,8 @@ endpoint todavía no existe ni está pedido. Tres efectos concretos:
 . *En la Entrega 1 el endpoint existe pero responde `503`* con un mensaje explícito
   («reingesta no disponible: el emisor aún no expone el disparador»), y el frontend apaga el
   botón con `features.triggerSync: false`. Es un estado transitorio declarado, no un olvido.
-  Es `T-BS-054`.
+  Es `T-BS-054`. *Corregido el 2026-09-25:* la bandera nunca se implementó; el botón se muestra
+  a quien tiene `config:write` y recibe el `503`.
 ====
 
 == Convención de identificadores
@@ -425,10 +426,23 @@ cinco hallazgos. Lo que cambia respecto de lo escrito aquí:
 | `T-BS-054`
 | `POST /admin/sync` → llamada de reingesta al microservicio de SinsaTools (`DEC-BS-07`).
   *Mientras ese endpoint no exista:* devuelve `503` con un mensaje explícito y el frontend
-  apaga el botón por configuración.
+  apaga el botón por configuración. _Corregido el 2026-09-25: el botón no se apaga, porque la
+  bandera nunca se implementó._
 | El `503` lleva un mensaje que un administrador entiende sin abrir el log. El día que
   respondan, cambia la URL de destino y nada más.
 | `T-BS-035`
+
+| `T-BS-055`
+| *Consumir la reingesta de SinsaTools* con el contrato propuesto
+  (`05_contratos_api/reingesta/reingest_catalog_v1.0.yaml`). Sustituye al «cambia la URL de
+  destino y nada más» de `T-BS-054`, que se queda corto. Hacen falta:
+  el cliente con caché de token; registrar la orden antes de llamar; `sequence` e `isLast` en
+  `upsert`; cerrar la orden del 1 al `isLast`; que la marca de agua no cuente sus lotes hasta
+  entonces (`DT-BS-13`); y el registro de órdenes para `/admin/sync/**`, con
+  `triggerType: manual`. El detalle, en `reingesta_sinsatools_v1.0.adoc`.
+| «Sincronizar ahora» lanza un empuje en el entorno de pruebas de SinsaTools, y el panel muestra
+  la orden terminada con sus lotes. Una orden sin cambios termina con su lote vacío.
+| SinsaTools (URL, emisor y cliente), `T-BS-054`
 |===
 
 *Traza:* `SEC-BS-04`, `DEC-BS-07`.

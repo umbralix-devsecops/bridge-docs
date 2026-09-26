@@ -1,7 +1,7 @@
 = Glosario de IDs y trazabilidad — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 2.11
-:revdate: 2026-09-25
+:revnumber: 2.13
+:revdate: 2026-09-26
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -178,6 +178,8 @@ Cada eslabón debe poder recorrerse en ambos sentidos:
 | DT-BS-09 | 🆕 Cuatro reglas del estándar de código dependen de revisión humana, y el equipo es de una persona: no hay segundo par de ojos | Medio
 | DT-BS-10 | ✅ *Cerrada el 2026-09-21 en `T-BS-042`.* Eran **14**, no 17, índices por convención. Se quita `ForeignKeyIndexConvention` del contexto: desde `MIG-BS-002` todo índice está declarado a mano con su motivo. Ocho retirados (auditoría sin consulta, `replaced_by_session_id` que la cadena no usa, dos sin consumidor), tres renombrados como deliberados, tres de las particiones declarados también en EF. 64 → 56. Disposición índice a índice en `verificacion_fase4` | —
 | DT-BS-12 | 🆕 El contrato de ingesta promete «10 intentos **fallidos** por minuto y `clientId`», y eso no es un límite de tasa sino un bloqueo por intentos fallidos: un limitador decide *antes* de ejecutar, cuando todavía no sabe si la petición va a fallar, y particionar por `clientId` obligaría a leer el cuerpo en el *middleware*. Lo implementado es el otro límite del contrato, 50 por minuto e IP. Contra un secreto de 256 bits generado por nosotros el bloqueo aporta poco; hacerlo bien con varias instancias exige estado compartido | Bajo
+| DT-BS-13 | 🆕 *2026-09-25.* La marca de agua (`GET /v1/ingest/watermark`) es el mayor `generatedAt` de los lotes `completed` o `partial`, y avanza con el primer lote aplicado de un empuje `upsert`. Si un empuje de varios lotes muere a medias, el siguiente `delta` corta ahí y los cambios que faltaban no llegan hasta la próxima foto completa: degradación silenciosa. `T-BS-055` la cierra para las órdenes de reingesta (la marca no cuenta sus lotes hasta el `isLast`); para los ciclos programados hace falta que SinsaTools numere y correlacione sus lotes | Medio
+| DT-BS-14 | 🆕 *2026-09-26.* R-9 del informe de calidad. El índice `ix_sessions_user`, filtrado a las sesiones no revocadas, no es único: dos logins simultáneos del mismo usuario pueden dejar dos sesiones activas, contra `RF-02`. *No se actúa* (plan de mejoras, «Lo que este plan deliberadamente no hace»): la carrera exige dos logins del mismo usuario en el mismo instante. Se reabre si la auditoría muestra dos sesiones activas de un mismo usuario; el arreglo previsto es un índice único parcial y tratar la violación como un reintento del login | Bajo
 | DT-BS-11 | ✅ *Cerrada el 2026-09-25 en `T-BS-090`.* La cola de notificaciones no reservaba las filas que tomaba, y con dos procesos a la vez —las dos revisiones de un despliegue— el correo salía duplicado. Ahora la toma es una sola sentencia `UPDATE … FOR UPDATE SKIP LOCKED` que deja una reserva con caducidad (`lease_id`, `lease_expires_at`, `MIG-BS-005`). *No hizo falta migrar el enumerado:* la reserva es un dato aparte, no un estado. Entrega al menos una vez: si el proceso muere entre el envío y el guardado, el correo puede salir dos veces | —
 |===
 
@@ -218,7 +220,7 @@ Cada eslabón debe poder recorrerse en ambos sentidos:
 | DEC-BS-14 | *Cerrada el 2026-09-17 por `ADR-BS-007`.* El Bridge lee los bytes con credencial propia (opción A). El lote trae la ruta sin firmar.
 | DEC-BS-13 | *Cerrada el 2026-09-17.* `sessions` lleva `replaced_by_session_id` y `revoked_reason` desde `MIG-BS-001`. Habilita revocar la cadena entera al detectar reutilización.
 | DEC-BS-11 | *Cerrada el 2026-09-17.* Se añade `GET /media/{id}/access` al contrato del portal. Devuelve metadatos y veredicto, nunca una URL de almacenamiento.
-| DEC-BS-07 | *Cerrada el 2026-09-17.* `POST /admin/sync` pide una reingesta al microservicio de SinsaTools. ⚠️ *Pasa a depender de un endpoint suyo que aún no existe:* hasta entonces responde `503` (`T-BS-054`).
+| DEC-BS-07 | *Cerrada el 2026-09-17.* `POST /admin/sync` pide una reingesta al microservicio de SinsaTools. ⚠️ *Pasa a depender de un endpoint suyo que aún no existe:* hasta entonces responde `503` (`T-BS-054`). *Contrato propuesto el 2026-09-25:* `05_contratos_api/reingesta/reingest_catalog_v1.0.yaml` y `12_integraciones_externas/sinsatools/reingesta_sinsatools_v1.0.adoc`, pendiente de que SinsaTools lo acepte; el consumo es `T-BS-055`.
 |===
 
 == Numeración quemada

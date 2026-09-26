@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: Portal de Videos — API de Ingesta de Catálogo
-  version: 1.1.0
+  version: 1.1.1
   description: |
     Contrato de entrada del catálogo desde el **microservicio de integraciones de
     SinsaTools** hacia el Portal de Videos.
@@ -613,8 +613,7 @@ components:
             sourceId: { type: integer, example: 10 }
             name: { type: string, example: Vectra Mobility }
         metatags:
-          type: object
-          nullable: true
+          type: [object, 'null']
           properties:
             title: { type: string }
             keywords: { type: string }
@@ -743,17 +742,14 @@ components:
             configuración de SinsaTools.
           example: https://sinsacdn.blob.core.windows.net/media/products/1/manual_tecnico_v2.pdf
         token:
-          type: string
-          nullable: true
+          type: [string, 'null']
           description: '`Files.Token` cuando `source = EntityFiles`. Nulo para `Images`.'
         deviceType:
-          type: string
+          type: [string, 'null']
           maxLength: 32
-          nullable: true
           example: Desktop
         webPlatformId:
-          type: integer
-          nullable: true
+          type: [integer, 'null']
         position:
           type: integer
           minimum: 0
@@ -762,7 +758,7 @@ components:
           type: boolean
           description: '`false` retira el recurso del catálogo sin borrarlo. Nunca hay borrado físico.'
         createdAt: { type: string, format: date-time }
-        updatedAt: { type: string, format: date-time, nullable: true }
+        updatedAt: { type: [string, 'null'], format: date-time }
 
     # ── Respuestas ───────────────────────────────────────────────────────────
 
@@ -801,7 +797,7 @@ components:
         ingestId: { type: string, format: uuid }
         batchId: { type: string, format: uuid }
         mode: { type: string, enum: [upsert, snapshot] }
-        snapshotId: { type: string, format: uuid, nullable: true }
+        snapshotId: { type: [string, 'null'], format: uuid }
         status:
           type: string
           enum: [queued, running, completed, partial, failed]
@@ -811,9 +807,9 @@ components:
             - `failed` — no se aplicó nada; ver `errorDetail`.
         generatedAt: { type: string, format: date-time }
         receivedAt: { type: string, format: date-time }
-        finishedAt: { type: string, format: date-time, nullable: true }
+        finishedAt: { type: [string, 'null'], format: date-time }
         durationMs: { type: integer }
-        errorDetail: { type: string, nullable: true }
+        errorDetail: { type: [string, 'null'] }
         counts: { $ref: '#/components/schemas/IngestCounts' }
         items:
           type: array
@@ -842,28 +838,25 @@ components:
       properties:
         entityType: { type: string, enum: [product, version, media] }
         source:
-          type: string
-          enum: [Images, EntityFiles]
-          nullable: true
+          type: [string, 'null']
+          enum: [Images, EntityFiles, null]
           description: Solo para `entityType = media`; forma parte de la clave natural.
         sourceId: { type: integer }
         operation: { type: string, enum: [insert, update, deactivate, skip, error] }
-        errorDetail: { type: string, nullable: true }
+        errorDetail: { type: [string, 'null'] }
 
     Watermark:
       type: object
       properties:
         lastGeneratedAt:
-          type: string
+          type: [string, 'null']
           format: date-time
-          nullable: true
           description: '`generatedAt` del último lote aplicado con éxito. Corte para el siguiente incremental.'
-        lastBatchId: { type: string, format: uuid, nullable: true }
-        lastIngestAt: { type: string, format: date-time, nullable: true }
+        lastBatchId: { type: [string, 'null'], format: uuid }
+        lastIngestAt: { type: [string, 'null'], format: date-time }
         openSnapshotId:
-          type: string
+          type: [string, 'null']
           format: uuid
-          nullable: true
           description: Snapshot iniciado y no cerrado. Si no es nulo, hay una foto a medias que conviene terminar.
         catalog:
           type: object

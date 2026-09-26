@@ -1,0 +1,396 @@
+openapi: 3.1.0
+
+info:
+  title: Microservicio de integraciones de SinsaTools — Reingesta a demanda
+  version: 1.0.0
+  description: |
+    Contrato **propuesto por el equipo del Portal de Videos** para un endpoint que implementa el
+    **microservicio de integraciones de SinsaTools** y que llama el servicio del portal (Bridge
+    Service). Complementa el contrato de ingesta (`ingest_catalog_v1.0.yaml`). Aquel es la vía
+    por la que el microservicio empuja el catálogo al portal. Este sirve para pedirle un empuje
+    fuera de su calendario.
+
+    ## Para qué
+
+    El panel de administración del portal tiene un botón «Sincronizar ahora», para cuando alguien
+    publica algo en SinsaTools y no quiere esperar al siguiente ciclo. Hoy responde que la
+    sincronización no está disponible (`503`), porque no hay a quién pedírsela (`DEC-BS-07`).
+
+    ## Cómo funciona
+
+    1. El portal hace `POST /v1/catalog/push-requests` con un `requestId` que genera él y un
+       alcance: `delta` o `full`.
+    2. El microservicio **solo registra la orden** y responde `202` en menos de 5 segundos. El
+       resultado no viaja en esta respuesta.
+    3. Después, el microservicio empuja por la API de ingesta de siempre
+       (`POST /v1/ingest/catalog`). **Cada** lote de esa orden lleva la cabecera
+       `X-Correlation-ID: <requestId>`, y los lotes van numerados. Así el portal sabe qué lotes
+       responden a qué orden y cuándo ha terminado.
+
+    **Los ciclos programados no cambian.** El microservicio sigue empujando cuando le toca, sin
+    orden previa, y esos lotes no necesitan `requestId`, cabecera de correlación ni numeración.
+    Este endpoint solo añade una forma de pedir un empuje fuera de calendario.
+
+    ## Lo que el microservicio garantiza después del `202`
+
+    Los plazos se cuentan desde el `202`.
+
+    - **G-1 — Plazos.** El primer lote llega en menos de 15 minutos. Entre dos lotes de la misma
+      orden no pasan más de 15 minutos.
+    - **G-2 — `delta`.** Lotes `mode: upsert` con los cambios posteriores a `lastGeneratedAt` de
+      `GET /v1/ingest/watermark`.
+      - Se envían **de uno en uno**: cada lote, después del `202` del anterior.
+      - Llevan `sequence` consecutivo desde 1, sin huecos, y el último lleva `isLast: true`.
+      - Un lote rechazado con `400`, o cuyo `202` trae `status: failed`, se reenvía corregido con
+        el mismo `sequence` y otro `batchId`. Un `413` se corrige partiendo el lote: el primer
+        trozo lleva el mismo `sequence` y los siguientes siguen la numeración. Si no se puede
+        corregir, la orden se abandona sin enviar `isLast`.
+      - **Si no hay cambios, se envía un único lote** con `products: []`, `sequence: 1`,
+        `isLast: true` y, como `generatedAt`, el momento de la consulta.
+      - En `upsert`, `isLast` **nunca reconcilia ni desactiva nada**: solo cierra la orden. El
+        contrato de ingesta 1.1.0 dice que en `upsert` estos dos campos se ignoran. La 1.2.0
+        recogerá este uso.
+    - **G-3 — `full`.** Una foto completa `mode: snapshot`, de uno en uno y con los mismos
+      reenvíos que en G-2: un mismo `snapshotId`, `sequence` desde 1 e `isLast: true` en el
+      último lote.
+    - **G-4 — Correlación.** Todos los lotes de la orden llevan `X-Correlation-ID` con el
+      `requestId`, que es un UUID, como pide el contrato de ingesta.
+    - **G-5 — Un empuje a la vez.** Desde el `202` de una orden hasta su lote `isLast`, o hasta
+      que se abandone, no arranca ningún otro empuje hacia el portal.
+      - Una orden nueva recibe `409 PUSH_IN_PROGRESS`.
+      - Un ciclo programado que venza en ese intervalo espera a que termine.
+      - Mientras corre un ciclo programado, una orden nueva también recibe `409`.
+      - Una orden que lleva 30 minutos sin enviar su lote siguiente se da por abandonada.
+    - **G-6 — Idempotencia.** Se comprueba **antes** que G-5 y que el límite de órdenes.
+      - Durante al menos 24 horas, un `requestId` ya aceptado recibe `202` con `duplicate: true`
+        y los datos de su primera aceptación, aunque su empuje siga en curso. Nunca lanza un
+        segundo empuje ni cuenta para el `429`.
+      - Si llega con otro `scope`, recibe `422`.
+      - Solo se recuerdan las órdenes aceptadas: un `requestId` que recibió `409`, `429` o `503`
+        se trata como nuevo.
+    - **G-7 — Calendario.** Una orden no adelanta ni cancela los ciclos programados. Como mucho
+      retrasa el que coincida con ella (G-5). El ciclo siguiente calcula su corte con la marca de
+      agua.
+    - **G-8 — Plataforma.** El destino se deduce de la credencial. La del portal solo puede pedir
+      empujes hacia el portal.
+
+    La orden termina cuando cada `sequence`, del 1 al que lleva `isLast`, tiene un lote aplicado
+    (`completed` o `partial`). El portal la da por fallida si pasan 30 minutos sin recibir el
+    lote siguiente: el primero, contando desde el `202`, o cualquier otro, contando desde el
+    anterior. Un empuje que falla sin enviar nada no se puede avisar por este endpoint, y lo
+    cubre esa misma regla.
+
+    ## Autenticación
+
+    `REST-BS-07`: entre sistemas se usa *Service JWT RS256*. El portal obtiene el token con la
+    concesión *client credentials* estándar de OAuth 2.0 (RFC 6749 §4.4):
+
+    - La petición es un `POST` `application/x-www-form-urlencoded` al emisor que indique
+      SinsaTools, con `grant_type=client_credentials`, las credenciales del cliente y el scope.
+    - La respuesta trae `access_token`, `token_type` y `expires_in`.
+    - El token se envía como `Authorization: Bearer`.
+
+    Con el mismo patrón llama el microservicio a la API de ingesta, en sentido contrario.
+    Aquella usa un cuerpo JSON propio; aquí se pide el formato estándar.
+
+    - El permiso es `scope: catalog:reingest`. Si el emisor es Entra ID, el portal pide
+      `<App ID URI de la API>/.default` y el permiso llega como rol de aplicación (claim
+      `roles`).
+    - El portal cachea el token según `expires_in` y lo renueva cuando le quedan menos de 5
+      minutos.
+    - El secreto del cliente se guarda en el Key Vault del portal (`SEC-BS-01`). Si la API está
+      registrada en Entra ID en el mismo tenant que el portal, el portal usa su identidad
+      administrada y no hay secreto.
+
+    ## Reintentos del portal
+
+    - `401`: el portal pide un token nuevo y reintenta una vez.
+    - Tiempo de espera agotado (10 s), `500`, `502`, `504`, o `503` sin `Retry-After`: un
+      reintento con el mismo `requestId`. G-6 lo hace seguro.
+    - Lo demás no se reintenta: `400`, `403`, `409`, `422`, `429` y `503` con `Retry-After`.
+
+    ## Versionado
+
+    La versión va en la ruta (`/v1`).
+
+    - No la cambian los campos opcionales nuevos en la respuesta ni las cabeceras nuevas.
+    - Un cambio incompatible exige `/v2` y el acuerdo de las dos partes, como en el contrato de
+      ingesta (`REST-BS-06`).
+    - Los campos desconocidos de la petición se ignoran.
+
+  contact:
+    name: Equipo de Desarrollo — Portal de Videos
+  license:
+    name: Confidencial — Portal de Videos y SinsaTools
+
+servers:
+  - url: https://integraciones.sinsatools.example
+    description: Producción — URL a confirmar por SinsaTools
+  - url: https://integraciones-stg.sinsatools.example
+    description: Pruebas (stg) — URL a confirmar por SinsaTools
+
+tags:
+  - name: Reingest
+    description: Órdenes de empuje del catálogo hacia el portal
+
+# ══════════════════════════════════════════════════════════════════════════════
+paths:
+# ══════════════════════════════════════════════════════════════════════════════
+
+  /v1/catalog/push-requests:
+    post:
+      tags: [Reingest]
+      operationId: requestCatalogPush
+      summary: Pide un empuje del catálogo hacia el portal
+      description: |
+        Registra la orden y responde enseguida. El empuje ocurre después, por la API de ingesta
+        del portal, con las garantías G-1..G-8 de la descripción general.
+
+        | Código | Cuándo | Qué hace el Bridge |
+        |---|---|---|
+        | `202` | Orden aceptada, nueva o repetida (`duplicate`) | La marca «en curso» y espera sus lotes |
+        | `400` | El cuerpo no cumple el esquema | Lo registra como error y responde `503` al panel |
+        | `401` | Token ausente, caducado o inválido | Pide un token nuevo y reintenta una vez |
+        | `403` | El token no concede `catalog:reingest` | Lo registra como error y responde `503` al panel |
+        | `409` | Ya hay un empuje en curso (G-5) | Responde `409 SYNC_ALREADY_RUNNING` al panel |
+        | `422` | El `requestId` ya se usó con otro alcance | No debería ocurrir: lo registra como error |
+        | `429` | Demasiadas órdenes | Responde `503` al panel con el `Retry-After` |
+        | `503` | El microservicio no puede aceptar órdenes ahora | Sin `Retry-After`, reintenta una vez; con él, responde `503` al panel |
+      security:
+        - SinsaToolsServiceJWT: [catalog:reingest]
+      parameters:
+        - $ref: '#/components/parameters/CorrelationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PushRequest' }
+            examples:
+              delta:
+                summary: Los cambios pendientes (el uso habitual)
+                value:
+                  requestId: 6f1c2b7e-3a5d-4c8e-9b0f-1d2e3f405a6b
+                  scope: delta
+              full:
+                summary: La foto completa, para reconciliar
+                value:
+                  requestId: 0a9b8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d
+                  scope: full
+      responses:
+        '202':
+          description: |
+            Orden aceptada. Con `duplicate: true` es la repetición de una orden ya aceptada: no se
+            lanza otro empuje y se devuelven los datos de la primera vez (G-6).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PushRequestAccepted' }
+              examples:
+                nueva:
+                  value:
+                    requestId: 6f1c2b7e-3a5d-4c8e-9b0f-1d2e3f405a6b
+                    scope: delta
+                    acceptedAt: '2026-10-01T14:30:02Z'
+                    duplicate: false
+                repetida:
+                  value:
+                    requestId: 6f1c2b7e-3a5d-4c8e-9b0f-1d2e3f405a6b
+                    scope: delta
+                    acceptedAt: '2026-10-01T14:30:02Z'
+                    duplicate: true
+        '400':
+          description: El cuerpo no cumple el esquema (falta `requestId`, no es un UUID, `scope` desconocido)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ValidationErrorResponse' }
+              example:
+                code: VALIDATION_ERROR
+                message: The request body is not valid.
+                errors:
+                  - field: scope
+                    message: Must be one of delta, full.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: |
+            Ya hay un empuje en curso hacia el portal, sea programado o pedido (G-5). Nunca se
+            responde a un `requestId` ya aceptado: ese recibe `202` con `duplicate: true` (G-6).
+            `Retry-After` es opcional; si viene, estima cuándo termina el empuje en curso.
+          headers:
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PushInProgressResponse' }
+              example:
+                code: PUSH_IN_PROGRESS
+                message: A catalog push to this platform is already running.
+                runningRequestId: null
+        '422':
+          description: El `requestId` ya se usó con otro `scope`. La orden original sigue como estaba.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example:
+                code: REQUEST_ID_CONFLICT
+                message: This requestId was already used with a different scope.
+        '429':
+          description: |
+            Demasiadas órdenes. `Retry-After` es obligatorio. Proponemos aceptar al menos una
+            orden `delta` cada 5 minutos y una `full` cada hora. Las repeticiones de G-6 no
+            cuentan.
+          headers:
+            Retry-After:
+              required: true
+              description: Segundos que conviene esperar antes de volver a pedir.
+              schema: { type: integer, minimum: 1 }
+              example: 300
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example:
+                code: RATE_LIMITED
+                message: Too many push requests. Try again later.
+        '503':
+          description: |
+            El microservicio no puede aceptar órdenes ahora (mantenimiento, origen no disponible).
+            `Retry-After` es opcional.
+          headers:
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example:
+                code: SERVICE_UNAVAILABLE
+                message: Push requests are temporarily unavailable.
+
+# ══════════════════════════════════════════════════════════════════════════════
+components:
+# ══════════════════════════════════════════════════════════════════════════════
+
+  securitySchemes:
+    SinsaToolsServiceJWT:
+      type: oauth2
+      description: |
+        *Service JWT RS256* (`REST-BS-07`), pedido con la concesión *client credentials*
+        estándar (RFC 6749 §4.4) al emisor que indique SinsaTools.
+
+        Validar al menos la firma, `exp`, `aud` (la API del microservicio) y el permiso
+        `catalog:reingest`, en `scope` o en `roles` si el emisor es Entra ID. La plataforma de
+        destino se deduce del cliente (`sub`, `azp` o `appid`), nunca de la petición (G-8).
+
+        La `tokenUrl` de abajo es un ejemplo: la fija SinsaTools. Con Entra ID sería
+        `https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token`.
+      flows:
+        clientCredentials:
+          tokenUrl: https://integraciones.sinsatools.example/oauth2/token
+          scopes:
+            catalog:reingest: Pedir empujes del catálogo hacia la plataforma del cliente
+
+  parameters:
+    CorrelationId:
+      name: X-Correlation-ID
+      in: header
+      required: false
+      description: |
+        Identificador de correlación. El portal envía el mismo valor que `requestId`, para que
+        la orden y sus lotes se sigan en los registros de las dos partes.
+      schema: { type: string, format: uuid }
+
+  headers:
+    RetryAfter:
+      description: Segundos que conviene esperar antes de volver a pedir.
+      schema: { type: integer, minimum: 1 }
+      example: 300
+
+  responses:
+    Unauthorized:
+      description: Token ausente, caducado o inválido
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          example:
+            code: UNAUTHORIZED
+            message: Missing or invalid access token.
+    Forbidden:
+      description: El token es válido pero no concede `catalog:reingest`
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          example:
+            code: FORBIDDEN
+            message: The token does not grant catalog:reingest.
+
+  schemas:
+    PushRequest:
+      type: object
+      required: [requestId]
+      properties:
+        requestId:
+          type: string
+          format: uuid
+          description: |
+            Identificador de la orden, generado por el portal. Es la clave de idempotencia (G-6)
+            y el valor de `X-Correlation-ID` en cada lote del empuje (G-4).
+          example: 6f1c2b7e-3a5d-4c8e-9b0f-1d2e3f405a6b
+        scope:
+          type: string
+          enum: [delta, full]
+          default: delta
+          description: |
+            - `delta` — los cambios desde la marca de agua, en lotes `upsert` (G-2).
+            - `full` — la foto completa, en lotes `snapshot` (G-3). Es más pesada: sirve para
+              reconciliar después de un incidente.
+
+    PushRequestAccepted:
+      type: object
+      required: [requestId, scope, acceptedAt, duplicate]
+      properties:
+        requestId: { type: string, format: uuid }
+        scope: { type: string, enum: [delta, full] }
+        acceptedAt:
+          type: string
+          format: date-time
+          description: Cuándo se aceptó la orden por primera vez, en UTC.
+        duplicate:
+          type: boolean
+          description: "`true` si la orden ya se había aceptado antes (G-6)."
+
+    PushInProgressResponse:
+      allOf:
+        - $ref: '#/components/schemas/ErrorResponse'
+        - type: object
+          properties:
+            runningRequestId:
+              type: [string, 'null']
+              format: uuid
+              description: |
+                El `requestId` del empuje en curso si lo pidió el portal, o `null` si es un ciclo
+                programado. Es opcional, y nunca es el `requestId` de la propia petición (G-6).
+
+    ErrorResponse:
+      type: object
+      required: [code, message]
+      description: La misma forma que en el contrato de ingesta.
+      properties:
+        code: { type: string, example: PUSH_IN_PROGRESS }
+        message: { type: string }
+        correlationId: { type: string, format: uuid }
+
+    ValidationErrorResponse:
+      type: object
+      required: [code, message, errors]
+      properties:
+        code: { type: string, example: VALIDATION_ERROR }
+        message: { type: string }
+        correlationId: { type: string, format: uuid }
+        errors:
+          type: array
+          items:
+            type: object
+            required: [field, message]
+            properties:
+              field: { type: string, example: scope }
+              message: { type: string }

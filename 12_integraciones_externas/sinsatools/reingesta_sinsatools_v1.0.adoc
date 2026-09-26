@@ -1,0 +1,530 @@
+= Reingesta a demanda — contrato con SinsaTools
+:author: Equipo de Desarrollo
+:revnumber: 1.0
+:revdate: 2026-09-25
+:revremark: Primera emisión. Contrato propuesto para la Petición 5 de la solicitud (DEC-BS-07). Lo construye SinsaTools y lo llama el Bridge.
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 2
+:sectnums:
+:icons: font
+:lang: es
+:root: ../..
+:section-id: integraciones-externas
+:section-title: 12 — Integraciones Externas
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+---
+
+[.lead]
+El botón «Sincronizar ahora» del panel de administración responde hoy que la sincronización no
+está disponible (`503`). El catálogo lo empuja SinsaTools según su calendario, y no hay forma de
+pedirle un empuje antes (`DEC-BS-07`, `T-BS-054`). Este documento propone el endpoint que lo
+resuelve: lo construye el microservicio de integraciones de SinsaTools y lo llama el Bridge. El
+contrato está en `05_contratos_api/reingesta/reingest_catalog_v1.0.yaml`. Aquí va lo que no cabe
+en el YAML: el porqué de cada decisión, lo que suponemos y lo que cambia de nuestro lado.
+
+*Estado:* propuesta, pendiente de enviar. Cuando SinsaTools la acepte, pasa a ser el tercer
+contrato bilateral (`REST-BS-06`) y ya no se cambia de forma incompatible sin acuerdo.
+
+[NOTE]
+====
+*Este documento es interno:* mezcla el contrato con planes y decisiones nuestras. A SinsaTools
+se le envía solo el YAML, cuya descripción lleva todo lo que necesitan, con el texto del final.
+====
+
+== En resumen
+
+* *Un solo endpoint:* `POST /v1/catalog/push-requests`, con un `requestId` que genera el portal y
+  un `scope`: `delta` o `full`.
+* *Asíncrono:* el microservicio solo registra la orden y responde `202`. Los datos llegan
+  después, por la API de ingesta de siempre.
+* *Correlación:* cada lote de la orden lleva `X-Correlation-ID: <requestId>`, y los lotes van de
+  uno en uno, numerados con `sequence` e `isLast`. Si no hay cambios, llega un lote vacío.
+* *Un empuje a la vez:* si ya hay otro en curso, `409 PUSH_IN_PROGRESS`. Una repetición de la
+  misma orden no es un conflicto: recibe `202` con `duplicate: true`.
+* *Credencial:* Service JWT RS256, pedido con *client credentials* estándar (RFC 6749) al emisor
+  de SinsaTools, con `scope: catalog:reingest` (`REST-BS-07`).
+* *Los ciclos programados no cambian:* el microservicio sigue empujando cuando le toca, sin orden
+  previa, y esos lotes no necesitan `requestId`, cabecera de correlación ni numeración.
+
+== Cómo funciona
+
+[mermaid]
+----
+sequenceDiagram
+    actor A as Administrador
+    participant B as Bridge (portal)
+    participant S as Microservicio de SinsaTools
+    A->>B: POST /admin/sync {scope}
+    B->>S: POST /v1/catalog/push-requests {requestId, scope}
+    S-->>B: 202 {requestId, acceptedAt, duplicate: false}
+    B-->>A: 202 {syncId: requestId, status: running}
+    Note over S: El primer lote llega en menos de 15 min
+    S->>B: GET /v1/ingest/watermark (solo delta)
+    loop De uno en uno, con X-Correlation-ID: requestId
+        S->>B: POST /v1/ingest/catalog {sequence, isLast}
+        B-->>S: 202 (lote aplicado)
+    end
+    A->>B: GET /admin/sync/logs/{syncId}
+    B-->>A: Resultado de la orden
+----
+
+== Identificación de la contraparte
+
+[cols="1,3",options="header"]
+|===
+| Aspecto | Detalle
+
+| Nombre | Microservicio de integraciones de SinsaTools
+| Rol en la integración | *Los dos.* Consume nuestra API de ingesta y, con este contrato, expone la reingesta que consumimos nosotros
+| Dueño | Equipo de SinsaTools
+| Podemos modificarlo | No
+| Canal de coordinación | Correo, junto con la solicitud (`solicitud_sinsatools_v1.0.adoc`)
+| Repositorio de su documentación | No disponible
+|===
+
+== Contrato de integración
+
+[cols="2,3",options="header"]
+|===
+| Aspecto | Detalle
+
+| Protocolo | REST sobre HTTPS
+| Formato | JSON
+| Autenticación | Service JWT RS256 (`REST-BS-07`), pedido con *client credentials* estándar y con `scope: catalog:reingest`. Ver <<autenticacion>>
+| Documento de contrato | `05_contratos_api/reingesta/reingest_catalog_v1.0.yaml` (OpenAPI 3.1, versión 1.0.0)
+| Versionado | En la ruta (`/v1`). Los cambios compatibles no cambian la ruta
+| Es bilateral | Lo será cuando SinsaTools lo acepte (`REST-BS-06`). Hoy es una propuesta nuestra
+|===
+
+== La petición y sus respuestas
+
+.La petición
+[cols="1,1,4",options="header"]
+|===
+| Campo | Obligatorio | Significado
+
+| `requestId` | Sí
+| UUID que genera el portal. Es la clave de idempotencia y el valor de `X-Correlation-ID` en
+  cada lote del empuje.
+
+| `scope` | No (`delta`)
+| `delta`: los cambios desde la marca de agua, en lotes `upsert`. `full`: la foto completa, en
+  lotes `snapshot`. La foto completa es más pesada y sirve para reconciliar después de un
+  incidente.
+|===
+
+.Las respuestas, y qué hace el portal con cada una
+[cols="1,2,3,2",options="header"]
+|===
+| Código | Cuándo | Qué hace el Bridge | Qué recibe el panel (`POST /admin/sync`)
+
+| `202`
+| Orden aceptada, nueva o repetida (`duplicate: true`)
+| La marca «en curso» y espera sus lotes
+| `202`, «en curso»
+
+| `401`
+| Token ausente, caducado o inválido
+| Pide un token nuevo y reintenta una vez
+| Nada si el reintento funciona; si no, `503`
+
+| `400`, `403`, `422`
+| Error de integración o de configuración
+| Lo registra como error y no reintenta
+| `503 SYNC_UNAVAILABLE`
+
+| `409`
+| Ya hay un empuje en curso
+| No reintenta
+| `409 SYNC_ALREADY_RUNNING`
+
+| `429`
+| Demasiadas órdenes
+| No reintenta y pasa el `Retry-After`
+| `503 SYNC_UNAVAILABLE` con `Retry-After`
+
+| `503` con `Retry-After`
+| El microservicio no está disponible y dice hasta cuándo
+| No reintenta y pasa el `Retry-After`
+| `503 SYNC_UNAVAILABLE` con `Retry-After`
+
+| `503` sin `Retry-After`, `500`, `502`, `504` o 10 s sin respuesta
+| Fallo pasajero, o no se sabe
+| Reintenta una vez con el mismo `requestId`
+| `202` si el reintento funciona; si no, `503`
+|===
+
+*El contrato del frontend no cambia de forma.* `api_sync.yaml` 1.0.1 ya prevé el `202`, el
+`409 SYNC_ALREADY_RUNNING` y el `503 SYNC_UNAVAILABLE` con `Retry-After`, y el servidor se
+adapta al cliente (`REST-BS-11`). Solo cambia la descripción del `503`.
+
+== Lo que el microservicio garantiza después del `202`
+
+Los plazos se cuentan desde el `202`.
+
+[cols="1,3,3",options="header"]
+|===
+| # | Garantía | Por qué la necesitamos
+
+| G-1
+| *Plazos:* el primer lote llega en menos de 15 minutos, y entre dos lotes de la misma orden no
+  pasan más de 15.
+| El portal da la orden por fallida si pasan 30 minutos sin el lote siguiente.
+
+| G-2
+a| *`delta`:* lotes `upsert` con los cambios posteriores a `lastGeneratedAt` de
+`GET /v1/ingest/watermark`.
+
+* De uno en uno: cada lote, después del `202` del anterior.
+* `sequence` consecutivo desde 1, sin huecos, e `isLast: true` en el último.
+* Un lote rechazado con `400`, o cuyo `202` trae `status: failed`, se reenvía corregido con el
+  mismo `sequence` y otro `batchId`.
+* Un `413` se corrige partiendo el lote: el primer trozo lleva el mismo `sequence` y los
+  siguientes siguen la numeración.
+* Si un lote no se puede corregir, la orden se abandona sin `isLast`.
+* Sin cambios: un único lote con `products: []`, `sequence: 1`, `isLast: true` y, como
+  `generatedAt`, el momento de la consulta.
+* En `upsert`, `isLast` *nunca reconcilia ni desactiva nada*: solo cierra la orden.
+a| Sin la numeración, el portal no sabe cuándo ha llegado todo. Sin el lote vacío, una orden sin
+cambios parecería colgada.
+
+La regla de `isLast` va escrita porque el contrato de ingesta 1.1.0 describe `isLast` como el
+cierre de una foto. En `upsert` hoy lo ignora (ver <<certezas>>), y la 1.2.0 recogerá este uso.
+
+| G-3
+| *`full`:* una foto completa `snapshot`, de uno en uno y con los mismos reenvíos que en G-2, con
+  un mismo `snapshotId`, `sequence` desde 1 e `isLast: true` en el último lote.
+| Es la reconciliación: al cerrar la foto, el portal desactiva lo que no apareció.
+
+| G-4
+| *Correlación:* todos los lotes de la orden llevan `X-Correlation-ID` con el `requestId`.
+| Es lo único que une los lotes a la orden. El portal ya guarda esa cabecera con cada lote.
+
+| G-5
+a| *Un empuje a la vez:* desde el `202` de una orden hasta su lote `isLast`, o hasta que se
+abandone, no arranca ningún otro empuje hacia el portal.
+
+* Una orden nueva recibe `409`.
+* Un ciclo programado que venza en ese intervalo espera.
+* Mientras corre un ciclo programado, una orden nueva también recibe `409`.
+* Una orden que lleva 30 minutos sin enviar su lote siguiente se da por abandonada.
+| Dos empujes a la vez se estorbarían: nuestra API rechaza el lote concurrente con `409
+  INGEST_IN_PROGRESS`, y dos fotos abiertas no se pueden cerrar bien.
+
+| G-6
+a| *Idempotencia:* se comprueba *antes* que G-5 y que el límite de órdenes.
+
+* Durante al menos 24 horas, un `requestId` ya aceptado recibe `202` con `duplicate: true`,
+  aunque su empuje siga en curso. Nunca lanza un segundo empuje ni cuenta para el `429`.
+* Con otro `scope`, recibe `422`.
+* Solo se recuerdan las órdenes aceptadas: un `requestId` que recibió `409`, `429` o `503` se
+  trata como nuevo.
+| El portal reintenta una vez tras un corte de red o un `5xx`. Si el primer intento sí llegó, su
+empuje ya está en marcha, y el reintento debe recibir `202` y no un `409` contra sí mismo.
+
+| G-7
+| *Calendario:* una orden no adelanta ni cancela los ciclos programados. Como mucho retrasa el que
+  coincida con ella (G-5).
+| La reingesta complementa los ciclos; no los sustituye.
+
+| G-8
+| *Plataforma por credencial:* el destino se deduce del cliente del token.
+| Con nuestra credencial nadie puede disparar empujes hacia otra plataforma, y la petición no
+  necesita el `Id` de `Web_Platforms`.
+|===
+
+*Cuándo termina una orden:* cuando cada `sequence`, del 1 al que lleva `isLast`, tiene un lote
+aplicado (`completed` o `partial`). El portal la da por fallida si pasan 30 minutos sin el lote
+siguiente: el primero, contando desde el `202`, o cualquier otro, contando desde el anterior. Es
+el mismo plazo con el que SinsaTools da la orden por abandonada (G-5).
+
+[[autenticacion]]
+== Autenticación: lo que dice la documentación y cómo se aplica
+
+*Lo que ya estaba escrito:*
+
+* *`REST-BS-07`* (`requerimientos_bridge_service_v2.0.adoc`): «La autenticación entre servicios
+  usa *Service JWT RS256*. No se permite otro mecanismo.» El índice de ADR la recoge entre las
+  decisiones heredadas: «Service JWT RS256 entre sistemas».
+* *El patrón de ese Service JWT* es el de la API de ingesta. El consumidor pide el token con
+  *client credentials* al emisor del proveedor y recibe un JWT RS256 de una hora, con `aud` y
+  `scope`. Aquí se aplica en sentido contrario: el proveedor es SinsaTools.
+* *`SEC-BS-01`:* ningún secreto fuera de Key Vault. Hay un precedente con SinsaTools
+  (`DEC-BS-14`, `ADR-BS-007`): identidad administrada si compartimos tenant, y secreto en Key
+  Vault si no.
+* *Para la reingesta en concreto no había nada decidido.* La pregunta 11 del mapeo y la
+  Petición 5 de la solicitud le dejaban a SinsaTools decir con qué credencial se llama.
+
+*Cómo queda en el contrato:*
+
+* *Service JWT RS256 con client credentials estándar* (RFC 6749 §4.4):
+** Un `POST` `application/x-www-form-urlencoded` al emisor que indique SinsaTools, con
+   `grant_type=client_credentials`, las credenciales del cliente y el scope.
+** La respuesta trae `access_token`, `token_type` y `expires_in`.
+** Nuestra API de ingesta usa el mismo patrón con un cuerpo JSON propio (`{clientId,
+   clientSecret}`). Para la suya se pide el formato estándar, que es el que habla cualquier
+   emisor, Entra ID incluido.
+* *El permiso es `scope: catalog:reingest`.* Con Entra ID, el portal pide
+  `<App ID URI de la API>/.default` y el permiso llega como rol de aplicación, en el claim
+  `roles`.
+* *El token dura lo que diga `expires_in`.* El portal lo cachea y lo renueva cuando le quedan
+  menos de 5 minutos, igual que se le pide al microservicio con la ingesta.
+* *El secreto del cliente va al Key Vault del portal.* Si la API de SinsaTools está registrada en
+  Entra ID en el mismo tenant que el portal, el portal usa su identidad administrada y no hay
+  secreto que guardar ni rotar. La pregunta se parece a la I-2 del plan de la Fase 8, pero no es
+  la misma: aquella pregunta por su cuenta de almacenamiento.
+* *Descartada:* una clave de API con lista de IP. No es un Service JWT (`REST-BS-07`). Una lista
+  de IP puede sumarse al token, pero no sustituirlo (ver <<coordinacion>>).
+
+== Qué consumimos de ellos
+
+[cols="2,3,1",options="header"]
+|===
+| Recurso | Uso | Frecuencia
+
+| `POST /v1/catalog/push-requests` | Pedir un empuje cuando un administrador pulsa «Sincronizar ahora» | A demanda; pocas veces al día
+| Su emisor de tokens | Obtener el Service JWT de `catalog:reingest` | Cuando caduca el anterior
+|===
+
+== Qué les exponemos
+
+[cols="2,3,1",options="header"]
+|===
+| Recurso | Quién lo consume | Frecuencia
+
+| `POST /v1/ingest/catalog`, `GET /v1/ingest/watermark` | El microservicio, para entregar el empuje pedido | Por cada orden aceptada
+|===
+
+*No hace falta ningún endpoint nuevo de nuestro lado.* La orden se entrega por la API de ingesta
+que ya existe (`ingest_catalog_v1.0.yaml`, 1.1.0).
+
+[[certezas]]
+== Lo que sabemos con certeza
+
+Todo lo siguiente está comprobado en el código el 2026-09-25:
+
+* *La API de ingesta acepta un lote `upsert` sin productos.* El validador solo rechaza que falte
+  el campo y pide `products: []` (`CatalogBatchValidator`), y una prueba unitaria valida un
+  `upsert` vacío. De punta a punta, una prueba de integración aplica un lote vacío, aunque en modo
+  `snapshot`.
+* *La API de ingesta guarda `X-Correlation-ID` con cada lote* (`ingest_batches.correlation_id`)
+  cuando es un UUID. Si el emisor no la envía, el Bridge genera una (`CorrelationIdMiddleware`).
+  Por eso «tiene correlación» no significa «pertenece a una orden»: un lote pertenece a una orden
+  si su correlación coincide con una orden registrada.
+* *En `upsert`, `sequence` e `isLast` se aceptan y se ignoran:* no se validan ni se guardan, como
+  dice el contrato de ingesta. Lo comprueba la misma prueba unitaria
+  (`Un_upsert_descarta_los_campos_de_foto_aunque_vengan`). SinsaTools puede empezar a enviarlos
+  sin romper nada; el Bridge los guardará cuando se implemente `T-BS-055`.
+* *La marca de agua es el mayor `generatedAt` de los lotes `completed` o `partial`.* Es la razón
+  de `DT-BS-13` (ver <<fallos>>).
+* *El contrato del panel ya tiene lo que hace falta.* `api_sync.yaml` 1.0.1 prevé el `202`, el
+  `409` y el `503`.
+* *El panel no apaga el botón.* No existe la bandera `features.triggerSync` que preveía
+  `T-BS-054`. El botón se muestra a quien tiene `config:write`, recibe hoy el `503` y enseña un
+  aviso de error genérico, sin leer `Retry-After`.
+
+== Lo que estamos suponiendo
+
+[cols="3,2,1",options="header"]
+|===
+| Supuesto | Impacto si es falso | Cómo verificarlo
+
+| El microservicio puede lanzar un empuje fuera de su calendario
+| No hay endpoint posible: «Sincronizar ahora» sigue sin funcionar
+| Que lo confirmen
+
+| Sabe si hay un empuje en curso hacia el portal y puede retrasar un ciclo programado
+| Sin G-5, dos empujes se solaparían
+| Que lo confirmen
+
+| Reenvía los lotes rechazados o fallidos de una orden, con el mismo `sequence`
+| Sin eso, una orden terminaría con cambios perdidos
+| Que lo confirmen
+
+| Puede enviar los lotes de una orden de uno en uno, numerados, con una cabecera propia
+| Sin G-2 ni G-4 no hay forma de unir los lotes a la orden, y toda orden acaba fallida por tiempo
+| Que lo confirmen
+
+| Calcula el `delta` con nuestra marca de agua (`GET /v1/ingest/watermark`)
+| Si usa su propio registro, un `delta` puede no traer lo que el administrador espera
+| Preguntarlo
+
+| Su emisor habla *client credentials* estándar, o usan Entra ID
+| Si su emisor tiene otro formato, el cliente del Bridge cambia
+| Que digan cuál
+|===
+
+[WARNING]
+====
+Estos supuestos quedan abiertos hasta la respuesta de SinsaTools. Están registrados como riesgo
+en `00_Estado_Actual.adoc`.
+====
+
+[[fallos]]
+== Comportamiento ante fallos
+
+[cols="2,2,3",options="header"]
+|===
+| Fallo de la contraparte | Cómo lo detectamos | Cómo respondemos
+
+| No responde, `5xx` o `503` sin `Retry-After`
+| 10 s sin respuesta, o el código
+| Un reintento con el mismo `requestId`. Si falla, `503 SYNC_UNAVAILABLE` al panel. La orden
+  queda «sin confirmar», por si el primer intento sí llegó: si en 30 minutos llega un lote con su
+  correlación, pasa a «en curso»; si no, a fallida
+
+| Acepta la orden y no empuja
+| 30 minutos sin lotes de la orden
+| La orden queda como fallida («sin respuesta del emisor») y se registra como aviso
+
+| Empuja sin `X-Correlation-ID`, o deja huecos en `sequence`
+| Lotes que llegan pero no cierran la orden
+| Los lotes se aplican igual, porque son válidos. La orden acaba fallida por tiempo y el registro
+  lo muestra
+
+| Un lote llega después de que su orden se diera por fallida (30 minutos)
+| La correlación de una orden cerrada
+| Se aplica, pero la orden sigue fallida
+
+| Rechaza con `400`, `403` o `422`
+| El código
+| Se registra como error: es un fallo de integración o de configuración, no del usuario
+|===
+
+[IMPORTANT]
+====
+*La reingesta no añade un modo de fallo nuevo, pero hereda uno de la ingesta:* `DT-BS-13`. La
+marca de agua avanza con el primer lote aplicado de un empuje `upsert`. Si un empuje de varios
+lotes muere a medias, el siguiente `delta` corta en ese punto y los lotes que faltaban no se
+vuelven a enviar hasta la próxima foto completa. Es una degradación silenciosa, y ya afecta a los
+ciclos programados.
+
+`T-BS-055` la cierra para las órdenes: la marca de agua no contará los lotes de una orden hasta
+que llegue su `isLast`. Para los ciclos programados hace falta que SinsaTools también los numere
+y correlacione (ver <<coordinacion>>).
+====
+
+== Límites y cuotas
+
+[cols="2,2,2",options="header"]
+|===
+| Límite | Valor | Qué pasa al superarlo
+
+| Órdenes `delta` | Proponemos aceptar al menos 1 cada 5 minutos | `429` con `Retry-After`. Las repeticiones de G-6 no cuentan
+| Órdenes `full` | Proponemos aceptar al menos 1 por hora | `429` con `Retry-After`
+| Tiempo de respuesta | Menos de 5 s: solo se registra la orden | El portal corta a los 10 s y reintenta una vez
+| Memoria de idempotencia | Al menos 24 h | Pasado ese plazo, un `requestId` repetido podría lanzar otro empuje. El portal nunca repite uno
+| Tamaño de los lotes | El de la ingesta: 200 productos y 10 MB | `413` (contrato de ingesta)
+|===
+
+Por nuestra parte, el panel deshabilita el botón mientras la última sincronización sigue en curso.
+
+== Lo que cambia de nuestro lado (`T-BS-055`)
+
+Nada de esto empieza hasta que SinsaTools publique el endpoint en su entorno de pruebas:
+
+* *Cliente HTTP en el Bridge,* con caché de token, 10 s de espera y los reintentos de la tabla de
+  respuestas. Su configuración va en `SinsaTools:Reingest:*`: URL, emisor, identificador del
+  cliente y scope. El secreto va a Key Vault.
+* *`POST /admin/sync`:*
+** Genera el `requestId` y registra la orden *antes* de llamar. Así, un lote rápido nunca llega
+   antes que su orden.
+** Traduce las respuestas según la tabla. Deja de responder siempre `503`.
+** Si la llamada terminó en `503` o sin respuesta, la orden queda «sin confirmar»: pasa a «en
+   curso» si en 30 minutos llega un lote con su correlación, y a fallida si no.
+* *Ingesta:*
+** Guardar `sequence` e `isLast` en `upsert` siempre que vengan. Hoy se descartan.
+** La orden se cierra cuando cada `sequence`, del 1 al `isLast`, tiene un lote `completed` o
+   `partial`.
+** La marca de agua no cuenta los lotes de una orden hasta ese cierre (`DT-BS-13`).
+** El contrato de ingesta pasa a 1.2.0 para decir todo esto. Es un cambio compatible.
+* *Registro de órdenes* para `GET /admin/sync/status` y `GET /admin/sync/logs/{syncId}`, con
+  `triggerType: manual`. `DEC-BS-27` fijaba `automatic` «mientras no exista reingesta manual».
+  La forma de guardarlas se decide en la tarea.
+* *Frontend:* nada obligatorio.
+** Conviene mostrar el `Retry-After` del `503`, que hoy no lee.
+** Conviene revisar el aviso de la foto completa («It may take up to 20 minutes»), que no
+   coincide con G-1.
+** En `api_sync.yaml` solo cambia la descripción del `503`.
+* *`REST-BS-06`* pasa a contar tres contratos bilaterales.
+
+[[coordinacion]]
+== Puntos de coordinación abiertos
+
+[cols="2,3,1",options="header"]
+|===
+| Tema | Qué hay que acordar | Estado
+
+| URL y entornos | La URL base de pruebas y la de producción | 🔴 Bloquea `T-BS-055`
+| Emisor y credencial | La URL de su emisor, que hable *client credentials* estándar, el cliente del portal y cómo nos entregan el secreto. O, con Entra ID y tenant común, el rol de aplicación para nuestra identidad administrada | 🔴 Bloquea `T-BS-055`
+| Garantías G-1 a G-8 | Que las confirmen, sobre todo el lote vacío, la numeración en `upsert` y el `409` | 🟠
+| Cálculo del `delta` | Si usan `GET /v1/ingest/watermark` para el corte | 🟠
+| Restricción por IP | Si quieren limitar por IP, necesitamos una IP de salida fija en Azure (NAT Gateway), que el plan de la Fase 8 hoy no incluye | 🟡
+| Plazos | Cuándo lo tendrían en su entorno de pruebas | 🟡
+| Ciclos programados | Numerar y correlacionar también sus empujes de varios lotes, para cerrar `DT-BS-13` fuera de las órdenes. Opcional | 🟡
+| Límites | Que confirmen los de la tabla o nos den los suyos | 🟢
+| Nombres | La ruta y los nombres son una propuesta. Lo que importa es el comportamiento, G-1 a G-8 | 🟢
+|===
+
+== Texto para enviar
+
+Va con el YAML adjunto, y sirve tanto si la solicitud sale en el mismo correo como si ya salió.
+
+[source,text]
+----
+Asunto: Portal de Videos — contrato propuesto para el endpoint de reingesta (petición 5)
+
+Hola,
+
+Sobre la petición 5 de nuestra solicitud, el endpoint para pedir una reingesta a demanda: para
+no dejaros el diseño a ciegas, os proponemos el contrato. Va adjunto en OpenAPI
+(reingest_catalog_v1.0.yaml); la descripción del propio archivo explica cómo funciona y lo que
+necesitamos que garantice.
+
+En corto:
+
+1. Un endpoint, POST /v1/catalog/push-requests, con un requestId que generamos nosotros y un
+   alcance: delta (los cambios desde nuestra marca de agua) o full (la foto completa).
+2. Solo registra la orden y responde 202. El empuje va después, por nuestra API de ingesta de
+   siempre: los lotes de uno en uno, con la cabecera X-Correlation-ID igual al requestId y
+   numerados con sequence e isLast. Si no hay cambios, un lote vacío.
+3. Si ya hay un empuje en curso, 409. Si repetimos el mismo requestId, 202 sin lanzar otro.
+4. La credencial: un Service JWT RS256 con client credentials estándar (RFC 6749), emitido por
+   vuestra parte, con scope catalog:reingest. Si vuestra API está en Entra ID en nuestro mismo
+   tenant, preferimos usar la identidad administrada de nuestro servicio y así no hay secreto.
+
+Lo que necesitamos de vosotros:
+
+- Que confirméis las garantías G-1 a G-8, sobre todo el lote vacío, la numeración en upsert y
+  el 409.
+- Si calculáis el delta con GET /v1/ingest/watermark.
+- La URL de pruebas y la de producción, y cómo pedimos el token y nuestro cliente.
+- Si limitáis por IP, y si los límites que proponemos os sirven.
+- Cuándo lo tendríais en vuestro entorno de pruebas.
+- Si podéis, que numeréis y correlacionéis igual los ciclos programados de varios lotes: así no
+  se pierden cambios cuando un empuje se corta a medias.
+
+La ruta y los nombres son una propuesta: si preferís otros, decídnoslo. Lo que nos importa es el
+comportamiento.
+
+No es urgente: hasta que esté, «Sincronizar ahora» responde que la sincronización no está
+disponible.
+
+Gracias,
+----
+
+== Historial de versiones
+
+[cols="1,1,3",options="header"]
+|===
+| Versión | Fecha | Cambios
+
+| 1.0 | 2026-09-25 | Primera emisión: contrato propuesto (`reingest_catalog_v1.0.yaml` 1.0.0), garantías G-1..G-8, credencial según `REST-BS-07`, `DT-BS-13` y lo que cambia de nuestro lado (`T-BS-055`). Revisado antes de emitir: orden de las comprobaciones, numeración de los lotes `upsert`, formato del token y avisos del panel
+|===
+
+include::{root}/_nav.adoc[]

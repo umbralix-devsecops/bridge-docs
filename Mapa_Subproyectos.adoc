@@ -1,7 +1,7 @@
 = Mapa de subproyectos y contrapartes
 :author: Equipo de Desarrollo
-:revnumber: 2.0
-:revdate: 2026-09-16
+:revnumber: 2.1
+:revdate: 2026-09-25
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -163,8 +163,9 @@ que es público.
   Con `isDataStale = true` el portal muestra su banner de advertencia.
 * Las acciones que aún no tienen servidor se apagan desde `public/config.json` mediante
   `features.*`, sin tocar código. Es el mecanismo con el que ya están apagadas `myVideos`,
-  `notifications` y `help`, y con el que se apaga `triggerSync` mientras `DEC-BS-07` siga
-  abierta.
+  `notifications` y `help`. *Corregido el 2026-09-25:* `triggerSync` no llegó a existir.
+  «Sincronizar ahora» se muestra y responde `503` mientras SinsaTools no exponga la reingesta
+  (`DEC-BS-07`).
 
 [NOTE]
 ====

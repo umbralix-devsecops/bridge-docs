@@ -72,7 +72,7 @@ root_documents:
   - path: Glosario_IDs.adoc
     title: Glosario de IDs
     status: vigente
-    version: "2.11"
+    version: "2.13"
   - path: Mapa_Subproyectos.adoc
     title: Mapa de subproyectos
     status: vigente
@@ -213,16 +213,32 @@ sections:
     documents:
       - path: 05_contratos_api/ingesta/ingest_catalog_v1.0.yaml
         status: vigente
-        version: "1.1.0"
+        version: "1.1.1"
         note: >
           1.1.0 (2026-09-21): aplicación síncrona (DEC-BS-21), INGEST_IN_PROGRESS, límites de
           tasa por IP, contenedores por configuración (DEC-BS-22). Cambios compatibles: el 202
-          se conserva; solo cambia el status que trae. El archivo conserva el sufijo _v1.0 del
-          nombre porque la ruta es la que citan los demás documentos.
+          se conserva; solo cambia el status que trae. 1.1.1 (2026-09-26): los nulos en la forma
+          de OpenAPI 3.1 —type con 'null' en vez de nullable, que la 3.1 no tiene, y null en el
+          enum de source—; sin cambio de comportamiento, y los 41 ejemplos validan. El archivo
+          conserva el sufijo _v1.0 del nombre porque la ruta es la que citan los demás documentos.
         counterpart: equipo de SinsaTools
         governed_by: [ADR-BS-006]
         implements: [RF-BS-12..17]
         provides: ["POST /v1/ingest/catalog", "GET /v1/ingest/{ingestId}", "GET /v1/ingest/watermark"]
+      - path: 05_contratos_api/reingesta/reingest_catalog_v1.0.yaml
+        status: propuesto
+        version: "1.0.0"
+        note: >
+          2026-09-25. Endpoint que implementa SinsaTools y llama el Bridge: POST
+          /v1/catalog/push-requests (delta o full, 202 o 409), con la entrega por la API de
+          ingesta y X-Correlation-ID igual al requestId en cada lote (G-1..G-8). Credencial:
+          Service JWT RS256 emitido por SinsaTools (REST-BS-07). Será el tercer contrato
+          bilateral (REST-BS-06) cuando lo acepten. Explicado en
+          12_integraciones_externas/sinsatools/reingesta_sinsatools_v1.0.adoc.
+        counterpart: equipo de SinsaTools
+        governed_by: [DEC-BS-07]
+        consumed_by: T-BS-055
+        provides: ["POST /v1/catalog/push-requests (en el microservicio de SinsaTools)"]
     planned:
       - bridge_service/especificacion_api_bridge_v1.0.adoc   # narrativa de las dos caras del servicio
 
@@ -293,20 +309,25 @@ sections:
     documents:
       - path: 10_estandares_procesos/estandares_codigo_v1.0.adoc
         status: vigente
-        version: "1.8"
+        version: "1.9"
         note: >
           EST-BS-00..27. 1.7 (2026-09-25): EST-BS-00, la regla sobre las reglas —las
           convenciones ceden con la justificación escrita en el sitio, las salvaguardas solo
           con una ADR, y a la tercera excepción igual la regla se enmienda—. 1.8 (mismo día,
           T-BS-096): EST-BS-19 (lo público en inglés), EST-BS-20 (tipo principal o archivo de
           datos; la comprueba SourceFileLayoutTests), EST-BS-22 (sin historia en los
-          comentarios) y CA1031 admitida en los bordes.
+          comentarios) y CA1031 admitida en los bordes. 1.9 (2026-09-26, T-BS-100): EST-BS-08
+          sin MediaAccess, que era código muerto (la regla está en Catalog/README.md), y su
+          «Cómo se comprueba» dice cómo resuelve la puerta las rutas de coverlet y que los
+          scripts vacían ./coverage.
       - path: 10_estandares_procesos/informe_calidad_bridge_2026-09-25.md
         status: vigente
-        version: "1.1"
+        version: "1.2"
         note: >
           Informe de SOLID, código limpio, patrones y resiliencia del 2026-09-25. Sus mejoras son
-          las tareas de 11_gestion_producto/plan_mejoras_calidad_resiliencia_v1.0.adoc.
+          las tareas de 11_gestion_producto/plan_mejoras_calidad_resiliencia_v1.0.adoc. 1.2
+          (2026-09-26): el estado de cada hallazgo tras los tres bloques, y la corrección sobre
+          la puerta de cobertura (T-BS-100).
     planned:
       - guia_onboarding_v1.0.adoc     # prioridad elevada: equipo de 1 persona
       - estandares_dod_v1.0.adoc
@@ -370,12 +391,12 @@ sections:
         note: "Fase 8 — despliegue en Azure. D8-01..08 por decidir (recomendado: Container Apps, Bicep, stg+prod, VNet con PostgreSQL privado, ingreso de ingesta aparte con IP de SinsaTools). T-BS-080..089. Datos de entrada I-1..I-6."
       - path: 11_gestion_producto/plan_mejoras_calidad_resiliencia_v1.0.adoc
         status: vigente
-        version: "1.2"
-        note: "Mejoras del informe de calidad del 2026-09-25. T-BS-090..099. Bloques A (T-BS-090..095) y B (T-BS-096) ejecutados el 2026-09-25 con D9-01 A+ y D9-02..04 A; desvíos V9-01..12. El A pasó verify.sh; el B está pendiente. Bloque C sin Go. Se ejecuta antes de la Fase 8 o intercalado."
+        version: "1.3"
+        note: "Mejoras del informe de calidad del 2026-09-25. T-BS-090..100. Bloques A (T-BS-090..095) y B (T-BS-096) ejecutados el 2026-09-25 con D9-01 A+ y D9-02..04 A; el C (T-BS-097..099), el 2026-09-26, después de corregir la puerta de cobertura (T-BS-100), que no estaba en el plan. Desvíos V9-01..16. Los tres bloques, pendientes de verify.sh con la puerta nueva y de los e2e. Se ejecuta antes de la Fase 8 o intercalado."
       - path: 11_gestion_producto/plan_tareas_bridge_v1.0.adoc
         status: vigente
-        version: "1.8"
-        note: "Fases 0 a 4 cerradas el 2026-09-21."
+        version: "1.9"
+        note: "Fases 0 a 4 cerradas el 2026-09-21. 1.9 (2026-09-25): T-BS-055, consumir la reingesta de SinsaTools."
       - path: 11_gestion_producto/verificacion_fase3_plan_vs_ejecucion_v1.0.adoc
         status: vigente
         version: "1.2"
@@ -413,6 +434,21 @@ sections:
       El Portal de Videos deja de ser integración externa (ADR-BS-005): el frontend y este
       servicio son el mismo sistema. La única contraparte externa es el microservicio de
       integraciones de SinsaTools.
+    documents:
+      - path: 12_integraciones_externas/sinsatools/mapeo_sinsatools_v1.1.adoc
+        status: vigente
+        note: Mapeo campo a campo del ER de SinsaTools contra el contrato de ingesta, con las preguntas abiertas al emisor.
+      - path: 12_integraciones_externas/sinsatools/solicitud_sinsatools_v1.0.adoc
+        status: vigente
+        version: "1.1"
+        note: Las cinco peticiones a SinsaTools para producción. 1.1 (2026-09-25) apunta la Petición 5 a su contrato.
+      - path: 12_integraciones_externas/sinsatools/reingesta_sinsatools_v1.0.adoc
+        status: propuesto
+        version: "1.0"
+        note: >
+          2026-09-25. Documento interno del contrato propuesto de la reingesta a demanda
+          (Petición 5, DEC-BS-07): garantías, credencial según REST-BS-07, supuestos, fallos y
+          T-BS-055. A SinsaTools se le envía solo el YAML, pendiente de salir.
     planned:
       - sinsatools/integracion_ingesta_sinsatools_v1.0.adoc
 
@@ -472,11 +508,6 @@ open_decisions:
     priority: low
     summary: Rotación del client_secret de ingesta sin ventana de indisponibilidad
     target: v1.2
-  - id: DEC-BS-07
-    priority: critical
-    summary: Qué hace POST /admin/sync sin una base que consultar
-    blocks: [RF-BS-20, panel de sincronización del portal]
-    note: "Mientras tanto se apaga con features.triggerSync: false en config.json."
   - id: DEC-BS-08
     priority: high
     summary: "webPlatformId y deviceType: ¿filtran contenido o son informativos?"
@@ -507,6 +538,13 @@ open_decisions:
       rotado, y el sistema expulsa a la víctima en vez de al ladrón.
 
 closed_decisions:
+  - id: DEC-BS-07
+    closed_at: "2026-09-17"
+    resolution: >
+      POST /admin/sync pide una reingesta al microservicio de SinsaTools. Mientras su endpoint
+      no exista, responde 503 (T-BS-054); el botón no se apaga, porque features.triggerSync
+      nunca se implementó. Contrato propuesto el 2026-09-25:
+      05_contratos_api/reingesta/reingest_catalog_v1.0.yaml, que consume T-BS-055.
   - id: DEC-BS-06
     closed_at: "2026-09-16"
     resolution: >
@@ -544,6 +582,20 @@ technical_debt:
   - id: DT-BS-08
     impact: medium
     summary: El proxy de streaming ocupa un hilo por transferencia, sin límite de tamaño
+  - id: DT-BS-13
+    impact: medium
+    opened_on: "2026-09-25"
+    summary: >
+      La marca de agua avanza con el primer lote aplicado de un empuje upsert: si un empuje de
+      varios lotes muere a medias, el siguiente delta corta ahí y los cambios que faltaban no
+      llegan hasta la próxima foto completa. T-BS-055 lo cierra para las órdenes de reingesta.
+  - id: DT-BS-14
+    impact: low
+    opened_on: "2026-09-26"
+    summary: >
+      R-9 del informe de calidad: ix_sessions_user no es único, así que dos logins simultáneos
+      del mismo usuario pueden dejar dos sesiones activas. No se actúa; se reabre si la
+      auditoría muestra dos sesiones activas de un mismo usuario.
   # Dados de baja, números quemados: DT-BS-01 (scaffolding manual),
   # DT-BS-03 (catálogo sin paginar), DT-BS-05 (validación de Files.FilePath).
 

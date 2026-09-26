@@ -1,8 +1,8 @@
 = Plan de mejoras — calidad y resiliencia del Bridge
 :author: Equipo de Desarrollo
-:revnumber: 1.2
-:revdate: 2026-09-25
-:revremark: Bloques A y B ejecutados el 2026-09-25 (D9-01 A+, D9-02 A, D9-03 A, D9-04 A). El A pasó verify.sh en Windows con MIG-BS-005 generada; el B está pendiente de verify.sh. El bloque C sigue sin «Go».
+:revnumber: 1.3
+:revdate: 2026-09-26
+:revremark: Los tres bloques ejecutados: A y B el 2026-09-25, C el 2026-09-26, y antes del C la puerta de cobertura corregida (T-BS-100). B y C quedan pendientes de verify.sh con la puerta nueva, y los e2e siguen pendientes desde el A. R-9 se registra como DT-BS-14.
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -159,8 +159,10 @@ sin «Go».
 
 | `Infrastructure` y las pruebas .NET
 | ✅
-| No se compilaron donde se escribieron, que no llega a nuget.org. `verify.sh` en Windows, en
-  verde el 2026-09-25: compila todo y ejecuta todas las pruebas.
+| No se compilaron donde se escribieron, que no llega a nuget.org. `verify.sh` en Windows el
+  2026-09-25: compila todo y, según lo informado, pasa las pruebas. *Corregido el 2026-09-26:*
+  con los informes de esa corrida la puerta de cobertura no podía pasar, porque descartaba todas
+  las clases, así que `verify.sh` se detuvo en ese paso. Ver `T-BS-100`.
 
 | `MIG-BS-005`
 | ✅
@@ -306,7 +308,175 @@ dos también en la opción recomendada.
 | En Windows
 | ⬜
 | `verify.sh`, que compila `Infrastructure` y ejecuta todas las pruebas, y `npm run verify`.
-  Los e2e no hacen falta: no cambia ningún comportamiento.
+  Los e2e no hacen falta: no cambia ningún comportamiento. La corrida del 2026-09-25 (11:10)
+  llegó hasta las pruebas, así que el formato, el build y la arquitectura pasaron; la puerta de
+  cobertura, no (`T-BS-100`).
+|===
+
+== Antes del bloque C: la puerta de cobertura (`T-BS-100`) — 2026-09-26
+
+[NOTE]
+====
+*Hallazgo al preparar el bloque C*, que se apoya en la puerta: el «hecho cuando» de `T-BS-099`
+es la cobertura del 100 % en las clases críticas de `EST-BS-08`. Se corrigió con el «Go» del C,
+antes de empezarlo.
+====
+
+.Lo que pasaba
+[cols="2,3",options="header"]
+|===
+| Problema | Evidencia
+
+| *Descartaba todas las clases.* Coverlet escribe cada `filename` relativo a una `<source>` del
+  informe (`BridgeService.Api\Program.cs`, bajo `…\Sin-PortalBridge\src\`), y la puerta solo
+  aceptaba rutas que contuvieran `/src/` o empezaran por `src/`.
+| La puerta de `HEAD`, ejecutada sobre los cuatro informes de la corrida del 2026-09-25 (11:10),
+  termina con «Los informes no contienen ninguna línea de src/» y código 2. Lo mismo con las otras
+  cinco corridas guardadas desde el 2026-09-23: en los 24 informes, la `<source>` es `…\src\` o
+  `…\src\BridgeService.Application\`, y ningún `filename` lleva `src`. `verify.sh` no podía
+  terminar en verde en Windows.
+
+| *Unía corridas viejas.* `verify.sh` y `verify.ps1` no vaciaban `./coverage`, y la puerta lee
+  todos los informes de la carpeta.
+| Había 24 informes de seis corridas desde el 2026-09-23. Quince citaban archivos que ya no
+  existen.
+
+| *Un mismo archivo tenía dos claves.* La `<source>` cambia de una suite a otra (`…\src\` en
+  unas, `…\src\BridgeService.Application\` en otras).
+| Sin resolver la ruta, una línea cubierta por una suite aparecía sin cubrir en otra.
+
+| *Una clase crítica estaba muerta.* Nadie llamaba a `MediaAccess.IsExceptionEffective`:
+  `MediaAccessQueries` escribe la misma regla dentro del SQL.
+| 0/1 en todas las corridas.
+|===
+
+.Lo que se hizo
+* *`tools/CoverageGate`:* cada `filename` se resuelve contra la `<source>` de su informe, la que
+  tiene el archivo o, si no, la primera, y con `/` como separador.
+* *`verify.sh` y `verify.ps1`* vacían `./coverage` antes de las pruebas. La CI empieza siempre
+  con la carpeta vacía.
+* *`MediaAccess` se borra* y sale de la lista de la puerta. La regla que documentaba pasa a
+  `BridgeService.Application/Catalog/README.md`, y los comentarios que la citaban apuntan allí.
+  `EST-BS-08` pasa a 1.9.
+
+.Verificación
+[cols="2,1,4",options="header"]
+|===
+| Qué | Estado | Nota
+
+| La puerta nueva, sobre los informes reales
+| ✅
+| Los cuatro de la corrida del 2026-09-25 (11:10): 94,0 % de líneas en `src/` y las nueve clases
+  críticas al 100 %. Coincide con una réplica independiente en Python.
+
+| La puerta de `HEAD`, sobre los mismos informes
+| ✅
+| Termina con código 2, como se esperaba.
+
+| `CoverageGate`
+| ✅
+| Compila sin avisos con las reglas del repositorio, y `dotnet format` no propone cambios.
+
+| En Windows
+| ⬜
+| `verify.sh` completo.
+|===
+
+== Ejecución del bloque C — 2026-09-26
+
+[NOTE]
+====
+*Decisión del 2026-09-26:* «Go» al bloque C, después de arreglar la puerta de cobertura
+(`T-BS-100`).
+====
+
+.Lo que se hizo
+[cols="1,5",options="header"]
+|===
+| Tarea | Resultado
+
+| `T-BS-097`
+| Los puertos de administración se parten en lectura y escritura: `IUserAdminReader` e
+  `IUserAdminStore`, `IGroupAdminReader` e `IGroupAdminStore`.
+
+  * Los controladores reciben el *Reader*.
+  * `UserAdminHandler`, `GroupAdminHandler` y `SetPasswordCommandHandler` reciben el *Store*.
+  * Una misma clase de `Infrastructure` implementa los dos, y cada uno se registra por separado,
+    como en la auditoría.
+  * Las pruebas solo cambian el tipo del doble.
+
+| `T-BS-098`
+| `Controllers/ControllerErrors.cs` construye los cuerpos de error: `this.Error(código, mensaje)`
+  y `this.ValidationFailed(...)`.
+
+  * Ningún controlador define ya su propio `Error`, `NoEncontrado` ni `Invalido`.
+  * Los que construían `ErrorResponse` a mano también pasan por aquí.
+  * Los cuerpos no cambian: el mismo código, el mismo mensaje y la misma correlación.
+
+| `T-BS-099`
+| `MediaStreamHandler.StreamAsync` baja de 80 a 35 líneas, medidas como en el informe, sin líneas
+  vacías ni comentarios. Se parte en `ReservarPlaza`, `AbrirAsync` y
+  `RegistrarReproduccionAsync`, más `RechazarAsync`. `Login`, `Logout`, `Refresh` y `Register`
+  pasan a constructor primario, con los mismos parámetros en el mismo orden.
+|===
+
+.Desvíos respecto de lo planeado
+[cols="1,1,5",options="header"]
+|===
+| # | Tarea | Desvío y motivo
+
+| V9-13
+| `T-BS-097`
+| *El Store incluye la lectura* (`IUserAdminStore : IUserAdminReader`). Los manejadores devuelven
+  el usuario o el grupo tal y como queda, y para eso leen. El objetivo, que los controladores no
+  vean las escrituras, se cumple igual.
+
+| V9-14
+| `T-BS-099`
+| *Cuatro métodos, no tres.* Con los tres del plan, `StreamAsync` se quedaba en 40 líneas. El
+  cuarto, `RechazarAsync`, reúne el `404` sin registro y el `403` con registro.
+
+| V9-15
+| `T-BS-098`
+| *Métodos de extensión, no una clase base.* No cambia la herencia de ningún controlador; a
+  cambio, las llamadas llevan `this.`.
+
+| V9-16
+| —
+| *El arreglo de la puerta (`T-BS-100`) no estaba en el plan.* Sin él, el «hecho cuando» de
+  `T-BS-099` no se podía comprobar.
+|===
+
+.Verificación
+[cols="2,1,4",options="header"]
+|===
+| Qué | Estado | Nota
+
+| `Application`
+| ✅
+| Compila sin avisos, y `dotnet format` no propone cambios.
+
+| `Api`
+| ✅
+| Compila en el arnés, y `dotnet format` no propone cambios.
+
+| `ArchitectureTests`
+| ✅ en parte
+| `SourceFileLayoutTests` y `MigrationChangelogTests` pasan en el arnés contra el árbol nuevo.
+
+| `Infrastructure` y las pruebas .NET
+| ⬜
+| Sin compilar aquí. `Infrastructure` solo cambia la declaración de dos clases, el registro de
+  dependencias y un comentario; las pruebas, el tipo de tres dobles.
+
+| Cobertura de `MediaStreamHandler`
+| ⬜
+| Los caminos no cambian. El `return` nuevo de `RegistrarReproduccionAsync` lo cubre la prueba
+  del salto (`MediaByteRange(500, 599)`). Lo confirma la puerta en `verify.sh`.
+
+| En Windows
+| ⬜
+| `verify.sh`, que ahora sí mide la cobertura, y los e2e, pendientes desde el bloque A.
 |===
 
 == Correcciones al informe
@@ -343,9 +513,9 @@ prevalecen sobre lo que dice el informe:
 
 == Decisiones
 
-Cinco decisiones, cada una con su recomendación. *Cuatro se tomaron el 2026-09-25 por la
-recomendación*: D9-01 en A+, y D9-02, D9-03 y D9-04 en A. D9-05 quedó en la práctica en su
-opción A, no en la B recomendada: los bloques A y B están hechos y el C sigue sin «Go».
+Cinco decisiones, cada una con su recomendación. *Las cinco terminaron en la recomendación.*
+D9-01 (A+) y D9-02, D9-03 y D9-04 (A) se tomaron el 2026-09-25. D9-05 acabó en la B, los tres
+bloques: A y B el 2026-09-25, y C el 2026-09-26, con su «Go».
 
 [cols="1,2,3,3",options="header"]
 |===
@@ -622,7 +792,8 @@ Cada punto lleva el disparador que lo reabriría.
 | —
 
 | Índice único de sesión activa (R-9)
-| La carrera exige dos logins del mismo usuario en el mismo milisegundo. Se registra como `DT-BS-13`.
+| La carrera exige dos logins del mismo usuario en el mismo milisegundo. Se registra como `DT-BS-14`.
+  _Hasta la 1.2 decía `DT-BS-13`, que nunca llegó al glosario y hoy es la marca de agua._
 | La auditoría muestra dos sesiones activas de un mismo usuario.
 
 | Ventana de gracia en el refresh (R-7)

@@ -1,7 +1,7 @@
 = Estado Actual — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 3.12
-:revdate: 2026-09-25
+:revnumber: 3.14
+:revdate: 2026-09-26
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -31,7 +31,7 @@ arquitectura, modelo de datos y contrato de ingesta cerrados y mutuamente cohere
 *Sin bloqueantes externos para arrancar:* el plan de primera entrega
 (`11_gestion_producto/plan_primera_entrega_v1.0.adoc`) está emitido y su camino crítico es
 interno. Lo único con plazo ajeno es el rol de lectura sobre el almacenamiento (`DEC-BS-15`),
-que condiciona la Entrega 2, no la 1. *Código: Fases 0 a 7 cerradas y en `main` (`8749715`, 298 pruebas, `verify.sh` y `e2e-entrega2.sh` en verde).* *Bloques A y B del plan de mejoras hechos el 2026-09-25* (`11_gestion_producto/plan_mejoras_calidad_resiliencia_v1.0.adoc`). El A (T-BS-090..095): cola de correo con reintentos y reserva, que cierra `DT-BS-11`; reenvío de la invitación; límites en login y registro por IP real; salud de dependencias en `Degraded`; tiempos de espera explícitos; cancelaciones del cliente como información. `MIG-BS-005` generada y `verify.sh` en verde. El B (T-BS-096): `estandares_codigo` 1.8 —`EST-BS-00`, `EST-BS-19`, `EST-BS-20` con su prueba de arquitectura, `EST-BS-22`, `CA1031` en los bordes—, entidades y puertos en un tipo por archivo, `DEC-BS-28` y `DEC-BS-29`. *El B está pendiente de `verify.sh`.* El bloque C espera decisión. *Contratos del portal:* `api_admin` y `api_auth` **1.2.0** (2026-09-25), `api_media` 1.1.0, `api_sync` 1.0.1; ninguna ruta del servicio queda fuera de un YAML. **Siguiente: Fase 8, despliegue en Azure** — `11_gestion_producto/plan_fase8_despliegue_azure_v1.0.adoc` (ocho decisiones por cerrar, T-BS-080..089) — y las cinco peticiones a SinsaTools en `12_integraciones_externas/sinsatools/solicitud_sinsatools_v1.0.adoc`, que deben salir ya. **La Entrega 1 está demostrada sin SinsaTools** (2026-09-23, `tools/e2e-entrega1.sh` en verde). La Entrega 2 —pre-flight, proxy con `Range`/`206`, cookie `pv_media`, caché privada, límite por usuario— corre en local contra Azurite; producción espera `DEC-BS-15`.
+que condiciona la Entrega 2, no la 1. *Código: Fases 0 a 7 cerradas y en `main` (`8749715`, 298 pruebas y `e2e-entrega2.sh` en verde).* *Los tres bloques del plan de mejoras, hechos: A y B el 2026-09-25, C el 2026-09-26* (`11_gestion_producto/plan_mejoras_calidad_resiliencia_v1.0.adoc`). El A (T-BS-090..095): cola de correo con reintentos y reserva, que cierra `DT-BS-11`; reenvío de la invitación; límites en login y registro por IP real; salud de dependencias en `Degraded`; tiempos de espera explícitos; cancelaciones del cliente como información. `MIG-BS-005` generada. El B (T-BS-096): `estandares_codigo` 1.8 —`EST-BS-00`, `EST-BS-19`, `EST-BS-20` con su prueba de arquitectura, `EST-BS-22`, `CA1031` en los bordes—, entidades y puertos en un tipo por archivo, `DEC-BS-28` y `DEC-BS-29`. El C (T-BS-097..099): puertos de administración partidos en lectura y escritura, una sola fábrica de errores en los controladores, `StreamAsync` de 80 a 35 líneas y constructores primarios. *Antes del C se corrigió la puerta de cobertura* (`T-BS-100`): descartaba todas las clases, así que `verify.sh` no podía terminar en verde con ninguna de las seis corridas guardadas desde el 2026-09-23. Corregida, da 94,0 % y las nueve clases críticas al 100 % (`estandares_codigo` 1.9, sin `MediaAccess`, que era código muerto). *Falta `verify.sh` con la puerta nueva, que cubre los tres bloques, y los e2e.* R-9 del informe queda registrada como `DT-BS-14`. *Contratos del portal:* `api_admin` y `api_auth` **1.2.0** (2026-09-25), `api_media` 1.1.0, `api_sync` 1.0.1; ninguna ruta del servicio queda fuera de un YAML. **Siguiente: Fase 8, despliegue en Azure** — `11_gestion_producto/plan_fase8_despliegue_azure_v1.0.adoc` (ocho decisiones por cerrar, T-BS-080..089) — y las cinco peticiones a SinsaTools en `12_integraciones_externas/sinsatools/solicitud_sinsatools_v1.0.adoc`, que deben salir ya. La quinta, la reingesta, tiene contrato propuesto desde el 2026-09-25 (`reingesta_sinsatools_v1.0.adoc`, `T-BS-055` para consumirlo). **La Entrega 1 está demostrada sin SinsaTools** (2026-09-23, `tools/e2e-entrega1.sh` en verde). La Entrega 2 —pre-flight, proxy con `Range`/`206`, cookie `pv_media`, caché privada, límite por usuario— corre en local contra Azurite; producción espera `DEC-BS-15`.
 
 == Semáforo por sección
 
@@ -43,14 +43,14 @@ que condiciona la Entrega 2, no la 1. *Código: Fases 0 a 7 cerradas y en `main`
 | 02 | Casos de uso | ⬜ Pendiente | `CU-BS-001..010` listados en los requerimientos, sin desarrollar. Siguiente en la ruta documental
 | 03 | Diseño | ⬜ Pendiente | C4 y diagramas de estado de la ingesta. El diseño de interfaz vive en el frontend
 | 04 | Arquitectura técnica | ✅ Completa | `arquitectura_tecnica_bridge_service_v2.3.adoc` vigente · `DOM-BS-05` reescrita: el identificador viaja en el nombre de la migración · v1.0 y v1.1 en `_historico/` · modelo de datos v2 verificado
-| 05 | Contratos API | 🟡 Parcial | `ingesta/ingest_catalog_v1.0.yaml` en **1.1.0** (síncrono, `INGEST_IN_PROGRESS`, límites por IP; hay que enviársela a SinsaTools). Los seis `api_*.yaml` del portal viven en `Sin-PortalVideos/openapi/sources/`; los `bridge_*.yaml` quedan superados
+| 05 | Contratos API | 🟡 Parcial | `ingesta/ingest_catalog_v1.0.yaml` en **1.1.1** (síncrono, `INGEST_IN_PROGRESS`, límites por IP; la 1.1.1 solo escribe los nulos como pide OpenAPI 3.1; hay que enviársela a SinsaTools). Los seis `api_*.yaml` del portal viven en `Sin-PortalVideos/openapi/sources/`; los `bridge_*.yaml` quedan superados · `reingesta/reingest_catalog_v1.0.yaml` 1.0.0 *propuesto*: lo implementa SinsaTools y lo llama el Bridge (`DEC-BS-07`)
 | 06 | Seguridad y autorización | ⬜ Pendiente | `SEC-BS-01..12` definidas dentro de 04 y de `ADR-BS-007`; falta el documento propio
 | 07 | Guías de implementación | ⬜ Pendiente | Ingesta, proxy de streaming y evaluación de acceso
 | 08 | Testing | ⬜ Pendiente |
 | 09 | Infraestructura y despliegue | ⬜ Pendiente | *Ya no bloqueada:* no hay conectividad corporativa que resolver
-| 10 | Estándares y procesos | 🟡 Parcial | `estandares_codigo_v1.0.adoc` en 1.8 (`EST-BS-00..27`; `EST-BS-00`, cuándo y cómo cede una regla, desde el 2026-09-25). Faltan DoD y DoR
+| 10 | Estándares y procesos | 🟡 Parcial | `estandares_codigo_v1.0.adoc` en 1.9 (`EST-BS-00..27`; `EST-BS-00`, cuándo y cómo cede una regla, desde el 2026-09-25; la 1.9 corrige cómo se comprueba `EST-BS-08`). Faltan DoD y DoR · `informe_calidad_bridge_2026-09-25.md` 1.2, con el estado de cada hallazgo
 | 11 | Gestión de producto | ✅ Completa | 9 ADR (uno descartado) + plan de primera entrega + plan de tareas `T-BS-001..063`
-| 12 | Integraciones externas | 🟡 Parcial | `sinsatools/mapeo_sinsatools_v1.1.adoc` emitido: mapeo campo a campo del ER contra el contrato, con 9 preguntas abiertas al emisor
+| 12 | Integraciones externas | 🟡 Parcial | `sinsatools/mapeo_sinsatools_v1.1.adoc` emitido: mapeo campo a campo del ER contra el contrato, con 9 preguntas abiertas al emisor · `solicitud_sinsatools_v1.0.adoc` 1.1, con las cinco peticiones · `reingesta_sinsatools_v1.0.adoc`, contrato propuesto de la reingesta: documento interno; a SinsaTools se le envía el YAML, pendiente de salir
 |===
 
 == Qué cambió en esta actualización
@@ -302,8 +302,11 @@ Recuperarla es una acción abierta.
 *`DEC-BS-07` cambia de naturaleza al cerrarse.* Deja de ser una decisión nuestra y pasa a ser
 una dependencia externa: el botón no funciona hasta que SinsaTools exponga un endpoint de
 reingesta, que no existe ni está pedido. Se añade como tercera petición a su equipo. Mientras
-tanto, `POST /admin/sync` responde `503` con un mensaje explícito y el frontend apaga el botón
-por configuración (`T-BS-054`). Es un estado transitorio declarado, no un olvido.
+tanto, `POST /admin/sync` responde `503` con un mensaje explícito (`T-BS-054`). Es un estado
+transitorio declarado, no un olvido. *Corregido el 2026-09-25:* el frontend no apaga el botón.
+La bandera `features.triggerSync` nunca se implementó; el botón se muestra a quien tiene
+`config:write` y recibe el `503`. El contrato propuesto de la reingesta y `T-BS-055`, que lo
+consume, están en `12_integraciones_externas/sinsatools/reingesta_sinsatools_v1.0.adoc`.
 ====
 
 == Decisiones abiertas
@@ -354,6 +357,8 @@ problema desapareció. Sus números quedan quemados.
 | DT-BS-06 | El changelog del modelo depende de un gate humano | Medio
 | DT-BS-07 | 🆕 El `sizeBytes` obtenido por `HEAD` no se revalida | Bajo
 | DT-BS-08 | El proxy de streaming ocupa un hilo por transferencia, sin límite de tamaño. *Mitigada el 2026-09-24 (D7-02):* copia directa sin bufferizar y tres transferencias de vídeo simultáneas por usuario (`429`). Queda: el límite es por instancia | Bajo
+| DT-BS-13 | 🆕 La marca de agua avanza con el primer lote aplicado de un empuje `upsert`. Si un empuje de varios lotes muere a medias, el siguiente `delta` corta ahí y los cambios que faltaban no llegan hasta la próxima foto completa. `T-BS-055` lo cierra para las órdenes de reingesta; para los ciclos programados hace falta que SinsaTools numere y correlacione sus lotes | Medio
+| DT-BS-14 | 🆕 R-9 del informe de calidad. `ix_sessions_user` no es único, así que dos logins simultáneos del mismo usuario pueden dejar dos sesiones activas, contra `RF-02`. No se actúa: se reabre si la auditoría muestra dos sesiones activas de un mismo usuario | Bajo
 |===
 
 Dadas de baja: `DT-BS-01`, `DT-BS-03`, `DT-BS-05`.
@@ -437,6 +442,16 @@ Dadas de baja: `DT-BS-01`, `DT-BS-03`, `DT-BS-05`.
 | Con un solo servicio no hay aislamiento entre la ingesta y el portal.
 | *Deployment slots* de App Service con intercambio, para validar el arranque antes de recibir
   tráfico.
+
+| *La reingesta descansa en supuestos sobre el microservicio*
+| El contrato propuesto (`reingesta_sinsatools_v1.0.adoc`) supone que el microservicio puede:
+  empujar fuera de su calendario; saber si hay un empuje en curso y retrasar un ciclo programado;
+  enviar los lotes de una orden de uno en uno, numerados y con la cabecera `X-Correlation-ID`, y
+  reenviar los rechazados; calcular el `delta` con nuestra marca de agua. Supone también que su
+  emisor habla *client credentials* estándar. Si alguno falla, las órdenes acaban fallidas por
+  tiempo aunque los lotes se apliquen.
+| Enviar el contrato y confirmar los supuestos antes de empezar `T-BS-055`. Mientras tanto, el
+  `503` de `T-BS-054` sigue siendo la respuesta correcta.
 |===
 
 [IMPORTANT]
@@ -504,7 +519,7 @@ el umbral de cobertura, que hoy solo recoge.
 
 [IMPORTANT]
 ====
-*Fase 7 cerrada el 2026-09-24 — Entrega 2, el proxy de streaming.* 298 pruebas en verde; `tools/e2e-entrega2.sh` 4/4 contra el servicio real con Azurite; `verify.sh` en verde; en `main`.
+*Fase 7 cerrada el 2026-09-24 — Entrega 2, el proxy de streaming.* 298 pruebas en verde; `tools/e2e-entrega2.sh` 4/4 contra el servicio real con Azurite; `verify.sh` en verde según se informó —*corregido el 2026-09-26:* la puerta de cobertura no podía pasar con ninguno de los informes guardados (`T-BS-100`)—; en `main`.
 `GET /media/{id}/access` (`204`/`403`/`404`, sin cuerpo: manda el frontend, V7-01),
 `GET /media/{id}/stream` (cookie `pv_media` o *bearer*; `Range` → `206` + `Content-Range`;
 `416`; `304`; `Cache-Control: private` + `ETag`; `429` a la cuarta transferencia de vídeo por
@@ -535,7 +550,8 @@ V7-01..12). Lo que hay que conocer:
 *Fase 6 cerrada el 2026-09-23 — simulador y aceptación. Entrega 1 demostrada.* `tools/IngestSimulator` (extractor que
 ejecuta `fixtures.ts`, emisor en lotes `snapshot` con verificación de recuentos, foto incompleta,
 cuentas del mock y grupo demo), `tools/CoverageGate` (80 % global, 100 % por clase, compartida
-por `verify.sh`, `verify.ps1` y la CI), `tools/e2e-entrega1.sh` y la suite Playwright
+por `verify.sh`, `verify.ps1` y la CI. *Corregido el 2026-09-26:* no llegó a medir nada con ningún
+informe guardado, porque descartaba todas las clases; `T-BS-100`), `tools/e2e-entrega1.sh` y la suite Playwright
 `bridge-acceptance.e2e.ts` en el frontend.
 
 Registro: `11_gestion_producto/verificacion_fase6_plan_vs_ejecucion_v1.0.adoc` (V6-01..09). Lo

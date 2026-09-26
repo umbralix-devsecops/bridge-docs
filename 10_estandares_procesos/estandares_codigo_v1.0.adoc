@@ -1,8 +1,8 @@
 = Estándares de código — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 1.8
-:revdate: 2026-09-25
-:revremark: T-BS-096 (D9-01 A+). EST-BS-19: lo público en inglés y lo privado libre. EST-BS-20: un tipo principal y los tipos de datos de su firma, o un archivo de datos; lo comprueba SourceFileLayoutTests. EST-BS-22: sin historia en los comentarios. CA1031 admitida en los bordes. 1.7: EST-BS-00.
+:revnumber: 1.9
+:revdate: 2026-09-26
+:revremark: T-BS-100: EST-BS-08 sin MediaAccess, que nadie usaba, y la puerta de cobertura lee las rutas de coverlet y solo la última corrida. 1.8, T-BS-096 (D9-01 A+). EST-BS-19: lo público en inglés y lo privado libre. EST-BS-20: un tipo principal y los tipos de datos de su firma, o un archivo de datos; lo comprueba SourceFileLayoutTests. EST-BS-22: sin historia en los comentarios. CA1031 admitida en los bordes. 1.7: EST-BS-00.
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -224,9 +224,9 @@ Estas no son negociables: cada una proviene de una `SEC-BS` ya vigente.
   `PermissionResolver`, clases de diseño que el código nunca tuvo.)* Las clases críticas, por
   función:
 
-  * *Acceso a un medio:* `Application.Catalog.MediaAccess`,
-    `Infrastructure.Persistence.Catalog.MediaAccessQueries` y `MediaAccessReader`,
-    `Application.Media.MediaAccessHandler` y `MediaStreamHandler`.
+  * *Acceso a un medio:* `Infrastructure.Persistence.Catalog.MediaAccessQueries` y
+    `MediaAccessReader`, `Application.Media.MediaAccessHandler` y `MediaStreamHandler`. La regla
+    que aplican está escrita en `BridgeService.Application/Catalog/README.md`.
   * *Sesión:* `Application.Identity.LoginCommandHandler`, `RefreshCommandHandler`,
     `LogoutCommandHandler` y `MediaCookieSigner`.
   * *Permisos:* `Application.Identity.PermissionMap`.
@@ -234,8 +234,10 @@ Estas no son negociables: cada una proviene de una `SEC-BS` ya vigente.
   La lista vigente es la de `tools/CoverageGate/Program.cs`; una clase que desaparece o se
   renombra hace fallar la puerta, así que esta tabla y el código no pueden divergir sin que se
   note.
-| `tools/CoverageGate` en `verify.sh`, `verify.ps1` y la CI: une los informes Cobertura de las
-  cinco suites línea a línea y tumba el build
+| `tools/CoverageGate` en `verify.sh`, `verify.ps1` y la CI: une línea a línea los informes
+  Cobertura de las cuatro suites y tumba el build. Cada ruta se resuelve contra la `<source>` de
+  su informe, y los scripts vacían `./coverage` antes de las pruebas para que solo cuente la
+  corrida actual
 
 | `EST-BS-09`
 | Las pruebas de integración usan *PostgreSQL real con Testcontainers*. **Prohibido
