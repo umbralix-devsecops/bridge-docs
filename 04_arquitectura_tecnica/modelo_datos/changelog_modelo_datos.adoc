@@ -1,8 +1,8 @@
 = Historial de cambios del modelo de datos — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 2.8
-:revdate: 2026-09-25
-:revremark: MIG-BS-005 (NotificationRetries, sello 20260925133116): reintentos y reserva de la cola de notificaciones (T-BS-090, cierra DT-BS-11). Cuatro columnas y un índice parcial en notification_log; ER 2.2. SchemaParityTests en verde con 18 / 14 / 59.
+:revnumber: 2.9
+:revdate: 2026-10-19
+:revremark: MIG-BS-006 (PortalSettingsAndRoleFlags, sello 20261001035552): tabla portal_settings de fila única y tres columnas de roles con índice único parcial (T-BS-102, DEC-BS-30, DEC-BS-31); ER 2.3. Entrada escrita el 2026-09-28, migración generada el 2026-10-01 y verificada el 2026-10-19: SchemaParityTests en verde con 19 / 14 / 61. Tabla de bloques puesta al día con account_setup_tokens y portal_settings.
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -62,7 +62,9 @@ que en el portal serían destructivas aquí son recuperables»_. Eso era cierto 
 esquema contenía solo un caché de lectura.
 
 Con xref:{root}/11_gestion_producto/adr/adr-bs-005_servicio_unico.adoc[ADR-BS-005], esta base
-es *la única del sistema*, y de sus diecisiete tablas **solo tres se reconstruyen**:
+es *la única del sistema*, y de sus diecinueve tablas (diecisiete al escribirse este aviso;
+`account_setup_tokens` desde `MIG-BS-003` y `portal_settings` desde `MIG-BS-006`) **solo tres
+se reconstruyen**:
 
 [cols="1,2,3",options="header"]
 !===
@@ -72,10 +74,12 @@ es *la única del sistema*, y de sus diecisiete tablas **solo tres se reconstruy
 ! `catalog_products`, `catalog_versions`, `catalog_media`
 ! 🔄 Se recuperan pidiendo una foto completa a SinsaTools.
 
-! Identidad y permisos
-! `roles`, `role_permissions`, `users`, `sessions`, `groups`, `user_groups`,
-  `group_version_access`, `user_media_exceptions`
+! Identidad, permisos y ajustes
+! `roles`, `role_permissions`, `users`, `sessions`, `account_setup_tokens`, `groups`,
+  `user_groups`, `group_version_access`, `user_media_exceptions`, `portal_settings`
 ! ❌ *No se reconstruyen desde ningún sitio.* Solo se sale restaurando copia de seguridad.
+  (`portal_settings` renace con la semilla, pero con los valores de fábrica, no con los que
+  alguien había elegido.)
 
 ! Ingesta y auditoría
 ! `ingest_batches`, `ingest_items`, `ext_api_request_log`, `video_access_log`,
@@ -83,7 +87,7 @@ es *la única del sistema*, y de sus diecisiete tablas **solo tres se reconstruy
 ! ❌ Irrecuperables. Son el historial: nadie los vuelve a generar.
 !===
 
-*Una migración que toque las catorce tablas de los dos últimos bloques es irreversible sin
+*Una migración que toque las dieciséis tablas de los dos últimos bloques es irreversible sin
 backup.* La política de copias de seguridad dejó de ser opcional.
 ====
 
@@ -528,6 +532,84 @@ con `status = 'queued'`. El `Down` borra el índice y las cuatro columnas.
 `schema_derivado_v2.sql` se regeneró con `tools/regenerar_ddl_derivado.sh`. Verificado el
 2026-09-25: `verify.sh` en verde, con `SchemaParityTests` en 18 / 14 / 59.
 
+=== MIG-BS-006 — PortalSettingsAndRoleFlags
+
+[cols="1,3"]
+|===
+| *Migración EF* | `MIG_BS_006_PortalSettingsAndRoleFlags`
+| *Contexto* | `AppDbContext`
+| *Fecha* | 2026-10-01 (sello `20261001035552`); modelo, semilla y pruebas escritos el 2026-09-28
+| *Versión del ER* | `modelo_datos_bridge_v2.mermaid` **2.3** (revisión aditiva; V5-12)
+| *Reversibilidad* | ✅ Total (`Down` borra el índice, las tres columnas y la tabla; se pierden los ajustes guardados y las marcas de los roles)
+| *Impacto en datos* | Ninguno sobre filas existentes: tabla nueva con una fila de semilla, tres columnas con valor por omisión constante y dos `UPDATE` de una fila en `roles`
+| *Ventana* | No. En PostgreSQL 16, `ADD COLUMN … DEFAULT <constante>` no reescribe la tabla, y `roles` tiene cuatro filas
+| *Motivada por* | `T-BS-102` · `DEC-BS-30` · `DEC-BS-31` · `D10-03` · `D10-05` · `P9-3`
+|===
+
+*Qué hace:*
+
+* `portal_settings` — los ajustes del portal como *una* fila (`DEC-BS-30`, `D10-03`): `id smallint`
+  PK con `CHECK (id = 1)` (`ck_portal_settings_singleton`), `document jsonb NOT NULL`,
+  `version integer NOT NULL DEFAULT 1`, `updated_at timestamptz NULL` y `updated_by uuid NULL`
+  (FK `users`, `ON DELETE SET NULL`). Los dos últimos quedan nulos hasta el primer guardado,
+  que es lo que promete el contrato (`api_admin.yaml` 1.3.0). **Sin índice por `updated_by`**:
+  la convención del contexto no crea índices de clave foránea (`DT-BS-10`) y nadie consulta
+  por quién guardó. El documento lleva `schemaVersion`, `users` (`selfRegistrationEnabled`,
+  `allowedEmailDomains`, `defaultGroupId`, `minPasswordLength`) y `sync`
+  (`staleThresholdMinutes`): *solo lo que el Bridge aplica*. El bloque `deployment` del
+  contrato no se guarda: se lee de la configuración en cada `GET` (`D10-08`).
+* `roles.is_system boolean NOT NULL DEFAULT false` — `true` solo en `administrator`: su matriz
+  no se edita (`DEC-BS-31`). `roles.is_default boolean NOT NULL DEFAULT false` — el rol de las
+  cuentas nuevas; sustituye a `RegisterCommandHandler.RolInicial` en `T-BS-106`.
+  `roles.version integer NOT NULL DEFAULT 1` — concurrencia optimista de
+  `PATCH /admin/roles/{roleId}`.
+* `ux_roles_default` — `UNIQUE (is_default) WHERE is_default`: como mucho una fila puede ser
+  el rol por omisión. Mismo mecanismo que `ux_snapshot_close`.
+* `006_portal_settings.up.sql` (`DOM-BS-07`, `EST-BS-25`): la fila `1` con los valores que el
+  sistema ya aplicaba antes de que fueran ajustes (`P9-3`: registro abierto, sin límite de
+  dominios, contraseña de 8, sin grupo por omisión, 1440 minutos), con `ON CONFLICT DO
+  NOTHING`; `administrator.is_system = true` y `viewer.is_default = true`. Idempotente. A
+  diferencia de `MIG-BS-004`, `003_seed_roles.sql` **no cambia**: cuando corre, en
+  `MIG-BS-001`, las columnas todavía no existen. Esta migración es la única vía, tanto para
+  una base nueva como para una que ya existía.
+
+*Por qué:* la pantalla de ajustes vivía en el mock del frontend con sesenta y cuatro campos de
+los que el Bridge solo puede aplicar cinco (`plan_fase9_ajustes_y_roles_v1.0`). Guardarlos como
+un documento y no como columnas evita una migración por cada ajuste que se añada o retire, y
+`version` da al `PUT` la concurrencia optimista que el contrato exige (`409
+SETTINGS_VERSION_CONFLICT`). En los roles, la matriz pasa a editarse desde el portal, y para
+eso hay que saber cuál no se toca y cuál reciben las cuentas nuevas; hasta aquí lo segundo era
+una constante del código.
+
+*Al revertir se pierde:* el documento de ajustes —el código anterior no lo lee: usa
+`Sync:StaleThresholdMinutes` de `appsettings` y las reglas fijas (registro abierto, sin filtro
+de dominio, contraseña de 8)— y las marcas y versiones de los roles. Las matrices editadas
+*no* se pierden: viven en `role_permissions`, que no cambia, y el código anterior las lee en el
+login como siempre. *El código anterior funciona sobre el esquema nuevo*: no nombra la tabla ni
+las columnas, y las columnas tienen valor por omisión. Revertir una versión del servicio no
+obliga a revertir la migración.
+
+*Recuentos esperados:* 19 tablas (+1), 14 enums (=), 61 índices (+2: `pk_portal_settings` y
+`ux_roles_default`), 24 permisos (=). `SchemaParityTests` ya los espera, y una prueba nueva
+(`La_semilla_deja_las_marcas_de_los_roles_y_la_fila_de_ajustes`) comprueba que la semilla deja
+exactamente un `is_system`, un `is_default` y la fila `1` con `version = 1` y `updated_by` nulo.
+
+*Notas de despliegue:* el cambio del modelo se escribió en un entorno sin `dotnet ef`, como los
+de `MIG-BS-001` y `MIG-BS-005`. La migración se generó el 2026-10-01 con
+`dotnet ef migrations add MIG_BS_006_PortalSettingsAndRoleFlags` y después se **añadió a mano,
+al final de `Up`**, `EmbeddedSql.Execute(migrationBuilder, "006_portal_settings.up.sql");` —el
+generador no sabe de la semilla, y va al final porque la semilla necesita la tabla y las
+columnas—. Leída operación a operación (H4-05): trae **tres `AddColumn` sobre `roles`
+(`is_default` y `is_system` con `defaultValue: false`, `version` con `defaultValue: 1`), un
+`CreateTable` de `portal_settings` con `pk_portal_settings`, `ck_portal_settings_singleton` y
+`fk_portal_settings_users_updated_by` con `SetNull`, y un `CreateIndex` único
+`ux_roles_default` con filtro `is_default`**; nada más, y ningún índice por la clave foránea.
+El `Down`: un `DropTable`, un `DropIndex` y tres `DropColumn` (leído, no ejecutado).
+`schema_derivado_v2.sql` se regeneró con `tools/regenerar_ddl_derivado.sh`: su diferencia es
+exactamente la tabla, las tres columnas, la clave primaria, el índice y la clave foránea.
+Verificado el 2026-10-19: `verify.sh` en verde (340 pruebas, cobertura 94,5 %, las nueve clases
+críticas al 100 %), con `SchemaParityTests` en 19 / 14 / 61 y la prueba de la semilla.
+
 == Versiones del modelo ER
 
 NOTE: Regla de numeración (DOM-BS-06, V5-12): *revisión* `x.y` para cambios aditivos y
@@ -565,6 +647,15 @@ de solo datos o solo índices no cambia ninguno de los dos.
 | `modelo_datos_bridge_v2.mermaid` (mismo archivo, cabecera 2.2)
 | Revisión aditiva por `MIG-BS-005`: cuatro columnas de `notification_log` para los reintentos
   y la reserva del drenador (`T-BS-090`). Ninguna relación ni columna existente cambia.
+| ✅ Vigente
+
+| v2.3
+| `modelo_datos_bridge_v2.mermaid` (mismo archivo, cabecera 2.3)
+| Revisión aditiva por `MIG-BS-006`: `portal_settings` (fila única, documento `jsonb`,
+  `version`; relación opcional con `users` por `updated_by`) y `roles.is_system`,
+  `is_default`, `version` con `ux_roles_default` (`T-BS-102`, `DEC-BS-30`, `DEC-BS-31`). El
+  bloque 2 pasa a llamarse «Identidad, permisos y ajustes». Ninguna relación ni columna
+  existente cambia.
 | ✅ Vigente
 |===
 

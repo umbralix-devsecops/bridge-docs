@@ -1,7 +1,7 @@
 = Glosario de IDs y trazabilidad — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 2.13
-:revdate: 2026-09-26
+:revnumber: 2.14
+:revdate: 2026-09-28
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -190,7 +190,7 @@ Cada eslabón debe poder recorrerse en ambos sentidos:
 
 | DEC-BS-03 | Ratificar la política de purga: 90 días, los fallos un año | 🟡
 | DEC-BS-05 | Rotación del `client_secret` de ingesta sin indisponibilidad. *Acotada el 2026-09-21 por `DEC-BS-20`:* la configuración guarda un solo resumen, así que rotar deja al emisor sin poder pedir token nuevo hasta que recoja el secreto. Su token vigente sigue valiendo hasta una hora, lo que da margen pero no lo elimina. La solución barata ya está identificada —admitir un segundo resumen, `ClientSecretHashPrevious`, durante el solape— y se implementa cuando se cierre esta decisión | 🟢
-| DEC-BS-09 | 🆕 Intervalo esperado de ingesta | 🟠
+| DEC-BS-09 | 🆕 Intervalo esperado de ingesta. *2026-09-28:* el umbral de `isDataStale` deja de depender de ella: desde la Fase 9 es un ajuste (`sync.staleThresholdMinutes`, `DEC-BS-30`); `nextScheduledSync` sigue esperándola | 🟠
 | DEC-BS-15 | 🆕 Qué credencial concede SinsaTools: rol `Storage Blob Data Reader` o cadena de conexión | 🔴 *Plazo ajeno*
 | DEC-BS-16 | 🆕 ¿Contenedor propio del portal o el mismo que usa SinsaTools? Determina el alcance del rol | 🟡
 | DEC-BS-17 | 🆕 Reabrir la opción D2 (redirect con *user delegation SAS*) si el proxy se estrecha | 🟢
@@ -202,6 +202,9 @@ Cada eslabón debe poder recorrerse en ambos sentidos:
 |===
 | ID | Resolución
 
+| DEC-BS-30 | *Cerrada el 2026-09-28 (D10-02 y D10-03 del plan de la Fase 9, opción A).* **Los ajustes del portal viven en el Bridge, en `portal_settings`: una fila con el documento en jsonb y `version` para la concurrencia.** Solo se guarda lo que el sistema aplica —autorregistro abierto o cerrado, dominios de correo admitidos, grupo por omisión al aprobar, longitud mínima de contraseña y umbral de datos desactualizados—; lo demás de la pantalla «Settings» se retira o se muestra de solo lectura desde la configuración de despliegue (marca, idioma, SMTP, duración de sesión). `api_admin` 1.3.0, `MIG-BS-006`, `T-BS-101..108`
+| DEC-BS-31 | *Cerrada el 2026-09-28 (D10-05, opción A).* **Los cuatro roles son fijos y su matriz de permisos es editable sobre las once claves que el backend evalúa.** `administrator` es de sistema y no se edita; el rol por omisión es `roles.is_default`; nadie edita su propio rol ni concede lo que no tiene, y `config:write` no sale del rol de sistema. Roles personalizados quedan para una fase propia: `role` pasaría a texto libre en siete enumerados de los contratos y en el tipo `UserRole` del frontend
+| DEC-BS-32 | *Cerrada el 2026-09-28 (D10-07, opción A).* **La sesión nueva reemplaza a la anterior y no es configurable: desvío consciente de `RF-02`**, que pide que el administrador pueda elegir entre invalidar la anterior o rechazar la nueva. Se reabre con un pedido (`T-BS-110`: `users.sessionPolicy` con `reject`, un `409` nuevo en `POST /auth/login`)
 | DEC-BS-29 | *Cerrada el 2026-09-25 (plan de mejoras, R-7).* **`POST /auth/refresh` no se reintenta automáticamente.** El servidor rota el token de refresco en cada uso y, si ve llegar uno ya rotado, lo trata como reutilización y revoca la cadena entera (`DEC-BS-13`). Un reintento tras un corte de red —el servidor procesó el primero, pero la respuesta no llegó— dejaría al usuario fuera. El frontend ya cumple: `SessionRefreshService` hace una sola renovación a la vez, también entre pestañas, y si falla termina la sesión; la regla queda escrita en su cabecera. Se reabre si aparecen cierres de sesión inesperados, y la salida sería una ventana de gracia de unos segundos para el token recién rotado.
 | DEC-BS-28 | *Cerrada el 2026-09-25 (D9-04, opción A).* **La auditoría de reproducción es obligatoria (*fail-closed*).** Si `MediaStreamHandler` no puede escribir la fila de `video_access_log`, el vídeo no se entrega. No añade un modo de fallo real: la base ya está en el camino crítico, porque la autenticación por la cookie `pv_media` y la decisión de acceso la leen en cada petición. La opción *fail-open* —reproducir y registrar en diferido— solo compensaría si hubiera fallos de escritura con la base disponible. El registro es el que pide `RF-14`.
 | DEC-BS-27 | *Cerrada el 2026-09-22.* La familia `/admin/sync` que el frontend consume (`GET status`, `GET logs`, `GET logs/{id}`) **se sirve desde `ingest_batches`**: el historial de sincronización *es* el historial de lotes de ingesta. Correspondencia: `running`→`running`, `completed`→`success`, `failed`→`failed`, `partial`→`partial`; `created/updated/unchanged/failed`→`recordsNew/Updated/Unchanged/Error`; `triggerType` siempre `automatic` mientras no exista reingesta manual; `nextScheduledSync` nulo hasta `DEC-BS-09`; `isDataStale` = último lote completado más viejo que `Ingest:StaleThresholdMinutes`. `POST /admin/sync` sigue en `503` (`DEC-BS-07`). `api_sync.yaml` describe el modelo *pull* descartado; se anota para reescribirlo, el frontend no cambia. Ver `verificacion_fase5` V5-03.

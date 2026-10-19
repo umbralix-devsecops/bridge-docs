@@ -1,5 +1,5 @@
 %% Modelo de datos del Bridge Service
-%% Version: 2.2 · Fecha: 2026-09-25 (2.1: 2026-09-22 · 2.0: 2026-09-16)
+%% Version: 2.3 · Fecha: 2026-09-28 (2.2: 2026-09-25 · 2.1: 2026-09-22 · 2.0: 2026-09-16)
 %% Motor: PostgreSQL 16 (Azure Database for PostgreSQL Flexible Server)
 %% Gobernado por: ADR-BS-001, ADR-BS-002, ADR-BS-004, ADR-BS-005, ADR-BS-006
 %% .
@@ -10,6 +10,10 @@
 %% 2.2 (MIG-BS-005, T-BS-090): notification_log + attempt_count, next_attempt_at, lease_id,
 %%     lease_expires_at, e indice parcial ix_notification_log_queued. Aditiva: tres columnas
 %%     anulables y una con valor por omision 0; nada existente cambia.
+%% 2.3 (MIG-BS-006, T-BS-102, Fase 9): + PORTAL_SETTINGS (fila unica, documento jsonb con
+%%     version optimista; DEC-BS-30) y roles + is_system, is_default, version con indice unico
+%%     parcial ux_roles_default (DEC-BS-31). Aditiva: tabla nueva y tres columnas con valor
+%%     por omision; nada existente cambia. Bloque 2 pasa a llamarse IDENTIDAD, PERMISOS Y AJUSTES.
 %% .
 %% Supera a modelo_datos_bridge_v1.mermaid (el cache de lectura de un servicio que leia
 %% un SQL Server remoto) y absorbe modelo_datos_v3.mermaid de portal-docs. Es el UNICO
@@ -21,7 +25,9 @@
 %% .
 %% TRES BLOQUES, con naturaleza distinta:
 %%   1. CATALOGO  -> proyeccion de SinsaTools. Solo la ingesta escribe. No es fuente de verdad.
-%%   2. IDENTIDAD -> fuente de verdad. Nace y muere aqui. NO se reconstruye: se restaura.
+%%   2. IDENTIDAD, PERMISOS Y AJUSTES -> fuente de verdad. Nace y muere aqui. NO se reconstruye:
+%%      se restaura. Los ajustes del portal (PORTAL_SETTINGS) van aqui porque son configuracion
+%%      que alguien decidio, no historial ni proyeccion.
 %%   3. INGESTA Y AUDITORIA -> historial. Purgable.
 
 erDiagram
@@ -29,11 +35,12 @@ erDiagram
     CATALOG_PRODUCTS ||--o{ CATALOG_VERSIONS : contiene
     CATALOG_VERSIONS ||--o{ CATALOG_MEDIA    : contiene
 
-    %% ── 2. IDENTIDAD Y PERMISOS ────────────────────────────────────────
+    %% ── 2. IDENTIDAD, PERMISOS Y AJUSTES ───────────────────────────────
     ROLES  ||--o{ ROLE_PERMISSIONS : define
     ROLES  ||--o{ USERS            : clasifica
     USERS  ||--o{ SESSIONS         : abre
     USERS  ||--o{ ACCOUNT_SETUP_TOKENS : invita
+    USERS  |o--o| PORTAL_SETTINGS  : "guardo por ultima vez"
     USERS  ||--o{ USER_GROUPS      : pertenece
     GROUPS ||--o{ USER_GROUPS      : agrupa
     GROUPS ||--o{ GROUP_VERSION_ACCESS : concede
@@ -113,6 +120,17 @@ erDiagram
         uuid id PK
         varchar name UK "administrator|content_editor|auditor|viewer"
         varchar description
+        boolean is_system "true solo en administrator: su matriz no se edita (DEC-BS-31)"
+        boolean is_default "true en un solo rol: el de las cuentas nuevas; sustituye a RolInicial"
+        integer version "concurrencia optimista de PATCH /admin/roles/{id}; nace en 1"
+    }
+
+    PORTAL_SETTINGS {
+        smallint id PK "siempre 1: CHECK (id = 1), fila unica (DEC-BS-30)"
+        jsonb document "schemaVersion, users, sync: solo lo que el Bridge aplica"
+        integer version "concurrencia optimista de PUT /admin/settings; nace en 1"
+        timestamptz updated_at "nulo hasta el primer guardado"
+        uuid updated_by FK "users.id; ON DELETE SET NULL; nulo hasta el primer guardado"
     }
 
     ROLE_PERMISSIONS {
@@ -299,6 +317,7 @@ erDiagram
 %% CATALOG_MEDIA (version_id, position) WHERE active     -> listado de una version
 %% CATALOG_MEDIA UNIQUE (origin, ext_media_id)           -> clave de upsert
 %% ROLE_PERMISSIONS (role_id)                            -> construccion del claim perms
+%% ROLES UNIQUE (is_default) WHERE is_default            -> un solo rol por omision (DEC-BS-31)
 %% SESSIONS (user_id) WHERE NOT revoked                  -> sesiones vivas
 %% GROUP_VERSION_ACCESS (version_id)                     -> quien accede a una version
 %% INGEST_BATCHES (received_at DESC)                     -> /admin/sync/logs
@@ -329,7 +348,11 @@ erDiagram
 %% 7. ROLE_PERMISSIONS se consulta UNA sola vez, en el login, para construir el
 %%    claim perms{}. El backend no la vuelve a consultar en requests posteriores
 %%    (api_auth.yaml:151, guia_roles_permisos_v1.0 §4). La tabla existe: lo que no
-%%    existe es la consulta por request.
+%%    existe es la consulta por request. Desde la Fase 9 (DEC-BS-31) la matriz se
+%%    edita con PATCH /admin/roles/{id}: el cambio llega a una sesion viva en el
+%%    siguiente refresh, que reconstruye perms{}, y al streaming de inmediato, porque
+%%    la cookie de medios relee la base en cada stream. Nada de esto anade consultas
+%%    por request. administrator (is_system) no se edita; is_default es unico.
 %% 8. access_source guarda cuatro valores; el DTO del contrato solo expone 'denied'
 %%    para los dos de denegacion. Contrato intacto, auditoria util.
 %% 9. VIDEO_ACCESS_LOG y API_REQUEST_LOG estan particionadas por rango de fecha. En

@@ -484,6 +484,20 @@ CREATE TABLE public.notification_log (
 
 
 --
+-- Name: portal_settings; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.portal_settings (
+    id smallint NOT NULL,
+    document jsonb NOT NULL,
+    version integer DEFAULT 1 NOT NULL,
+    updated_at timestamp with time zone,
+    updated_by uuid,
+    CONSTRAINT ck_portal_settings_singleton CHECK ((id = 1))
+);
+
+
+--
 -- Name: role_permissions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -504,7 +518,10 @@ CREATE TABLE public.role_permissions (
 CREATE TABLE public.roles (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     name character varying(32) NOT NULL,
-    description character varying(255)
+    description character varying(255),
+    is_default boolean DEFAULT false NOT NULL,
+    is_system boolean DEFAULT false NOT NULL,
+    version integer DEFAULT 1 NOT NULL
 );
 
 
@@ -765,6 +782,14 @@ ALTER TABLE ONLY public.ingest_items
 
 ALTER TABLE ONLY public.notification_log
     ADD CONSTRAINT pk_notification_log PRIMARY KEY (id);
+
+
+--
+-- Name: portal_settings pk_portal_settings; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.portal_settings
+    ADD CONSTRAINT pk_portal_settings PRIMARY KEY (id);
 
 
 --
@@ -1057,6 +1082,13 @@ CREATE UNIQUE INDEX ux_ingest_running ON public.ingest_batches USING btree ((tru
 
 
 --
+-- Name: ux_roles_default; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX ux_roles_default ON public.roles USING btree (is_default) WHERE is_default;
+
+
+--
 -- Name: ux_snapshot_close; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -1254,6 +1286,14 @@ ALTER TABLE ONLY public.ingest_items
 
 ALTER TABLE ONLY public.notification_log
     ADD CONSTRAINT fk_notification_log_users_user_id FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: portal_settings fk_portal_settings_users_updated_by; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.portal_settings
+    ADD CONSTRAINT fk_portal_settings_users_updated_by FOREIGN KEY (updated_by) REFERENCES public.users(id) ON DELETE SET NULL;
 
 
 --

@@ -1,0 +1,1115 @@
+= Plan de la Fase 9 — ajustes del portal y roles como datos
+:author: Equipo de Desarrollo
+:revnumber: 1.3
+:revdate: 2026-10-19
+:revremark: 1.3: T-BS-102 hecho (MIG-BS-006, sello 20261001035552, generada el 2026-10-01 y verificada el 2026-10-19 con verify.sh en verde). 1.2: T-BS-102 en curso (modelo, semilla, pruebas, ER 2.3 y changelog 2.9 escritos; falta generar la migración); `portal_settings.updated_at` pasa a anulable para que el contrato pueda decir «nadie guardó desde la semilla». 1.1: «Go» del 2026-09-28. Las ocho decisiones se tomaron por la recomendación (DEC-BS-30..32 en el glosario), P9-2 y P9-3 confirmados; T-BS-101 hecho (api_admin 1.3.0, api_auth 1.3.0). 1.0: borrador con la disposición campo a campo, D10-01..08 y T-BS-101..110, revisado por un segundo lector.
+:doctype: article
+:toc: left
+:toc-title: Tabla de Contenidos
+:toclevels: 3
+:sectnums:
+:icons: font
+:lang: es
+:root: ..
+:section-id: gestion-producto
+:section-title: Gestión de Producto
+:classification: Confidencial — Solo uso interno
+
+include::{root}/_nav.adoc[]
+
+---
+
+[.lead]
+La pantalla «Settings» del frontend (nueve secciones, `/settings/:section`) y su sección «Roles
+and permissions» funcionan hoy contra un mock que vive en el navegador: con `npm start`,
+`environment.mockGaps` simula `/admin/settings*` y `/admin/roles*`, y en producción esas rutas
+responden `404`. Este plan las lleva al Bridge: qué se guarda, dónde, con qué contrato, qué
+comportamiento cambia y qué se retira de la pantalla porque el sistema no lo puede cumplir.
+*Alcance decidido el 2026-09-28:* ajustes y roles. `/videos*` (GAP-38..41 y GAP-43) sigue en
+el mock, con un interruptor por prefijo, porque exige cambios en el contrato de ingesta con
+SinsaTools.
+
+[IMPORTANT]
+====
+*«Go» el 2026-09-28.* Las ocho decisiones se tomaron por la recomendación: D10-02 y D10-03 son
+`DEC-BS-30`, D10-05 es `DEC-BS-31` y D10-07 es `DEC-BS-32`; D10-01, D10-04, D10-06 y D10-08
+quedan registradas aquí. P9-2 (el editor lee los ajustes y los roles, de solo lectura) y P9-3
+(la semilla con los valores de hoy) se confirmaron; P9-1 y P9-4 siguen abiertas. El estado de
+cada tarea va en la tabla de tareas y, al cerrar, en `verificacion_fase9`.
+*Numeración:* las decisiones y los desvíos de esta fase llevan prefijo `10` (D10-xx, V10-xx)
+porque su bloque de tareas es `T-BS-10x`, igual que D9/V9 fueron del bloque `T-BS-09x` del plan de
+mejoras. Lo que hay que confirmar antes de empezar va como P9-x, para no chocar con los I-x de la
+Fase 8.
+====
+
+== Punto de partida: lo comprobado
+
+[cols="1,3",options="header"]
+|===
+| Qué | Estado el 2026-09-28
+
+| La pantalla
+| Nueve secciones: `general`, `public`, `api`, `sync`, `users`, `roles`, `notifications`, `audit`,
+  `appearance`. Un solo documento `PortalSettings` de ocho rebanadas, un borrador común y un solo
+  `PUT`. La sección de roles tiene su propio guardado por rol y solo edita la matriz de permisos;
+  el nombre y la descripción se fijan al crear o duplicar. Acceso con `config:read`, edición con
+  `config:write`. Está detrás de `features.settings` (encendido en `public/config.json`). Las
+  pantallas son de dramirez: `ed5eaa2` (ajustes) y `76ad65a` (roles).
+
+| El contrato
+| No existe. `settings.model.ts` y `roles.model.ts` son *propuestas* anotadas como GAP-42 y GAP-44.
+  La fuente de verdad de los contratos del portal es `portal-docs/05_contratos_api/portal/`;
+  `Sin-PortalVideos/openapi/sources/` es la copia que el frontend versiona y de la que genera sus
+  tipos. `api_admin.yaml` está en 1.2.0 y `api_auth.yaml` en 1.2.0; ninguno tiene
+  `/admin/settings` ni `/admin/roles`.
+
+| El mock
+| `mockGapsInterceptor` atiende `/videos`, `/admin/settings` y `/admin/roles` con `npm start`,
+  leyendo el rol del JWT real. Guarda en `localStorage` (`pvMockSettings`, `pvMockRoles`).
+  Devuelve `403` *con* cuerpo, valida seis campos y simula `POST /admin/settings/api-test`. En el
+  build de producción el mock no entra (`mock.providers.noop.ts`). Un solo interruptor
+  (`environment.mockGaps`) para los tres prefijos.
+
+| El Bridge
+| 18 tablas y 41 rutas; ninguna bajo esos prefijos. El recurso `config` existe en
+  `role_permissions`: `R/W/D` el administrador, `R` el editor de contenido (MIG-BS-004). Lo que
+  la pantalla llama «configuración» vive hoy en tres sitios: `public/config.json` del frontend
+  (marca, tema por omisión y lista de temas, `supportEmail`, `locale`, `features`), `appsettings`
+  del Bridge (`Smtp`, `Jwt`, `Identity`, `Sync`, `Auth:RateLimit`, `Frontend:BaseUrl`) y
+  user-secrets o Key Vault (`SEC-BS-01`: contraseña y usuario SMTP, clave JWT, `Ingest:ClientId`
+  y `Ingest:ClientSecretHash`).
+
+| Los roles
+| `roles(id, name único de 32, description)` y `role_permissions(role_id, resource, can_read,
+  can_write, can_delete)`, sembrados por `003_seed_roles.sql`: cuatro roles y seis recursos
+  (`users`, `groups`, `catalog`, `logs`, `videos`, `config`), 24 filas. El JWT lleva `role` (el
+  nombre) y `perms` (`{recurso: [acciones]}`), que `PermissionMap` construye en el login y en cada
+  `refresh`; la cookie de medios los vuelve a leer de la base en cada `/media/{id}/stream`. La
+  autorización va por `perms`, nunca por `role`. `RoleNames` fija los cuatro nombres y cinco
+  sitios llaman a `RoleNames.IsKnown`; `RegisterCommandHandler.RolInicial` es `"viewer"`.
+
+| Las claves de permiso que de verdad se evalúan
+| El Bridge evalúa once con `[RequirePermission]`: `users:read/write/delete`,
+  `groups:read/write/delete`, `catalog:read`, `logs:read`, `videos:read`, `config:read/write`.
+  La semilla concede `delete` en cuatro recursos y `catalog:write` al editor, pero ningún endpoint
+  evalúa `catalog:write`, `catalog:delete`, `logs:write`, `logs:delete`, `videos:write`,
+  `videos:delete` ni `config:delete`. El frontend solo usa una clave más, `catalog:write`, en el
+  aviso de datos desactualizados (`canAny(['config:read', 'catalog:write'])`). El catálogo del
+  frontend en `roles.model.ts` (nueve claves) omite `groups:read`, `config:read` y las dos
+  `delete` que sí se evalúan, y propone `videos:write`, que nada evalúa.
+|===
+
+== Lo que ya está decidido y condiciona el diseño
+
+[cols="1,4",options="header"]
+|===
+| Regla | Consecuencia para este plan
+
+| `REST-09`, `RF-01`
+| El portal es 100 % privado. La sección «Public portal» (portal público, búsqueda anónima,
+  categorías publicadas) contradice el requisito y se retira.
+
+| `ADR-BS-005`, `ADR-BS-006`, `DEC-BS-07`
+| El catálogo entra por empuje. No hay API externa que el portal consulte ni calendario que el
+  portal decida: la sección «API» y el calendario de «Sync» se retiran. La reingesta a demanda es
+  `T-BS-055`.
+
+| `RF-02`
+| Sesión única, «comportamiento configurable por el administrador». Hoy el login revoca la
+  anterior y no es configurable: es un desvío del requisito que este plan registra (D10-07).
+
+| `RF-03`, `RF-05`, `RF-09`, `RF-10`, `DEC-BS-25`
+| El autoregistro es de *clientes* y queda pendiente de aprobación; el administrador crea cuentas
+  por invitación; editor y auditor son roles internos. Los ajustes de «Users» que tienen
+  consumidor son los que tocan ese flujo, y el rol de un autoregistrado no puede ser interno.
+
+| `RF-08`, `RF-20`
+| Los permisos se controlan por recurso en `ROLE_PERMISSIONS` y el backend los evalúa desde
+  `perms{}` del JWT sin consultar la base en cada request. Editar un rol cambia `perms` en el
+  siguiente `refresh`, no al instante (salvo en el streaming, que relee la base).
+
+| `SEC-BS-01` y la nota de `appsettings.json`
+| Ningún secreto en `appsettings` ni, por extensión, en la base o en el contrato: contraseña y
+  usuario SMTP, el resumen del secreto de ingesta y también `Ingest:ClientId`, que el propio
+  `appsettings.json` manda a Key Vault. El `token` de la sección «API» del mock no tiene
+  equivalente.
+
+| `REST-BS-11`, `RF-BS-18`
+| Los contratos son del frontend y el Bridge los implementa. Añadir rutas y códigos es un cambio
+  aditivo: `api_admin` 1.3.0 y `api_auth` 1.3.0, con el precedente de las 1.2.0
+  (`T-BS-091` la de admin, `T-BS-092` la de auth).
+
+| `DOM-BS-05`, `DOM-BS-06`, `ADR-BS-004`
+| Toda migración lleva `MIG_BS_NNN` en el nombre y su entrada en el changelog. Un cambio es
+  revisión del ER solo si es aditivo y compatible: columnas nuevas *con valor por omisión*.
+  `MIG-BS-006`, ER **2.3**, `schema_derivado_v2.sql` regenerado, `SchemaParityTests` con los
+  recuentos nuevos.
+
+| `EST-BS-08`, `EST-BS-20`, `T-BS-100`
+| Las clases que deciden autorización van al 100 % de cobertura: un manejador que edita
+  `role_permissions` entra en esa lista. Un archivo tiene un tipo principal y solo los tipos de
+  datos que este nombra (`SourceFileLayoutTests`).
+
+| Bloque C (`T-BS-097..099`)
+| Puertos partidos en lectura y escritura (`Reader`/`Store`), errores de controlador por
+  `ControllerErrors`, constructores primarios. Lo nuevo sigue esa forma.
+
+| Una réplica (plan de mejoras, ajustes a la Fase 8: `maxReplicas: 1` en `T-BS-081`)
+| Si hiciera falta caché de ajustes, en memoria basta. Durante un despliegue conviven dos
+  revisiones (`T-BS-084`); ninguna caché de este plan dura más que unos segundos.
+
+| `DT-BS-02`, `DEC-BS-03`
+| `video_access_log` y `api_request_log` están particionadas *por año* y ni la creación de
+  particiones ni la purga están automatizadas. Una retención en días no se puede aplicar con
+  `DROP PARTITION`; ver `audit.retentionDays`.
+
+| `DEC-BS-09`
+| El intervalo esperado de ingesta, que exige acuerdo con SinsaTools, sigue abierto. El umbral
+  de «datos desactualizados» deja de depender de él si pasa a ser un ajuste; la decisión no se
+  cierra aquí.
+|===
+
+== Disposición campo a campo
+
+Cada campo de la propuesta del frontend, con lo que hay hoy y qué se hace. Leyenda:
+
+* 🟢 *Real ahora*: se guarda y el Bridge ya lo aplica o solo hay que leerlo.
+* 🟡 *Real con tarea*: se guarda y una tarea de este plan hace que el Bridge lo aplique.
+* 🔵 *Del despliegue*: ya vive en `config.json`, `appsettings` o Key Vault. No se duplica en la
+  base; la pantalla lo muestra de solo lectura o no lo muestra (D10-02, D10-08).
+* ⚪ *Se retira*: contradice un requisito, no corresponde a la arquitectura o no tiene ningún
+  consumidor.
+* ⏸ *Se aplaza*: tiene sentido, pero es otra fase o depende de una decisión de este plan.
+
+=== General
+
+[cols="2,3,1,4",options="header"]
+|===
+| Campo | Hoy | Disposición | Qué haría falta
+
+| `portalName`, `logoUrl`
+| `brand.name` y `brand.logo` en `public/config.json`. Los leen el login, «solicitud recibida», la
+  cabecera y el resto de páginas antes de arrancar la aplicación.
+| 🔵
+| Guardarlos en la base exigiría un endpoint *anónimo* de marca, porque el login los necesita
+  antes de autenticar. No compensa: la marca se fija por entorno en el despliegue (Fase 8,
+  `config:check`).
+
+| `contactEmail`
+| `supportEmail` en `config.json`; lo usan el catálogo (`version-media`), el visor y la página
+  del vídeo.
+| 🔵
+| Ídem.
+
+| `language`
+| `locale` en `config.json`, que alimenta `LOCALE_ID` y con él todas las fechas del portal. La
+  aplicación solo tiene textos en `en` (`sourceLocale`, sin traducciones).
+| 🔵
+| Nada que configurar mientras no haya un segundo idioma.
+
+| `timeZone`, `dateFormat`
+| Sin consumidor: las fechas usan `LOCALE_ID` y formatos fijos (`LOG_DATE_FORMAT`,
+  `SYNC_DATE_FORMAT`); solo la sección de sync usa el locale del navegador.
+| ⚪
+| Un consumidor real (formatear todas las fechas con esa zona) es un cambio transversal del
+  frontend sin pedido detrás.
+
+| `maintenanceMode`, `maintenanceMessage`
+| Nada.
+| ⏸ (D10-04)
+| Un middleware en el Bridge y una pantalla en el frontend, con más aristas de las que parece:
+  ver D10-04. Si se aprueba, `T-BS-109`.
+|===
+
+Con D10-04 en su recomendación, la sección entera se retira.
+
+=== Public portal
+
+[cols="2,3,1,4",options="header"]
+|===
+| Campo | Hoy | Disposición | Qué haría falta
+
+| `enabled`, `anonymousSearch`, `title`, `searchPlaceholder`
+| Nada. `REST-09`: «no existirán secciones públicas sin autenticación».
+| ⚪
+| Un cambio de requisito, no de código.
+
+| `featuredVideoId`, `publishedCategories`, `attachmentsMode`
+| Dependen de `/videos` y de la taxonomía de categorías (GAP-38, GAP-39), que siguen en el mock.
+| ⚪
+| El plan de `/videos`, fuera de este.
+|===
+
+La sección entera se retira de la pantalla.
+
+=== API
+
+[cols="2,3,1,4",options="header"]
+|===
+| Campo | Hoy | Disposición | Qué haría falta
+
+| `baseUrl`, `videosEndpoint`, `attachmentsEndpoint`, `authType`, `token`, `tokenConfigured`,
+  `timeoutSeconds`, `retries`, `fieldMapping`, `cacheEnabled`, `cacheTtlMinutes`;
+  `POST /admin/settings/api-test`
+| Es el prototipo de cuando el portal iba a *consultar* una API. Con `ADR-BS-005/006` el
+  catálogo entra por empuje y el portal no llama a nadie.
+| ⚪
+| Lo real de la integración —el `ClientId` de ingesta, la rotación del secreto (`DEC-BS-05`) y
+  el endpoint de reingesta de `T-BS-055`— es configuración de despliegue con secretos
+  (`SEC-BS-01`). Si algún día se quiere un panel «Integración con SinsaTools», será de solo
+  lectura, sin el `ClientId`, y vendrá con `T-BS-055`.
+|===
+
+La sección entera se retira, incluido `api-test`.
+
+=== Sync
+
+[cols="2,3,1,4",options="header"]
+|===
+| Campo | Hoy | Disposición | Qué haría falta
+
+| `autoEnabled`, `frequency`, `runAt`, `conflictPolicy`, `removeMissing`, `retryAttempts`,
+  `retryEveryMinutes`
+| La cadencia, los reintentos y la reconciliación los decide el emisor: SinsaTools empuja
+  cuando le toca (`ADR-BS-006`), y la foto completa reconcilia (`RF-BS-14`).
+| ⚪
+| —
+
+| _(nuevo)_ `staleThresholdMinutes`
+| `Sync:StaleThresholdMinutes` (1440) en `appsettings`, leído en DI como un singleton
+  `SyncSettings` que `AdminSyncController` usa para `isDataStale` y devuelve en
+  `GET /admin/sync/status`.
+| 🟡
+| Pasa al documento y *deja de existir* en `appsettings` y en DI: una sola fuente. El valor
+  inicial va en la semilla de `MIG-BS-006`. El umbral deja de depender de `DEC-BS-09`, que sigue
+  abierta (es el intervalo acordado con SinsaTools, del que también cuelga
+  `nextScheduledSync`). Si la Fase 8 pone una alerta de catálogo obsoleto (`T-BS-087`), tendrá
+  que leer el mismo umbral o quedar documentado que son dos. `T-BS-106`.
+
+| Estado y «Sincronizar ahora»
+| Reales: `/admin/sync/status` y `POST /admin/sync` (`503` hasta `T-BS-055`).
+| 🟢
+| Nada. La sección queda como panel de estado más un ajuste.
+|===
+
+=== Users
+
+[cols="2,3,1,4",options="header"]
+|===
+| Campo | Hoy | Disposición | Qué haría falta
+
+| `signupMode` (`invite`, `open`, `sso`)
+| El autoregistro existe siempre (`RF-03`) y la invitación también (`DEC-BS-25`). No hay SSO.
+| 🟡, como `selfRegistrationEnabled`
+| Un booleano. Apagado, `POST /auth/register` responde `403 REGISTRATION_DISABLED`
+  (`api_auth` 1.3.0) y la página de registro lo muestra como aviso. El enlace «crear cuenta» del
+  login sigue visible: el frontend no lo sabe hasta enviar el formulario, y se acepta así antes
+  que añadir un endpoint anónimo. `T-BS-106`.
+
+| `defaultRole`
+| `RegisterCommandHandler.RolInicial = "viewer"`, fijo, y el comentario del manejador dice que
+  elevar el rol es una acción explícita del administrador.
+| ⚪ por ahora
+| Un autoregistrado es un cliente (`RF-03`) y no puede recibir un rol interno (`RF-09`,
+  `RF-10`). Con los cuatro roles actuales el único admisible es `viewer`, así que el ajuste no
+  elegiría nada. Vuelve con los roles personalizados (D10-05), limitado a roles externos.
+
+| `defaultGroupId`
+| Nada: aprobar una cuenta no la mete en ningún grupo.
+| 🟡
+| Al aprobar (`UserAdminHandler.ApproveAsync`), si hay grupo por omisión, existe y está activo,
+  se añade la pertenencia de forma idempotente; si no, se omite y se registra un aviso. Al
+  guardar se valida que exista y esté activo. La pantalla carga hoy 50 grupos activos para el
+  desplegable; tiene que mostrar el elegido aunque no esté entre esos 50. `T-BS-106`.
+
+| `minPasswordLength`
+| Fijo en 8: `[StringLength(256, MinimumLength = 8)]` en `AuthContracts` (login, registro y
+  `set-password`), `minLength: 8` en `api_auth.yaml`, y en el frontend `Validators.minLength(8)`
+  más `PASSWORD_PATTERN` en registro y `set-password` (`PASSWORD_MIN_LENGTH` solo alimenta el
+  medidor de fuerza).
+| 🟡
+| El mínimo configurable (8 a 64) lo aplican los manejadores de registro y de `set-password` y
+  responden `VALIDATION_ERROR` en `password`. El login *no* lo aplica: una contraseña ya fijada
+  sigue valiendo. El frontend sigue validando 8 en local y ya muestra los errores de campo del
+  servidor. `api_auth` 1.3.0 lo documenta. `T-BS-106`.
+
+| `allowedDomains`
+| Nada. La pista de la pantalla dice «can authenticate».
+| 🟡, como `allowedEmailDomains`
+| Lista vacía = cualquiera. Solo afecta al *autoregistro*: un correo con otro dominio responde
+  `VALIDATION_ERROR` en `email`. La invitación del administrador no se limita. La pista de la
+  pantalla cambia para decirlo. `T-BS-106`.
+
+| `sessionHours` (8, 24, 168)
+| `Jwt:AccessTokenMinutes` (15) y `Jwt:RefreshTokenDays` (7) en `appsettings`. El frontend
+  depende de ellos (`session.refreshLeadSeconds`).
+| 🔵
+| Cambiarlos desde una pantalla toca la seguridad de la sesión y el frontend a la vez. Se
+  muestran de solo lectura si D10-08 lo aprueba.
+
+| `adminMfaRequired`, `ssoProvider`, `ssoMetadataUrl`
+| No hay MFA ni SSO: `RF-01` es usuario y contraseña.
+| ⚪
+| Una ADR propia el día que se decida SSO.
+
+| _(nuevo, D10-07)_ `sessionPolicy` (`replace`, `reject`)
+| El login revoca las sesiones anteriores. `RF-02` pide que sea configurable.
+| ⏸ (D10-07)
+| `reject` exige un `409` nuevo en `POST /auth/login` (`api_auth`), su pantalla en el frontend y
+  tocar `LoginCommandHandler`, que es clase crítica. Si se aprueba, `T-BS-110`.
+|===
+
+=== Roles and permissions (GAP-44)
+
+[cols="2,3,1,4",options="header"]
+|===
+| Campo | Hoy | Disposición | Qué haría falta
+
+| Lista, matriz de permisos, recuento de usuarios, pestaña «Members»
+| Las tablas existen y `users.role_id` es FK. Faltan el tipo de rol (`system`, `default`,
+  `custom`) y quién es el rol por omisión.
+| 🟡
+| `roles.is_system`, `roles.is_default` (las dos `false` por omisión) y `roles.version`
+  (`1` por omisión), e índice único parcial `ux_roles_default` (a lo sumo un rol por omisión);
+  la semilla marca `administrator` y `viewer` (`MIG-BS-006`). El registro pasa a leer
+  `is_default` y `RegisterCommandHandler.RolInicial` desaparece: una sola fuente.
+  `GET /admin/roles`, `GET /admin/roles/{roleId}/members`, `PATCH /admin/roles/{roleId}`.
+  `T-BS-105`, `T-BS-106`.
+
+| Nombre y descripción
+| `roles.name` (32, único) es la clave de máquina que va en el JWT; el frontend pinta la etiqueta
+  con `roleLabel(key)` en todo el portal. La pantalla de roles solo fija nombre y descripción al
+  crear o duplicar, que quedan tras `features.customRoles` (D10-05).
+| ⚪ por ahora
+| No se añade `display_name` ni se edita la descripción: el `PATCH` solo admite `permissions`.
+  El contrato devuelve `key` (`viewer`) y nada más de texto: etiqueta y descripción las pone el
+  frontend por clave, como hoy con `roleLabel` (la semilla está en español y la interfaz en
+  inglés). Vuelve con los roles personalizados.
+
+| Catálogo de permisos
+| El del frontend no es el del Bridge.
+| 🟡
+| El contrato publica en la respuesta de la lista las *once claves que el Bridge evalúa*. El
+  `PATCH` recibe la matriz sobre esas once y *no toca* las demás banderas de `role_permissions`:
+  la matriz del contrato (`RF-09`: el editor escribe en el catálogo) las sigue declarando aunque
+  ningún endpoint las evalúe, y no es este plan quien debe retirarlas. El frontend deja de
+  escribir el catálogo, conserva solo las etiquetas por clave, y el aviso de datos
+  desactualizados pasa a mirar solo `config:read`, para que una bandera que la pantalla no
+  enseña no decida quién sondea `/admin/sync/status`. `T-BS-101`, `T-BS-107`.
+
+| Crear, duplicar y borrar roles
+| El mock lo permite. En el Bridge, `RoleNames` fija cuatro nombres, `role` es un enumerado de
+  cuatro valores en siete sitios de `api_admin` y `api_auth`, el frontend tipa `UserRole` con
+  ellos en 12 archivos y `SessionStore.isInternal` compara con `'viewer'`.
+| ⏸ (D10-05)
+| Otra fase. Se recomienda no hacerlo ahora: los cuatro roles quedan editables y los botones de
+  crear, duplicar y borrar se esconden tras `features.customRoles`.
+
+| Editar el rol de sistema y escalar privilegios
+| Nada lo impide hoy porque no hay endpoint.
+| 🟡
+| Cuatro reglas en el manejador, no en `[RequirePermission]`: `administrator` es de sistema y
+  no se edita (`409 ROLE_IS_SYSTEM`); nadie edita el rol que él mismo tiene
+  (`400 SELF_ACTION_NOT_ALLOWED`, como en usuarios), y el rol del actor se lee de la base a
+  partir de `sub`, nunca del claim `role`, que puede llevar 15 minutos de retraso; nadie
+  *añade* a un rol una clave que él mismo no tenga —se comparan solo las claves que entran,
+  quitar siempre se puede—, con los permisos del actor leídos también de la base
+  (`Forbid()`, `403` sin cuerpo); y `config:write` no se concede fuera del rol de sistema
+  (`400 VALIDATION_ERROR` en `permissions`), porque quien la tuviera podría editar el resto de
+  roles. `T-BS-105`.
+|===
+
+=== Notifications
+
+[cols="2,3,1,4",options="header"]
+|===
+| Campo | Hoy | Disposición | Qué haría falta
+
+| `senderName`, `senderEmail`, `smtpHost`, `smtpPort`, `smtpTls`
+| `Smtp:*` en `appsettings`; usuario y contraseña en user-secrets o Key Vault.
+| 🔵
+| Solo lectura si D10-08 lo aprueba (sin usuario ni contraseña). Editarlos desde la pantalla
+  obligaría a guardar la contraseña en la base o a partir la configuración SMTP en dos sitios.
+
+| `welcomeEmail`
+| Los correos que existen son `account_registered`, `account_approved` y `account_invited`, y
+  los tres son parte del flujo: sin el de aprobación el usuario no sabe que ya puede entrar.
+| ⚪
+| —
+
+| `newVideoEmail`, `weeklyDigest`, `webhookUrl`
+| No existen esas notificaciones.
+| ⚪
+| Cada una es una funcionalidad nueva, no un ajuste.
+
+| `syncFailureEmail`, `alertRecipients`
+| Hoy no hay ningún aviso de lote fallido: se ve en el historial de sincronización. Las
+  alertas de la Fase 8 (`T-BS-087`) son de catálogo obsoleto, `5xx`, `/health/ready`, `429` y
+  coste.
+| ⚪ por ahora
+| Se reabre si se quiere aviso por correo: un tipo `ingest_failed` en la cola de notificaciones
+  y estos dos campos. Una tarea propia.
+|===
+
+=== Audit
+
+[cols="2,3,1,4",options="header"]
+|===
+| Campo | Hoy | Disposición | Qué haría falta
+
+| `retentionDays` (90, 180, 365, 0)
+| `DT-BS-02` y `DEC-BS-03` abiertas: política propuesta de 90 días y los fallos un año, sin
+  barrido. Las dos tablas de crecimiento ilimitado están particionadas *por año*.
+| ⏸ (D10-06)
+| Con particiones anuales, una retención en días solo se cumple con `DELETE` masivos, que es lo
+  que la arquitectura descartó. Lo honesto es cerrar `DT-BS-02` en su propia tarea: crear la
+  partición siguiente automáticamente y purgar por año. Cuando exista, el ajuste será «años a
+  conservar».
+
+| `syncHistoryLimit`
+| `/admin/sync/logs` pagina; nadie lee un límite.
+| ⚪
+| —
+
+| `logSessions`, `logConfigChanges`, `logPlayback`, `logAttachments`
+| El registro no es opcional: `RF-BS-08` (todas las peticiones) y `D7-03` (una fila por
+  reproducción).
+| ⚪
+| —
+
+| «Abrir el registro»
+| Enlace a `/admin/logs`.
+| 🟢
+| Se queda. La sección se reduce a ese enlace o sale del menú.
+|===
+
+=== Appearance
+
+[cols="2,3,1,4",options="header"]
+|===
+| Campo | Hoy | Disposición | Qué haría falta
+
+| `accentColor`
+| Los temas (`default`, `demo`, `contrast`) se validan contra WCAG AA en cada `verify`
+  (`theme:contrast`, `ADR-011`). `config.json` fija el tema por omisión y la lista, y con
+  `features.themeSwitcher` cada usuario ya elige el suyo desde el menú.
+| ⚪
+| Un color libre rompe la garantía de contraste. No hay nada que añadir.
+
+| `faviconUrl`, `footerText`
+| Estáticos: `public/` y `brand.copyright` en `config.json`.
+| 🔵
+| —
+
+| `gridDensity`, `showViewCounter`
+| De My Videos (GAP-38).
+| ⚪
+| El plan de `/videos`.
+|===
+
+La sección entera se retira.
+
+=== Resumen
+
+De los 64 campos propuestos, *4 se guardan en el Bridge* (`selfRegistrationEnabled`,
+`allowedEmailDomains`, `defaultGroupId`, `minPasswordLength`), *12 son del despliegue* y *48 se
+retiran o se aplazan* (entre ellos el modo mantenimiento, D10-04). Se añaden dos que no
+estaban: `sync.staleThresholdMinutes` y, si D10-07 es sí, `users.sessionPolicy`. La pantalla
+pasa de nueve secciones a cinco: Sync, Users, Roles, Notifications (solo lectura, con D10-08) y
+Audit (el enlace). Cuatro se retiran enteras: General, Public portal, API y Appearance. La ruta
+por omisión de `/settings` deja de ser `general`.
+
+== Diseño
+
+=== El documento de ajustes
+
+Un solo documento, tipado en `Application` y validado ahí, con los mismos nombres de campo que
+usa el frontend para pintar los errores (`sección.campo`):
+
+[source,json]
+----
+{
+  "version": 3,
+  "updatedAt": "2026-10-02T14:03:11Z",
+  "updatedBy": { "id": "…", "fullName": "…" },
+  "users": {
+    "selfRegistrationEnabled": true,
+    "allowedEmailDomains": [],
+    "defaultGroupId": null,
+    "minPasswordLength": 8
+  },
+  "sync": {
+    "staleThresholdMinutes": 1440
+  },
+  "deployment": {
+    "smtp": { "fromName": "Portal de Videos", "fromAddress": "…", "host": "…", "port": 587, "startTls": true },
+    "session": { "accessTokenMinutes": 15, "refreshTokenDays": 7 }
+  }
+}
+----
+
+* `version` es la concurrencia optimista: el `PUT` lo envía y el repositorio guarda con
+  `UPDATE … WHERE version = @version`; si no afecta a ninguna fila,
+  `409 SETTINGS_VERSION_CONFLICT`. El frontend recarga y avisa. Sin esto, dos administradores
+  con la pantalla abierta se pisan sin enterarse (un solo `PUT` con todo el documento).
+* `deployment` solo viaja en el `GET` y el `PUT` lo ignora (D10-08). Nunca lleva secretos ni
+  el `ClientId` de ingesta.
+* Los valores por omisión viven en `Application` (un miembro estático de `PortalSettings`,
+  `EST-BS-20`) y se fusionan *campo a campo* al leer: un documento guardado con una versión
+  anterior del esquema no rompe nada. La fusión del mock (`{ ...DEFAULT, ...guardado }`) no
+  sirve de modelo porque solo rellena secciones enteras.
+* `users.sessionPolicy` solo existe si D10-07 es sí.
+
+=== Modelo de datos (`MIG-BS-006`)
+
+[cols="1,3",options="header"]
+|===
+| Objeto | Definición
+
+| `portal_settings`
+| Fila única: `id smallint PK CHECK (id = 1)`, `document jsonb NOT NULL`,
+  `version integer NOT NULL DEFAULT 1`, `updated_at timestamptz NULL`,
+  `updated_by uuid NULL REFERENCES users(id) ON DELETE SET NULL`. Los dos últimos quedan nulos
+  hasta el primer guardado: el contrato promete `updatedAt`/`updatedBy` nulos «si nadie guardó
+  desde la semilla» (1.2; la 1.1 decía `updated_at NOT NULL`). La migración siembra la fila con
+  los valores por omisión (SQL incrustado, como `003_seed_roles.sql`). Las cuentas nunca se
+  borran físicamente (`DEC-BS-26`), así que la FK no estorba; `SET NULL` es por si algún día
+  pasara: antes un ajuste sin autor que una baja imposible.
+
+| `roles.is_system`, `roles.is_default`, `roles.version`
+| `boolean NOT NULL DEFAULT false` las dos banderas e `integer NOT NULL DEFAULT 1` la versión:
+  columnas con valor por omisión, compatibles según `DOM-BS-06`. Índice único parcial
+  `ux_roles_default ON roles (is_default) WHERE is_default` (en EF,
+  `HasIndex(…).IsUnique().HasFilter("is_default")`, como el de `ingest_batches`): a lo sumo un
+  rol por omisión. La misma migración marca `administrator` como sistema y `viewer` como por
+  omisión (`UPDATE`). `kind` sale de ahí: `system`, `default` o `custom`. `is_default` es la
+  única fuente del rol por omisión: el registro la lee. Cambiarla de rol exige quitar y poner
+  en dos sentencias dentro de una transacción (el índice único no es diferible); hoy no aplica.
+|===
+
+*Por qué jsonb y no columnas* (D10-03): el documento es pequeño, se lee y se escribe entero,
+cada campo tiene su tipo y su validación en `Application`, y añadir un ajuste no exige
+migración. Hay precedente: `notification_log.payload` y `catalog_products.metatags` son jsonb.
+La forma del documento queda en el contrato y en `Application`, no en el ER, y eso se dice en
+el changelog. Columnas tipadas darían consultas SQL sobre ajustes, que nadie hace, a cambio de
+una migración por campo.
+
+*Recuentos previstos*: 19 tablas (+1), 14 enums (=), 61 índices (+2: la clave primaria de
+`portal_settings` y `ux_roles_default`; el número exacto lo fija la migración generada y lo
+confirma `SchemaParityTests`), 24 permisos (=). ER **2.3**, revisión aditiva (`DOM-BS-06`:
+tabla, columnas con valor por omisión e índice nuevos). Reversible: `Down` borra la tabla, el
+índice y las tres columnas; el código anterior funciona sobre el esquema nuevo porque no nombra
+nada de esto.
+
+[NOTE]
+====
+La migración se genera en el equipo de desarrollo, como `MIG-BS-005`: la copia de trabajo en la
+nube no tiene los archivos de `MIG_BS_005_NotificationRetries` ni su instantánea del modelo, y
+una migración generada ahí arrastraría la anterior.
+====
+
+=== El contrato
+
+La fuente de verdad es `portal-docs/05_contratos_api/portal/`; después se copia a
+`Sin-PortalVideos/openapi/sources/` y se regeneran los tipos (`openapi:all`).
+
+*`api_admin` 1.3.0:*
+
+[cols="2,1,4",options="header"]
+|===
+| Operación | Permiso | Semántica
+
+| `GET /admin/settings`
+| `config:read`
+| El documento, con `deployment`.
+
+| `PUT /admin/settings`
+| `config:write`
+| Todo el documento con `version`. `200` con el guardado; `400 VALIDATION_ERROR` con
+  `errors[{field, message}]` y rutas `users.minPasswordLength`, `users.defaultGroupId`,
+  `users.allowedEmailDomains`, `sync.staleThresholdMinutes`; `409 SETTINGS_VERSION_CONFLICT`.
+
+| `GET /admin/roles`
+| `config:read`
+| `{ data: RoleDto[], permissions: PermissionKey[] }`. `RoleDto` = `id` (uuid), `key`
+  (`viewer`), `kind`, `usersCount` (cuentas no dadas de baja), `permissions` (las claves
+  publicadas que el rol tiene) y `version` (`roles.version`). `permissions` de la respuesta es
+  el catálogo: las once claves que el Bridge evalúa. La matriz de la cabecera de `api_admin` se
+  deja como está: sigue siendo la del requisito.
+
+| `GET /admin/roles/{roleId}/members`
+| `config:read` *y* `users:read`
+| Paginado como `/admin/groups/{groupId}/members`: `id`, `fullName`, `email`, `status`.
+  `404 ROLE_NOT_FOUND`. Exige `users:read` porque lista cuentas —los miembros de `viewer` son
+  todos los clientes— y el editor no debe verlas (`RF-09`). Dos `[RequirePermission]` en la
+  misma acción (el atributo ya admite `AllowMultiple`), y ASP.NET exige los dos.
+
+| `PATCH /admin/roles/{roleId}`
+| `config:write`
+| `{ permissions, version }`. `200` con el rol; `409 ROLE_IS_SYSTEM`; `409 ROLE_VERSION_CONFLICT`
+  (`UPDATE roles SET version = version + 1 WHERE id = @id AND version = @v` antes de tocar las
+  filas; si no afecta a ninguna, conflicto); `400 SELF_ACTION_NOT_ALLOWED` (el rol del propio
+  actor); `400 VALIDATION_ERROR` (clave fuera del catálogo, o `config:write` fuera del rol de
+  sistema); `403` sin cuerpo si *añade* una clave que el actor no tiene; `404 ROLE_NOT_FOUND`.
+  Las seis filas de `role_permissions` se actualizan en su sitio, nunca se borran y recrean
+  (siguen siendo 24), y las banderas fuera del catálogo no cambian.
+|===
+
+*`api_auth` 1.3.0:* `403 REGISTRATION_DISABLED` en `POST /auth/register`; el `minLength: 8` de
+la contraseña pasa a decir «el servidor puede exigir más» (`VALIDATION_ERROR` en `password`);
+`VALIDATION_ERROR` en `email` por dominio no admitido. Si D10-07 es sí *antes* de `T-BS-101`,
+entra aquí también el `409` del login; si no, será una 1.4.0 en `T-BS-110`.
+
+* `403` sin cuerpo, como en el resto de `api_admin`. El mock devuelve cuerpo; el frontend ya
+  tolera los dos.
+* No entran: `POST /admin/roles`, `DELETE /admin/roles/{roleId}` (D10-05) ni
+  `POST /admin/settings/api-test` (retirado).
+* Códigos nuevos en `API_ERROR_CODES` del frontend: `SETTINGS_VERSION_CONFLICT`,
+  `ROLE_NOT_FOUND`, `ROLE_IS_SYSTEM`, `ROLE_VERSION_CONFLICT`, `REGISTRATION_DISABLED`.
+* `manifest.yaml` → `api_surface.endpoint_count` se actualiza (está desfasado ya).
+
+=== El Bridge
+
+[cols="1,4",options="header"]
+|===
+| Capa | Qué se añade
+
+| `Application`
+| `Settings/PortalSettings.cs` (record con `Defaults` estático y los records de sección que
+  nombra: `PortalUsersSettings`, `PortalSyncSettings`; no `SyncSettings`, que ya existe en
+  `Admin/SyncModel.cs` y desaparece con el umbral), `Settings/PortalSettingsValidator.cs`,
+  `Settings/PortalSettingsHandler.cs` (leer con fusión de omisiones; guardar con versión, actor y
+  validación), puertos `IPortalSettingsReader` e `IPortalSettingsStore`. `Admin/RoleAdminHandler.cs`
+  con `IRoleAdminReader` e `IRoleAdminStore`. Los consumidores: `RegisterCommandHandler`,
+  `SetPasswordCommandHandler`, `UserAdminHandler.ApproveAsync` y el estado de sincronización.
+
+| `Infrastructure`
+| `PortalSettingsDocument` (entidad de la fila única; `document` como texto jsonb serializado
+  con `System.Text.Json`, como `notification_log.payload`), su configuración,
+  `PortalSettingsRepository` (con el `UPDATE … WHERE version`), `RoleAdminRepository`; `Role`
+  con las dos propiedades nuevas; registro en DI de cada puerto por separado. Se retira el
+  singleton `SyncSettings` y la lectura de `Sync:StaleThresholdMinutes`.
+
+| `Api`
+| `Controllers/Admin/AdminSettingsController.cs` y `AdminRolesController.cs` con
+  `[RequirePermission(PermissionResources.Config, …)]` y `ControllerErrors`;
+  `Contracts/AdminSettingsContracts.cs` y `AdminRolesContracts.cs`; `ErrorCodes` nuevos;
+  `Program.cs` registra los dos manejadores. `AdminSyncController` lee el umbral del documento.
+
+| Caché
+| Ninguna: los ajustes se leen en el registro, `set-password`, la aprobación y el estado de
+  sincronización, que son operaciones raras. Solo el modo mantenimiento (D10-04), que se
+  consultaría en cada petición, pediría una caché en memoria de unos segundos.
+
+| Cobertura
+| `RoleAdminHandler` entra en `EST-BS-08` (edita la fuente de la autorización):
+  `estandares_codigo` 1.10 y la lista de `tools/CoverageGate`.
+
+| Auditoría
+| `api_request_log` ya registra cada `PUT` y `PATCH` con quién y cuándo, sin cuerpo.
+  `portal_settings.updated_by` y `updated_at` dicen quién guardó por última vez. Un historial
+  de valores anteriores no se hace ahora.
+|===
+
+=== El frontend
+
+[cols="1,4",options="header"]
+|===
+| Pieza | Cambio
+
+| Tipos
+| `api_admin` 1.3.0 y `api_auth` 1.3.0 → `npm run openapi:all`; `settings.model.ts` pasa a
+  reexportar el `PortalSettings` generado; `API_ERROR_CODES` con los códigos nuevos.
+
+| Secciones
+| Se retiran `general`, `public`, `api` y `appearance` (rutas, `SETTINGS_SECTIONS`,
+  `SECTION_META`, componentes y pruebas); `/settings` redirige a `sync`. `users` se reduce a los
+  cuatro campos, muestra el grupo por omisión aunque no esté entre los 50 cargados y cambia la
+  pista de dominios. `sync` conserva el estado y añade el umbral. `notifications` muestra
+  `deployment.smtp` de solo lectura (o desaparece). `audit` es el enlace al registro.
+
+| Roles
+| `roles.model.ts` deja de escribir el catálogo: lo lee de la respuesta y conserva las etiquetas
+  por clave. Crear, duplicar y borrar quedan detrás de `features.customRoles` (`false`), que hay
+  que añadir en `runtime-config.ts`, `public/config.json` y `nginx/docker-entrypoint.d/90-render-config.sh`
+  a la vez, porque `config:check` compara las claves. `RoleDto.key` enlaza con `UserDto.role`;
+  etiqueta y descripción salen del frontend por clave. La pestaña «Members» se esconde sin
+  `users:read` y pagina. El texto «System roles have every permission» se ajusta al catálogo
+  real. El `PATCH` lleva `version`.
+
+| Store
+| `409 SETTINGS_VERSION_CONFLICT` y `409 ROLE_VERSION_CONFLICT` → recargar y avisar. La
+  validación local se recorta a los campos que quedan. Registro: `REGISTRATION_DISABLED` como
+  aviso en la página.
+
+| Mock
+| `environment.mockGaps` pasa a ser por prefijo (`{ videos: true, settings: false, roles: false }`)
+  en `environment.ts` y `environment.mock.ts`, y `GAP_PREFIXES` sale de ahí. Los manejadores de
+  `start:mock` se alinean con el contrato 1.3.0 para que el modo sin backend siga funcionando.
+
+| Pruebas
+| `settings.e2e.ts` (siete pruebas sobre el mock) y las `spec` de secciones se adaptan;
+  `mock-gaps.interceptor.spec.ts` prueba el interruptor por prefijo. Una e2e nueva contra el
+  Bridge real (`bridge-settings.e2e.ts`) entra en `e2e-entrega2.sh`.
+
+| i18n
+| `npm run i18n:extract`, no a mano.
+|===
+
+Coordinación: las pantallas son de dramirez (`ed5eaa2`, `76ad65a`). Quitar cuatro secciones y
+recortar dos es trabajo sobre su código; conviene acordarlo antes de `T-BS-107`, y que él lo
+haga o lo revise.
+
+== Decisiones
+
+Ocho. *Las ocho se tomaron el 2026-09-28 por la recomendación.*
+
+[cols="1,2,3,3",options="header"]
+|===
+| # | Pregunta | Opciones | Recomendación y por qué
+
+| D10-01
+| ¿Cuándo?
+| *A.* En paralelo a la Fase 8, y en `main` antes del primer despliegue en `prod`. *B.* Después
+  de la Fase 8. *C.* Antes: la Fase 8 espera.
+| **A.** No depende de Azure, y la Fase 8 espera decisiones y datos ajenos (sus I-1..I-6). Si
+  `MIG-BS-006` entra antes del primer `prod`, se ensaya en `stg` con el resto del esquema
+  (`T-BS-083`) y no hay migración con datos dentro. La Fase 8 no se para.
+
+| D10-02
+| ¿Qué se hace con los 60 campos que no se guardan?
+| *A.* Se retiran de la pantalla y del contrato; los del despliegue se muestran de solo lectura
+  donde ayuden. *B.* Se guardan todos en el documento, marcados «sin efecto». *C.* Se guardan
+  sin marcar.
+| **A.** Un ajuste que se guarda y no hace nada es una promesa falsa a quien administra el
+  portal; y varios contradicen requisitos (`REST-09`) o la arquitectura (`ADR-BS-006`). B deja
+  la puerta abierta a «ya lo haremos» sin tarea detrás. C, no.
+
+| D10-03
+| ¿Cómo se guarda el documento?
+| *A.* Fila única con `document jsonb` y `version`. *B.* Columnas tipadas en una tabla
+  singleton. *C.* Tabla clave-valor.
+| **A.** Un puñado de campos que se leen y escriben juntos; tipo y validación en `Application`;
+  añadir un campo no exige migración; precedente en `notification_log.payload`. B obliga a una
+  migración por campo. C pierde el tipo y complica la concurrencia.
+
+| D10-04
+| ¿Modo mantenimiento?
+| *A.* Sí, `T-BS-109`. *B.* No ahora.
+| **B.** Lo que parece un middleware tiene cinco aristas: excluir `/v1/*` (SinsaTools no lleva
+  `perms` y su contrato no declara `503`), dejar pasar sin `503` a quien no tiene identidad
+  válida para que reciba su `401` (si no, el frontend no renueva la sesión), decidir qué pasa
+  con `/media/{id}/stream` (va con la cookie `pv_media`, otro esquema), un código `MAINTENANCE`
+  en `api_master` y `API_ERROR_CODES`, y un interceptor delante de `apiErrorInterceptor`, que hoy
+  avisa de cualquier `5xx`. Es una tarea propia, con su decisión, cuando haya un pedido.
+
+| D10-05
+| ¿Roles personalizados (crear, duplicar, borrar)?
+| *A.* No ahora: cuatro roles editables, botones tras `features.customRoles`. *B.* Sí, en esta
+  fase.
+| **A.** B cambia `role` a texto libre en siete enumerados de `api_admin` y `api_auth`, el tipo
+  `UserRole` y los 12 archivos que lo usan, `SessionStore.isInternal`, `roleLabel`, los filtros
+  de usuarios y el diálogo de alta, `RoleNames` y sus cinco llamadas, y obliga a decidir qué pasa
+  con los usuarios de un rol borrado. Es una fase propia, y nadie la ha pedido: el requisito
+  habla de cuatro roles (`RF-08..11`).
+
+| D10-06
+| ¿`audit.retentionDays`?
+| *A.* Se retira; `DT-BS-02` se cierra en su tarea (particiones automáticas y purga por año) y
+  entonces el ajuste será «años a conservar». *B.* Se guarda y se hace un barrido con `DELETE`.
+  *C.* Se guarda sin efecto.
+| **A.** Las particiones son anuales y `DELETE` masivo es lo que la arquitectura descartó. B
+  contradice el diseño; C es una promesa falsa. `DEC-BS-03` sigue abierta y se responde allí.
+
+| D10-07
+| ¿Política de sesión configurable (`RF-02`)?
+| *A.* No ahora: se mantiene «la nueva sesión reemplaza a la anterior» y se registra el desvío
+  del requisito. *B.* Sí: `users.sessionPolicy` con `reject`, `T-BS-110`.
+| **A.** Es un desvío de `RF-02`, que pide que sea configurable, y hay que decirlo así en la
+  verificación y en el glosario. B toca `LoginCommandHandler` (clase crítica), añade un `409` a
+  `api_auth` y una pantalla. Si se quiere, es una tarea pequeña y aislada.
+
+| D10-08
+| ¿Bloque `deployment` de solo lectura en el `GET`?
+| *A.* Sí: remitente y servidor SMTP (sin usuario ni contraseña) y duraciones de sesión. *B.* No.
+| **A.** Responde «¿desde qué correo salen las invitaciones?» sin abrir el `appsettings`, y hace
+  visible que eso se cambia en el despliegue. Lo ven administrador y editor (`config:read`). El
+  `ClientId` de ingesta no entra: `appsettings.json` lo manda a Key Vault con el resumen.
+|===
+
+== Lo que hace falta confirmar antes de empezar
+
+[cols="1,3,2",options="header"]
+|===
+| # | Dato | Quién
+
+| P9-1
+| Quién hace `T-BS-107` (las pantallas son de dramirez) y si acepta retirar cuatro secciones.
+| Coordinación con dramirez.
+
+| P9-2
+| Si el editor de contenido debe ver `users.*` y la lista de roles (hoy tiene `config:read`).
+  Los miembros de un rol ya exigen `users:read`. Si tampoco debe ver los ajustes, la lectura
+  pasaría a exigir `config:write`, contra la matriz del contrato.
+| Producto.
+
+| P9-3
+| Valores de la semilla: `selfRegistrationEnabled = true`, dominios vacíos,
+  `minPasswordLength = 8`, `defaultGroupId = null`, `staleThresholdMinutes = 1440`.
+| Producto.
+
+| P9-4
+| Si `features.settings` estará encendido en el primer despliegue o se enciende después.
+| Producto / Fase 8.
+|===
+
+== Tareas
+
+Bloque `T-BS-10x`, el siguiente libre después de `T-BS-100`. Tamaños S, M y L como en los
+planes anteriores.
+
+[cols="1,4,3,1,1",options="header"]
+|===
+| ID | Tarea | Hecho cuando | Tamaño | Depende de
+
+| `T-BS-101` ✅ 2026-09-28
+| *Contrato.* En `portal-docs`: `api_admin` 1.3.0 (`/admin/settings`, `/admin/roles*`,
+  esquemas, ejemplos, códigos, catálogo de permisos), `api_auth` 1.3.0 y `api_master` 1.0.1
+  (etiquetas). Copia a `openapi/sources`, `openapi:all`, `API_ERROR_CODES`, `endpoint_count`
+  del manifest. _Hecho:_ 5 operaciones y 10 esquemas nuevos; el bundle pasa de 37 a 42
+  operaciones. Los ejemplos nuevos validan (los 22 que fallan son ids de ejemplo previos que
+  no son uuid). Redocly no añade avisos de tipo nuevo: los tres `nullable` y el `anyOf` siguen
+  el estilo del archivo, que el bundle normaliza.
+| Redocly sin errores nuevos; `npm run openapi:check` en verde; los ejemplos validan.
+| M
+| D10-02..08
+
+| `T-BS-102` ✅ 2026-10-19
+| *`MIG-BS-006`.* `portal_settings`, `roles.is_system`, `roles.is_default`, `ux_roles_default`,
+  la semilla (fila de ajustes; marcas de los cuatro roles). Generada en el equipo de desarrollo.
+  Changelog, ER 2.3, `schema_derivado_v2.sql`, `Entities/README.md`, `SchemaParityTests`.
+  _Hecho:_ modelo, semilla, pruebas, ER 2.3 y changelog 2.9 el 2026-09-28; migración generada
+  el 2026-10-01 (sello `20261001035552`) con la semilla al final del `Up`, leída operación a
+  operación: tres `AddColumn`, un `CreateTable` y un `CreateIndex`, nada más; `Down` leído, no
+  ejecutado. `schema_derivado_v2.sql` regenerado. `verify.sh` en verde el 2026-10-19 (340
+  pruebas, 94,5 %), `SchemaParityTests` 19 / 14 / 61. Commit `647b1f3` en
+  `feat/bloque-a-resiliencia`.
+| `dotnet ef database update` y `Down` limpios; `SchemaParityTests` en verde con los recuentos
+  nuevos; la migración leída operación a operación.
+| M
+| T-BS-101
+
+| `T-BS-103`
+| *Ajustes, Application.* Records, `Defaults`, validador con las rutas `sección.campo` (el
+  grupo existe y está activo), `PortalSettingsHandler`, puertos `Reader`/`Store`. Pruebas
+  unitarias de cada regla y de la versión.
+| Pruebas en verde; ninguna regla sin prueba.
+| M
+| T-BS-101, T-BS-102
+
+| `T-BS-104`
+| *Ajustes, Infrastructure y Api.* Repositorio jsonb con `UPDATE … WHERE version`, DI,
+  `AdminSettingsController`, contratos, `deployment` (D10-08). Pruebas de aceptación: `200`,
+  `400` con `field`, `403`, `409`.
+| `verify.sh` en verde; el frontend contra el Bridge real guarda y recarga el documento.
+| M
+| T-BS-102, T-BS-103
+
+| `T-BS-105`
+| *Roles como datos.* Puertos, `RoleAdminHandler` (lista con recuentos, catálogo y `kind`;
+  miembros paginados con `users:read`; `PATCH` con `roles.version` y las cuatro reglas, con el
+  rol y los permisos del actor leídos de la base; filas en su sitio), repositorio,
+  `AdminRolesController` (dos `[RequirePermission]` en `/members`), contratos. `EST-BS-08` y `CoverageGate` con `RoleAdminHandler`;
+  `estandares_codigo` 1.10.
+| Pruebas de aceptación de las tres operaciones y de las cuatro reglas; `RoleAdminHandler` al
+  100 %; un cambio de matriz se ve en `perms` tras el siguiente `refresh` y de inmediato en el
+  streaming (dos pruebas).
+| L
+| T-BS-102
+
+| `T-BS-106`
+| *Los ajustes que cambian el comportamiento.* Registro (`selfRegistrationEnabled`,
+  `allowedEmailDomains`, `minPasswordLength`, y el rol inicial desde `roles.is_default`
+  retirando `RolInicial`), `set-password` (`minPasswordLength`), aprobación (`defaultGroupId`),
+  estado de sincronización (`staleThresholdMinutes`, retirando la clave de `appsettings` y el
+  singleton).
+| Una prueba por ajuste y por rama (registro apagado, dominio fuera, contraseña corta, grupo
+  borrado o inactivo, umbral distinto). `LoginCommandHandler` sin tocar.
+| M
+| T-BS-104
+
+| `T-BS-107`
+| *Frontend.* Tipos, `settings.model.ts`, secciones retiradas y reducidas, roles con catálogo
+  del contrato y `features.customRoles` (en los tres archivos de configuración), stores con
+  `409`, `REGISTRATION_DISABLED`, `mockGaps` por prefijo, mock alineado, specs,
+  `settings.e2e.ts`, i18n. Con dramirez (P9-1).
+| `npm run verify` y `npm run config:check` en verde; `start:mock` sigue funcionando; contra el
+  Bridge real (con T-BS-104 y T-BS-105 hechos), la pantalla no llama a ninguna ruta simulada
+  salvo `/videos*`.
+| L
+| T-BS-101 para empezar; T-BS-104 y T-BS-105 para terminar
+
+| `T-BS-108`
+| *Verificación y cierre.* `bridge-settings.e2e.ts` en `e2e-entrega2.sh`; `verify.sh` y
+  `npm run verify`; `verificacion_fase9_plan_vs_ejecucion_v1.0.adoc` (V10-xx);
+  `00_Estado_Actual`, Glosario (`DEC-BS-30..`, el desvío de `RF-02`, nota en `DEC-BS-09`),
+  `plan_tareas` 1.10, manifest, guía de arranque (mock por prefijo).
+| Todo en verde y documentado; el mock de ajustes y roles ya no se usa contra el Bridge.
+| M
+| T-BS-104..107, y T-BS-109 o T-BS-110 si se ejecutan
+
+| `T-BS-109`
+| *Condicionada a D10-04.* Modo mantenimiento con las cinco aristas de la decisión, `MAINTENANCE`
+  en `api_master`, caché de unos segundos, interceptor y pantalla.
+| Solo si D10-04 es A.
+| M
+| T-BS-104, T-BS-107
+
+| `T-BS-110`
+| *Condicionada a D10-07.* `users.sessionPolicy` con `reject`: `409` en `POST /auth/login`
+  (`api_auth` 1.3.0 o 1.4.0), `LoginCommandHandler` al 100 % y la pantalla del frontend.
+| Solo si D10-07 es B.
+| S
+| T-BS-106
+|===
+
+== Orden de ataque
+
+----
+T-BS-101 (contrato)
+   ├──► T-BS-102 (MIG-BS-006) ──┬──► T-BS-103 (ajustes: application) ──► T-BS-104 (ajustes: infra + api) ──► T-BS-106 (comportamiento)
+   │                            │                                                                                     │
+   │                            └──► T-BS-105 (roles) ────────────────────────────────────────────────────────────────┤
+   │                                                                                                                  │
+   └──► T-BS-107 (frontend: empieza con el contrato, termina con T-BS-104 y T-BS-105) ────────────────────────────────┤
+                                                                                                                      ▼
+                                                                                              T-BS-108 (verificación y cierre)
+                                                                  T-BS-109 solo si D10-04 es A · T-BS-110 solo si D10-07 es B
+----
+
+El contrato va primero porque desbloquea a la vez al Bridge y al frontend, y porque es lo que
+dramirez necesita para tocar sus pantallas sin adivinar. Roles y ajustes comparten la migración
+y desde ahí van en paralelo.
+
+== Riesgos
+
+[cols="2,3,2",options="header"]
+|===
+| Riesgo | Por qué importa | Mitigación
+
+| Las pantallas cambian de manos
+| `T-BS-107` retira y recorta código de dramirez; sin acuerdo, dos versiones de la misma
+  pantalla.
+| P9-1 antes de empezar; el contrato 1.3.0 como documento de acuerdo; una sola rama para
+  `T-BS-107`.
+
+| Escalar privilegios desde la matriz
+| Con un endpoint de edición de roles, `config:write` valdría lo mismo que ser administrador.
+| Cuatro reglas en `T-BS-105`: el rol de sistema no se edita, nadie edita su propio rol, nadie
+  añade una clave que no tiene y `config:write` no se concede fuera del rol de sistema. Las
+  cuatro leen el rol y los permisos del actor de la base, no del JWT.
+
+| `perms` a dos velocidades
+| Un rol editado cambia el streaming al instante (la cookie relee la base) y el resto hasta el
+  siguiente `refresh` (`AccessTokenMinutes`, 15 min): `GET /media/{id}/access` puede decir sí y
+  el stream `403` durante unos minutos.
+| Se documenta en el contrato y en la pantalla («los cambios aplican en unos minutos»); dos
+  pruebas en `T-BS-105`. Revocar sesiones al editar un rol queda como opción futura.
+
+| Quedarse sin administradores
+| Un administrador que se quite `config:write` o `users:write` a sí mismo.
+| `administrator` es de sistema y no se edita (`409 ROLE_IS_SYSTEM`); nadie edita su propio rol.
+
+| Un `PUT` o un `PATCH` pisa a otro
+| Dos administradores con la pantalla abierta.
+| `version` y `409` en ajustes y en roles, con `UPDATE … WHERE version`.
+
+| Miembros de un rol a la vista del editor
+| Los miembros de `viewer` son todos los clientes.
+| `users:read` además de `config:read` en `/members`, y paginado.
+
+| Un grupo por omisión que ya no existe o está inactivo
+| `defaultGroupId` no puede ser FK dentro de un jsonb.
+| Se valida al guardar; al aprobar, si falta, se omite con aviso en el log; la pantalla lo
+  muestra por su `id` aunque no esté entre los 50 cargados.
+
+| Deriva entre contrato y tipos
+| El frontend genera tipos del bundle.
+| `openapi:check` en `npm run verify` ya lo vigila.
+
+| La migración en producción
+| Una tabla nueva, dos columnas y datos de semilla.
+| D10-01 A: entra antes del primer `prod`; si no, se ensaya en `stg` (`T-BS-083`).
+
+| El editor de contenido ve ajustes de usuarios
+| `config:read` le da lectura de `/admin/settings`.
+| P9-2. Si molesta, se decide antes del contrato, no después.
+|===
+
+== Lo que este plan deliberadamente no hace
+
+[cols="2,3,3",options="header"]
+|===
+| No se hace | Por qué | Se reabre si…
+
+| `/videos*` (GAP-38..41, GAP-43)
+| No es configuración: exige categoría, duración y vistas en el contrato de ingesta, con
+  SinsaTools.
+| Se decide pedir esos campos; plan propio.
+
+| Roles personalizados, nombre y descripción editables, rol por omisión elegible
+| D10-05.
+| Alguien necesita un quinto rol.
+
+| Modo mantenimiento
+| D10-04.
+| Hay un pedido; entonces `T-BS-109`.
+
+| Política de sesión configurable (`RF-02`)
+| D10-07: se registra como desvío del requisito.
+| Se pide; entonces `T-BS-110`.
+
+| Marca, tema, idioma, pie de página en la base
+| Viven en `config.json`, que el login necesita antes de autenticar.
+| Se quiere cambiar la marca sin redesplegar.
+
+| SMTP editable, SSO, MFA, webhook, resumen semanal, aviso de vídeo nuevo, aviso de lote fallido
+| No existen como funcionalidad o exigen secretos en la base.
+| Cada uno con su pedido y su ADR.
+
+| Retención y purga
+| `DT-BS-02` es de particiones, no de ajustes.
+| Se cierra `DT-BS-02` y entonces «años a conservar».
+
+| Historial de valores de los ajustes
+| `api_request_log` ya dice quién y cuándo; nadie ha pedido el «qué».
+| Se pide auditoría de cambios de configuración.
+
+| Panel «Integración con SinsaTools»
+| Depende de `T-BS-055` y son datos de despliegue.
+| `T-BS-055` se implementa.
+|===
+
+== Verificación prevista
+
+* *Bridge:* pruebas unitarias del validador y de los manejadores; de aceptación por cada
+  operación, código y regla (`PortalHostFixture`); `SchemaParityTests` con los recuentos nuevos;
+  `SourceFileLayoutTests` (`EST-BS-20`) sobre los archivos nuevos; `CoverageGate` con
+  `RoleAdminHandler` al 100 %; `verify.sh`.
+* *Frontend:* `npm run verify` (lint, contraste, `openapi:check`, pruebas con cobertura, build)
+  y `npm run config:check` aparte, como en la CI; `settings.e2e.ts` sobre el mock alineado.
+* *Extremo a extremo:* `bridge-settings.e2e.ts` contra el Bridge real dentro de
+  `e2e-entrega2.sh`: guardar ajustes y recargar, editar un rol y ver los `perms` tras el
+  `refresh`, registro con dominio no admitido, `409` de versión.
+* *Documentación:* `verificacion_fase9`, con los desvíos numerados V10-xx.
+
+== Registro al recibir el «Go»
+
+* Glosario: `DEC-BS-30..` para las decisiones tomadas de D10-01..08 y el desvío de `RF-02`;
+  nota en `DEC-BS-09` de que el umbral ya no depende de ella; `T-BS-101..108` (y 109, 110 si aplican) en `plan_tareas` 1.10;
+  `MIG-BS-006` en el changelog.
+* Manifest: este plan como vigente; `endpoint_count`; `estandares_codigo` 1.10.
+* `00_Estado_Actual`: Fase 9 en marcha, con lo que cambia en el frontend.
+* Este documento pasa a 1.1 con las decisiones registradas, como hizo el plan de mejoras.
+
+include::{root}/_nav.adoc[]

@@ -1,8 +1,8 @@
 = Plan de tareas — Bridge Service
 :author: Equipo de Desarrollo
-:revnumber: 1.9
+:revnumber: 1.10
 :revdate: 2026-09-25
-:revremark: Se añade T-BS-055, consumir la reingesta de SinsaTools, con su contrato propuesto (reingesta_sinsatools_v1.0.adoc); espera a SinsaTools. La 1.8 cerraba las Fases 0 a 4 (DT-BS-10, MIG-BS-002).
+:revremark: 1.10 (2026-09-28): el bloque T-BS-101..110 de la Fase 9, ajustes del portal y roles como datos, en su propio plan. 1.9: se añade T-BS-055, consumir la reingesta de SinsaTools, con su contrato propuesto (reingesta_sinsatools_v1.0.adoc); espera a SinsaTools. La 1.8 cerraba las Fases 0 a 4 (DT-BS-10, MIG-BS-002).
 :doctype: article
 :toc: left
 :toc-title: Tabla de Contenidos
@@ -512,6 +512,14 @@ NOTE: *Ejecutada el 2026-09-24.* Tres de las cuatro tareas cambiaron de forma al
 | Service Worker contra la URL estable del proxy.
 | `T-BS-071`
 |===
+
+== Fase 9 — Ajustes del portal y roles como datos, en su propio plan
+
+NOTE: *«Go» el 2026-09-28.* La pantalla «Settings» del frontend deja el mock del navegador y
+guarda en el Bridge (GAP-42, GAP-44). El bloque `T-BS-101..108`, más `T-BS-109` y `T-BS-110`
+condicionadas, vive en `plan_fase9_ajustes_y_roles_v1.0.adoc`, con sus decisiones D10-01..08
+(`DEC-BS-30..32`). Se ejecuta en paralelo a la Fase 8 y entra en `main` antes del primer
+despliegue en producción (D10-01).
 
 == Orden de ataque
 
